@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   WorkspaceClient,
@@ -51,10 +52,18 @@ export default async function Home() {
     null;
 
   return (
-    <WorkspaceClient
-      projects={(projects ?? []) as ProjectRow[]}
-      issues={(issues ?? []) as IssueRow[]}
-      fetchError={fetchError}
-    />
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-600">
+          Memuat workspace…
+        </div>
+      }
+    >
+      <WorkspaceClient
+        projects={(projects ?? []) as ProjectRow[]}
+        issues={(issues ?? []) as IssueRow[]}
+        fetchError={fetchError}
+      />
+    </Suspense>
   );
 }

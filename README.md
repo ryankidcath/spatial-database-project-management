@@ -33,4 +33,5 @@ Lihat `docs/fase-0-eksekusi.md` untuk checklist detail eksekusi Fase 0.
 - Dev: `cd app` lalu `npm run dev`
 - Migration DB: dari root, `npx supabase db push`
 - Jika error **Invalid schema: core_pm**: expose schema di Supabase (lihat `docs/supabase-expose-schemas.md`)
+- URL workspace: `/?project=<uuid>&task=<uuid>&view=dashboard|tabel|map|…` (bookmark / share)
 

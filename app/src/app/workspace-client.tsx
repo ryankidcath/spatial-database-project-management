@@ -1,6 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo } from "react";
+import { parseViewParam, viewToParam } from "./workspace-url";
+import { VIEWS, type ViewId } from "./workspace-views";
 
 export type ProjectRow = {
   id: string;
@@ -18,22 +21,13 @@ export type IssueRow = {
   sort_order: number;
 };
 
-const VIEWS = [
-  "Dashboard",
-  "Tabel",
-  "Map",
-  "Kanban",
-  "Kalender",
-  "Gantt",
-] as const;
-
-type ViewId = (typeof VIEWS)[number];
-
 type Props = {
   projects: ProjectRow[];
   issues: IssueRow[];
   fetchError: string | null;
 };
+
+type TableRow = { issue: IssueRow; depth: number };
 
 function flattenIssuesForProject(
   projectId: string,
@@ -70,14 +64,37 @@ function flattenIssuesWithDepth(
 }
 
 export function WorkspaceClient({ projects, issues, fetchError }: Props) {
-  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(
-    () => new Set(projects[0]?.id ? [projects[0].id] : [])
-  );
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    projects[0]?.id ?? null
-  );
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<ViewId>("Dashboard");
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const selectedProjectId = useMemo(() => {
+    const q = searchParams.get("project");
+    if (q && projects.some((p) => p.id === q)) return q;
+    return projects[0]?.id ?? null;
+  }, [searchParams, projects]);
+
+  const selectedTaskId = useMemo(() => {
+    const q = searchParams.get("task");
+    if (!q || !selectedProjectId) return null;
+    const ok = issues.some(
+      (i) => i.id === q && i.project_id === selectedProjectId
+    );
+    return ok ? q : null;
+  }, [searchParams, issues, selectedProjectId]);
+
+  const activeView = useMemo((): ViewId => {
+    return parseViewParam(searchParams.get("view")) ?? "Dashboard";
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (projects.length === 0) return;
+    if (!searchParams.get("project")) {
+      const p = new URLSearchParams(searchParams.toString());
+      p.set("project", projects[0].id);
+      if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+      router.replace(`/?${p.toString()}`, { scroll: false });
+    }
+  }, [projects, searchParams, router]);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) ?? null,
@@ -95,18 +112,34 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
   }, [selectedProjectId, issues]);
 
   const topLevelCount = useMemo(
-    () => issues.filter((i) => i.project_id === selectedProjectId && !i.parent_id)
-      .length,
+    () =>
+      issues.filter(
+        (i) => i.project_id === selectedProjectId && !i.parent_id
+      ).length,
     [issues, selectedProjectId]
   );
 
-  const toggleExpand = (projectId: string) => {
-    setExpandedProjectIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
+  const tableRows = useMemo((): TableRow[] => {
+    if (!selectedProjectId) return [];
+    if (selectedTaskId) {
+      const self = issues.find((i) => i.id === selectedTaskId);
+      if (!self) return [];
+      const children = issues
+        .filter((i) => i.parent_id === selectedTaskId)
+        .sort((a, b) => a.sort_order - b.sort_order);
+      const rows: TableRow[] = [{ issue: self, depth: 0 }];
+      for (const c of children) {
+        rows.push({ issue: c, depth: 1 });
+      }
+      return rows;
+    }
+    return flattenIssuesWithDepth(selectedProjectId, issues);
+  }, [selectedProjectId, selectedTaskId, issues]);
+
+  const replaceQuery = (mutate: (p: URLSearchParams) => void) => {
+    const p = new URLSearchParams(searchParams.toString());
+    mutate(p);
+    router.replace(`/?${p.toString()}`, { scroll: false });
   };
 
   if (fetchError) {
@@ -174,18 +207,19 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
             Project
           </p>
           {projects.map((p) => {
-            const expanded = expandedProjectIds.has(p.id);
             const treeRows = flattenIssuesWithDepth(p.id, issues);
-            const isSelectedProject = selectedProjectId === p.id && !selectedTaskId;
+            const isSelectedProject =
+              selectedProjectId === p.id && !selectedTaskId;
 
             return (
               <div key={p.id} className="rounded-md border border-slate-100">
                 <button
                   type="button"
                   onClick={() => {
-                    toggleExpand(p.id);
-                    setSelectedProjectId(p.id);
-                    setSelectedTaskId(null);
+                    replaceQuery((q) => {
+                      q.set("project", p.id);
+                      q.delete("task");
+                    });
                   }}
                   className={`flex w-full items-center gap-2 rounded-t-md px-3 py-2 text-left text-sm font-medium ${
                     isSelectedProject
@@ -193,35 +227,35 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
                       : "bg-slate-50 text-slate-800 hover:bg-slate-100"
                   }`}
                 >
-                  <span className="text-xs">{expanded ? "▼" : "▶"}</span>
+                  <span className="text-xs text-slate-400">▾</span>
                   {p.name}
                 </button>
-                {expanded && (
-                  <ul className="space-y-0.5 border-t border-slate-100 py-1 pl-2">
-                    {treeRows.map(({ issue: t, depth }) => {
-                      const isTask = selectedTaskId === t.id;
-                      return (
-                        <li key={t.id} style={{ paddingLeft: depth * 12 }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedProjectId(p.id);
-                              setSelectedTaskId(t.id);
-                            }}
-                            className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
-                              isTask
-                                ? "bg-blue-100 text-blue-900"
-                                : "text-slate-600 hover:bg-slate-50"
-                            }`}
-                          >
-                            {t.key_display ? `${t.key_display} — ` : ""}
-                            {t.title}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                <ul className="space-y-0.5 border-t border-slate-100 py-1 pl-2">
+                  {treeRows.map(({ issue: t, depth }) => {
+                    const isTask = selectedTaskId === t.id;
+                    return (
+                      <li key={t.id} style={{ paddingLeft: depth * 12 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            replaceQuery((q) => {
+                              q.set("project", p.id);
+                              q.set("task", t.id);
+                            });
+                          }}
+                          className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
+                            isTask
+                              ? "bg-blue-100 text-blue-900"
+                              : "text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          {t.key_display ? `${t.key_display} — ` : ""}
+                          {t.title}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
             );
           })}
@@ -240,12 +274,20 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
                 ? `Project: ${selectedProject.name}`
                 : "—"}
           </h2>
+          <p className="mt-1 truncate text-xs text-slate-500">
+            URL:{" "}
+            <code className="rounded bg-slate-100 px-1">
+              ?project=…&amp;task=…&amp;view=…
+            </code>
+          </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {VIEWS.map((view) => (
               <button
                 key={view}
                 type="button"
-                onClick={() => setActiveView(view)}
+                onClick={() =>
+                  replaceQuery((q) => q.set("view", viewToParam(view)))
+                }
                 className={`rounded-md px-3 py-1.5 text-sm font-medium ${
                   activeView === view
                     ? "bg-blue-600 text-white"
@@ -258,16 +300,29 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
           </div>
         </header>
 
-        <section className="flex-1 p-6">
+        <section className="flex-1 overflow-auto p-6">
           <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6">
             <h3 className="text-base font-semibold">
               {activeView} —{" "}
               {selectedTask ? "fokus task" : "cakupan project"}
             </h3>
             <p className="mt-2 text-sm text-slate-600">
-              Data berasal dari <code className="rounded bg-slate-100 px-1">core_pm</code>
-              . Pilih task di kiri untuk menyempitkan konteks; pilih header project
-              untuk kembali ke cakupan seluruh project.
+              Data dari <code className="rounded bg-slate-100 px-1">core_pm</code>
+              . Query:{" "}
+              <code className="rounded bg-slate-100 px-1">
+                project={selectedProjectId?.slice(0, 8)}…
+              </code>
+              {selectedTaskId && (
+                <>
+                  {" "}
+                  <code className="rounded bg-slate-100 px-1">
+                    task={selectedTaskId.slice(0, 8)}…
+                  </code>
+                </>
+              )}{" "}
+              <code className="rounded bg-slate-100 px-1">
+                view={viewToParam(activeView)}
+              </code>
             </p>
             {activeView === "Dashboard" && (
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -291,9 +346,57 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
                 </div>
               </div>
             )}
-            {activeView !== "Dashboard" && (
+            {activeView === "Tabel" && (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-600">
+                      <th className="py-2 pr-4 font-medium">Key</th>
+                      <th className="py-2 pr-4 font-medium">Judul</th>
+                      <th className="py-2 pr-4 font-medium">Sub-task?</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableRows.map(({ issue, depth }) => {
+                      const isChild = Boolean(issue.parent_id);
+                      return (
+                        <tr
+                          key={issue.id}
+                          className="border-b border-slate-100 hover:bg-slate-50"
+                        >
+                          <td className="py-2 pr-4 font-mono text-xs text-slate-700">
+                            <span style={{ paddingLeft: depth * 12 }}>
+                              {issue.key_display ?? "—"}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-4">{issue.title}</td>
+                          <td className="py-2 pr-4 text-slate-600">
+                            {isChild ? "Ya" : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {tableRows.length === 0 && (
+                  <p className="mt-2 text-sm text-slate-500">
+                    Tidak ada baris untuk scope ini.
+                  </p>
+                )}
+              </div>
+            )}
+            {activeView === "Map" && (
+              <p className="mt-4 text-sm text-amber-800">
+                Modul <strong>spatial</strong> belum diaktifkan — peta menyusul
+                setelah Leaflet + data geometri.
+              </p>
+            )}
+            {(activeView === "Kanban" ||
+              activeView === "Kalender" ||
+              activeView === "Gantt") && (
               <p className="mt-4 text-sm text-slate-500">
-                Isi view ini di increment berikutnya (tabel/kanban/kalender/gantt/map).
+                View <strong>{activeView}</strong> diisi di increment berikutnya
+                (board / kalender / timeline).
               </p>
             )}
           </div>

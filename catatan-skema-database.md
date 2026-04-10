@@ -808,7 +808,11 @@ Aturan:
 
 - State filter utama = `active_scope` (`organization` | `project` | `task`).
 - Perubahan scope di sidebar harus memicu refresh seluruh view tanpa mengubah tab view aktif.
-- URL disarankan menyimpan scope + mode view (contoh: `?scope=project:123&view=kanban`) agar mudah di-share/bookmark.
+- **Implementasi URL (increment 3):** query string berisi:
+  - `project` = UUID project (`core_pm.projects.id`),
+  - `task` = UUID issue/task (opsional; jika ada, scope = task),
+  - `view` = `dashboard` | `tabel` | `map` | `kanban` | `kalender` | `gantt`.
+- Contoh bookmark: `/?project=<uuid>&view=tabel` atau `/?project=<uuid>&task=<uuid>&view=dashboard`.
 
 ### 11.4 Perilaku per view (saat scope = project)
 
@@ -1055,14 +1059,24 @@ Status fase:
 - [x] `app/.env.example` untuk `NEXT_PUBLIC_*` saat `npm run dev`.
 - [x] `npm run build` lulus.
 
-### 16.1 Yang perlu Anda lakukan setelah increment 2
+### Increment 3 (selesai)
 
-- [ ] Pastikan migration sudah di remote (jika belum): dari root repo jalankan `npx supabase db push`.
-- [ ] **Expose schema API:** di Supabase Dashboard tambahkan `core_pm` ke **Exposed schemas** (lihat `docs/supabase-expose-schemas.md`). Tanpa ini, client akan error `Invalid schema: core_pm`.
-- [ ] Salin `app/.env.example` → `app/.env.local` dan isi URL + anon key Supabase.
-- [ ] Jalankan `cd app` lalu `npm run dev`, buka `/` — harus muncul **PLM Cirebon 2026**, **PM Internal**, dan task dari seed (termasuk sub-task **PLM-1.1**).
-- [ ] Kabari jika oke untuk **increment 3** (mis. URL `?scope=`, tabel view, atau mulai perketat RLS).
+- [x] URL sinkron dengan navigasi: `?project=&task=&view=` (lihat §11.3).
+- [x] `router.replace` tanpa scroll; kunjungan pertama tanpa `project` diisi default project pertama.
+- [x] View **Tabel**: daftar issue dalam scope project (semua task + indent) atau scope task (task + sub-task).
+- [x] Placeholder view **Map** (nanti modul spatial) dan **Kanban / Kalender / Gantt** (increment berikutnya).
+- [x] `Suspense` di `page.tsx` untuk `useSearchParams`.
+- [x] Pecahan util: `workspace-views.ts`, `workspace-url.ts`.
+- [x] Lint lulus.
+
+### 16.1 Yang perlu Anda lakukan setelah increment 3
+
+- [ ] `git pull` lalu `cd app` → `npm run dev`.
+- [ ] Buka `/` — URL harus terisi `?project=…&view=dashboard` (otomatis).
+- [ ] Coba bookmark: ganti `view=tabel`, pilih task — cek `task=` di URL dan isi tabel.
+- [ ] Deploy Vercel (root `app`) jika perlu verifikasi production.
+- [ ] Kabari untuk **increment 4** (mis. Kanban kolom status, atau perketat RLS, atau `organization` di URL).
 
 ---
 
-*Terakhir diperbarui: §16 — tambah wajib expose schema `core_pm` di Supabase API + docs troubleshooting.*
+*Terakhir diperbarui: §16 — Fase 1 increment 3 (URL + view Tabel + Suspense).*
