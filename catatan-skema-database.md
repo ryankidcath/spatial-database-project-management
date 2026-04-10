@@ -1129,20 +1129,21 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 
 - [x] **Stack interaksi:** `@dnd-kit/core` + Tailwind (lihat **§13.9** — keputusan inc 6).
 - [x] **Drag-and-drop** kartu antar kolom status + kolom **Tanpa status**; hanya task level atas; handle seret **⋮⋮** (klik judul tetap buka scope task).
-- [x] **Persistensi:** `update` Supabase (`anon` + schema `core_pm`) pada `status_id`, `sort_order`, `updated_at`; urutan kolom di-reindex; kolom asal ikut di-reindex jika pindah lintas status.
+- [x] **Persistensi:** `update` Supabase (sesi **`authenticated`** + schema `core_pm`) pada `status_id`, `sort_order`, `updated_at`; urutan kolom di-reindex; kolom asal ikut di-reindex jika pindah lintas status.
 - [x] Optimistik UI + rollback state lokal jika error; **`router.refresh()`** setelah sukses agar server RSC selaras.
 - [x] Indikator ring pada kartu saat menyimpan (`saving`).
 - [x] Komponen: `app/src/app/kanban-board.tsx`; dependency `app/package.json`: `@dnd-kit/core`.
 - [x] `npm run lint` + `npm run build` lulus.
 
-### Increment 7 (rencana) — RLS + auth
+### Increment 7 (selesai) — RLS + auth
 
-- [ ] **Supabase Auth:** login/logout (email magic link atau metode yang dipilih), session di Next.js (middleware / server client sesuai pola Supabase + App Router).
-- [ ] **Profil:** sinkron atau trigger `core_pm.profiles` terhadap `auth.users` (sesuai skema yang ada).
-- [ ] **RLS:** ganti policy dev “buka lebar”; akses baca/tulis `organizations`, `projects`, `statuses`, `issues`, `project_members` berdasarkan **keanggotaan project** / organisasi (query policy memakai `auth.uid()`).
-- [ ] Hapus atau persempit grant/policy yang membiarkan `anon` mengubah data produksi (tetap bisa bedakan env `dev` vs `prod`).
-- [ ] Dokumentasi env / troubleshooting login di `README` atau `docs/` singkat.
-- [ ] `npm run lint` + `npm run build` lulus.
+- [x] **Supabase Auth:** email + sandi di **`/login`**; **`/auth/callback`** untuk konfirmasi email; session cookie lewat **`@supabase/ssr`** + **`middleware`**.
+- [x] **Profil:** trigger **`core_pm.handle_new_user`** pada **`auth.users`** → **`core_pm.profiles`**.
+- [x] **RLS:** migration **`0005_core_pm_rls_and_auth.sql`** — `authenticated` akses `organizations` / `projects` / `statuses` / `issues` / `project_members` / **`spatial.project_demo_footprints`** lewat **`project_members`** + **`auth.uid()`**; **`anon`** tidak lagi punya policy data tenant (revoke + tanpa policy).
+- [x] **Bootstrap demo:** RPC **`core_pm.join_demo_org_projects()`** (anggota semua project seed **KJSB Demo** jika user belum punya keanggotaan); dipanggil setelah login / callback; tombol cadangan di UI jika daftar project kosong.
+- [x] **Keluar:** server action **`signOut`**; header workspace menampilkan email.
+- [x] Dokumentasi: **`docs/supabase-auth-increment-7.md`**, env **`NEXT_PUBLIC_SITE_URL`** opsional di **`app/.env.example`**.
+- [x] `npm run lint` + `npm run build` lulus.
 
 ### Increment 8 (rencana) — Map
 
@@ -1152,14 +1153,14 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 - [ ] Performa dasar: tidak memuat seluruh dunia; bbox atau limit per project.
 - [ ] `npm run lint` + `npm run build` lulus.
 
-### 16.1 Yang perlu Anda lakukan setelah increment 6
+### 16.1 Yang perlu Anda lakukan setelah increment 7
 
-- [ ] `git pull` lalu `cd app` → `npm install` (ada `@dnd-kit/core`) → `npm run dev`.
-- [ ] Tab **Kanban:** seret via **⋮⋮** antar kolom; cek data di Supabase Table Editor (`issues.status_id` / `sort_order`).
-- [ ] Pastikan migration jadwal (`0003`) sudah di remote bila perlu tanggal; **`spatial`** di-expose untuk inc 8 nanti.
-- [ ] Deploy Vercel (root `app`) jika perlu.
-- [ ] Lanjut **increment 7** (RLS + auth).
+- [ ] `git pull` → `npx supabase db push` (migration **`0005`**) → `cd app` → `npm install` → `npm run dev`.
+- [ ] Supabase **Auth:** redirect URL **`/auth/callback`**; untuk dev pertimbangkan matikan **Confirm email** atau gunakan tautan verifikasi.
+- [ ] Buka **`/login`** → daftar/masuk → workspace harus memuat project demo (atau tombol **Gabung ke project demo**).
+- [ ] Vercel: set **`NEXT_PUBLIC_SITE_URL`** production URL jika konfirmasi email dipakai.
+- [ ] Lanjut **increment 8** (Map / Leaflet).
 
 ---
 
-*Terakhir diperbarui: §16 — Fase 1 increment 6 selesai (Kanban DnD + persistensi).*
+*Terakhir diperbarui: §16 — Fase 1 increment 7 selesai (Auth + RLS membership).*

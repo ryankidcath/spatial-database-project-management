@@ -13,7 +13,7 @@ import {
   type Over,
 } from "@dnd-kit/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase/client";
+import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import type { IssueRow, StatusRow } from "./workspace-client";
 
 const COL_PREFIX = "kanban-col:";
@@ -283,7 +283,7 @@ export function KanbanBoard({
       mergedTarget: IssueRow[],
       snapshot: IssueRow[]
     ) => {
-      const client = supabase;
+      const client = getBrowserSupabaseClient();
       if (!client) {
         onPersistError("Supabase belum dikonfigurasi.");
         return;
@@ -404,7 +404,7 @@ export function KanbanBoard({
     ? topLevel.find((i) => i.id === activeId)
     : null;
 
-  const configured = Boolean(supabase);
+  const configured = Boolean(getBrowserSupabaseClient());
 
   return (
     <div className="space-y-3">

@@ -8,8 +8,17 @@ import {
   type StatusRow,
 } from "./workspace-client";
 
-export default async function Home() {
-  const supabase = createServerSupabaseClient();
+type HomeProps = {
+  searchParams: Promise<{ joinError?: string }>;
+};
+
+export default async function Home({ searchParams }: HomeProps) {
+  const qp = await searchParams;
+  const joinError = qp.joinError
+    ? decodeURIComponent(qp.joinError)
+    : null;
+
+  const supabase = await createServerSupabaseClient();
 
   if (!supabase) {
     return (
@@ -32,6 +41,10 @@ export default async function Home() {
       </div>
     );
   }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const { data: projects, error: projectsError } = await supabase
     .schema("core_pm")
@@ -94,6 +107,8 @@ export default async function Home() {
         statuses={(statuses ?? []) as StatusRow[]}
         issues={(issues ?? []) as IssueRow[]}
         fetchError={fetchError}
+        userEmail={user?.email ?? null}
+        joinError={joinError}
       />
     </Suspense>
   );

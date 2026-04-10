@@ -1,12 +1,31 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
 
 /**
- * Client baca/tulis server-side dengan anon key.
- * RLS saat ini longgar (dev); nanti ganti ke @supabase/ssr + session user.
+ * Client server dengan cookie session (Supabase Auth + RLS).
  */
-export function createServerSupabaseClient(): SupabaseClient | null {
+export async function createServerSupabaseClient(): Promise<SupabaseClient | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
-  return createClient(url, key);
+
+  const cookieStore = await cookies();
+
+  return createServerClient(url, key, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
+        } catch {
+          /* dipanggil dari Server Component tanpa mutable cookies */
+        }
+      },
+    },
+  });
 }
