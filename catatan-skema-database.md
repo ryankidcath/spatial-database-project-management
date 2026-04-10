@@ -1139,7 +1139,7 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 
 - [x] **Supabase Auth:** email + sandi di **`/login`**; **`/auth/callback`** untuk konfirmasi email; session cookie lewat **`@supabase/ssr`** + **`middleware`**.
 - [x] **Profil:** trigger **`core_pm.handle_new_user`** pada **`auth.users`** → **`core_pm.profiles`**.
-- [x] **RLS:** migration **`0005_core_pm_rls_and_auth.sql`** — `authenticated` akses `organizations` / `projects` / `statuses` / `issues` / `project_members` / **`spatial.project_demo_footprints`** lewat **`project_members`** + **`auth.uid()`**; **`anon`** tidak lagi punya policy data tenant (revoke + tanpa policy).
+- [x] **RLS:** migration **`0005_core_pm_rls_and_auth.sql`** + **`0006_rls_project_member_helper.sql`** (fungsi **`core_pm.is_project_member(uuid)`** agar policy tidak rekursif pada `project_members`); `authenticated` akses data tenant lewat keanggotaan; **`anon`** tanpa akses data.
 - [x] **Bootstrap demo:** RPC **`core_pm.join_demo_org_projects()`** (anggota semua project seed **KJSB Demo** jika user belum punya keanggotaan); dipanggil setelah login / callback; tombol cadangan di UI jika daftar project kosong.
 - [x] **Keluar:** server action **`signOut`**; header workspace menampilkan email.
 - [x] Dokumentasi: **`docs/supabase-auth-increment-7.md`**, env **`NEXT_PUBLIC_SITE_URL`** opsional di **`app/.env.example`**.
@@ -1155,7 +1155,7 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 
 ### 16.1 Yang perlu Anda lakukan setelah increment 7
 
-- [ ] `git pull` → `npx supabase db push` (migration **`0005`**) → `cd app` → `npm install` → `npm run dev`.
+- [ ] `git pull` → `npx supabase db push` (migration **`0005`** + **`0006`**) → `cd app` → `npm install` → `npm run dev`.
 - [ ] Supabase **Auth:** redirect URL **`/auth/callback`**; untuk dev pertimbangkan matikan **Confirm email** atau gunakan tautan verifikasi.
 - [ ] Buka **`/login`** → daftar/masuk → workspace harus memuat project demo (atau tombol **Gabung ke project demo**).
 - [ ] Vercel: set **`NEXT_PUBLIC_SITE_URL`** production URL jika konfirmasi email dipakai.

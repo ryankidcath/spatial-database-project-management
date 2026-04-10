@@ -2,6 +2,7 @@
 
 ## Yang berubah
 
+- **Migration `0006_rls_project_member_helper.sql`** — menghindari **infinite recursion** pada policy `project_members` (helper `core_pm.is_project_member(uuid)` ber-`SECURITY DEFINER`). Wajib di-push setelah `0005`.
 - **Migration `0005_core_pm_rls_and_auth.sql`**
   - Policy dev “buka lebar” untuk **`anon`** dicabut; **`authenticated`** hanya melihat/mengubah data lewat **`project_members`**.
   - Trigger **`core_pm.handle_new_user`** → baris **`core_pm.profiles`** saat user baru di **`auth.users`**.
