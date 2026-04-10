@@ -975,15 +975,15 @@ Progress aktual di workspace:
 - [x] Menambahkan baseline migration schema modular: `supabase/migrations/0001_init_schemas.sql`.
 - [x] Buat project Supabase (mode free-tier: 1 project `dev`) dan link dari lokal.
 - [x] Push migration awal `0001_init_schemas.sql` ke Supabase remote.
-- [ ] Setup repository remote GitHub + branch protection.
-- [ ] Hubungkan Vercel + environment variables.
+- [x] Setup repository remote GitHub + branch protection.
+- [x] Hubungkan Vercel + environment variables.
 
 Catatan:
 - UI library memang belum diputuskan, dan tetap ditunda ke awal Fase 1 sesuai keputusan.
 
 ---
 
-*Terakhir diperbarui: §14 progres Supabase selesai (login CLI, link project, db push baseline migration).*
+*Terakhir diperbarui: §14 progres Vercel selesai (project terhubung + env vars terisi).*
 
 ## 15. Penyesuaian Fase 0 untuk free tier
 
@@ -1019,6 +1019,49 @@ Segera pindah ke minimal `dev + prod` jika salah satu kondisi ini terjadi:
 - [x] Supabase 1 project (`dev`) untuk tahap awal free-tier.
 - [ ] Setup `staging` dan `prod` ditunda sampai trigger pada §15.3 terpenuhi.
 
+Status fase:
+
+- **Fase 0 dinyatakan selesai** untuk mode free-tier (single Supabase project).
+- Upgrade multi-environment tetap mengikuti trigger pada §15.3.
+
 ---
 
 *Terakhir diperbarui: §15 ditambahkan — mode free-tier (1 Supabase project dulu) + mitigasi + trigger upgrade environment.*
+
+## 16. Progress eksekusi Fase 1 (Core PM minimal)
+
+### Increment 1 (selesai)
+
+- [x] Scaffold frontend Next.js (TypeScript + ESLint + App Router) pada folder `app/`.
+- [x] Tambah dependency `@supabase/supabase-js`.
+- [x] Tambah util client Supabase: `app/src/lib/supabase/client.ts`.
+- [x] Implement halaman awal dengan pola UI yang disepakati:
+  - sidebar `Project -> Task` (dropdown/expand),
+  - view tabs atas (`Dashboard`, `Tabel`, `Map`, `Kanban`, `Kalender`, `Gantt`),
+  - area konten terikat scope aktif project.
+- [x] Update metadata app.
+- [x] Lint berhasil (`npm run lint`).
+
+### Increment 2 (selesai)
+
+- [x] Migration `supabase/migrations/0002_core_pm_initial.sql`:
+  - tabel `organizations`, `projects`, `statuses`, `issues`, `profiles`, `project_members`,
+  - RLS sementara untuk dev (`anon` + `authenticated`),
+  - seed demo (2 project, status, issues + sub-task),
+  - indeks dasar.
+- [x] Helper server: `app/src/lib/supabase/server.ts`.
+- [x] Halaman utama async: fetch `projects` + `issues` dari schema `core_pm`.
+- [x] Komponen `app/src/app/workspace-client.tsx`: navigasi + scope project/task + tab view (data nyata).
+- [x] `app/.env.example` untuk `NEXT_PUBLIC_*` saat `npm run dev`.
+- [x] `npm run build` lulus.
+
+### 16.1 Yang perlu Anda lakukan setelah increment 2
+
+- [ ] Pastikan migration sudah di remote (jika belum): dari root repo jalankan `npx supabase db push`.
+- [ ] Salin `app/.env.example` → `app/.env.local` dan isi URL + anon key Supabase.
+- [ ] Jalankan `cd app` lalu `npm run dev`, buka `/` — harus muncul **PLM Cirebon 2026**, **PM Internal**, dan task dari seed (termasuk sub-task **PLM-1.1**).
+- [ ] Kabari jika oke untuk **increment 3** (mis. URL `?scope=`, tabel view, atau mulai perketat RLS).
+
+---
+
+*Terakhir diperbarui: §16 — Fase 1 increment 2 selesai (core_pm + fetch UI + build).*

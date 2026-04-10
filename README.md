@@ -26,3 +26,10 @@ Fondasi implementasi aplikasi Project Management modular dengan dukungan domain 
 
 Lihat `docs/fase-0-eksekusi.md` untuk checklist detail eksekusi Fase 0.
 
+## Frontend (Fase 1)
+
+- Kode app: folder `app/`
+- Env lokal: salin `app/.env.example` → `app/.env.local` (isi `NEXT_PUBLIC_SUPABASE_*`)
+- Dev: `cd app` lalu `npm run dev`
+- Migration DB: dari root, `npx supabase db push`
+
