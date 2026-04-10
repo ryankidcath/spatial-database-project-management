@@ -1058,10 +1058,11 @@ Status fase:
 ### 16.1 Yang perlu Anda lakukan setelah increment 2
 
 - [ ] Pastikan migration sudah di remote (jika belum): dari root repo jalankan `npx supabase db push`.
+- [ ] **Expose schema API:** di Supabase Dashboard tambahkan `core_pm` ke **Exposed schemas** (lihat `docs/supabase-expose-schemas.md`). Tanpa ini, client akan error `Invalid schema: core_pm`.
 - [ ] Salin `app/.env.example` → `app/.env.local` dan isi URL + anon key Supabase.
 - [ ] Jalankan `cd app` lalu `npm run dev`, buka `/` — harus muncul **PLM Cirebon 2026**, **PM Internal**, dan task dari seed (termasuk sub-task **PLM-1.1**).
 - [ ] Kabari jika oke untuk **increment 3** (mis. URL `?scope=`, tabel view, atau mulai perketat RLS).
 
 ---
 
-*Terakhir diperbarui: §16 — Fase 1 increment 2 selesai (core_pm + fetch UI + build).*
+*Terakhir diperbarui: §16 — tambah wajib expose schema `core_pm` di Supabase API + docs troubleshooting.*

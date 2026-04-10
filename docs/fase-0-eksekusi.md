@@ -8,6 +8,7 @@ Dokumen ini adalah checklist teknis untuk menjalankan Fase 0 berdasarkan keputus
 - [ ] Pilih region terdekat operasional tim
 - [ ] Aktifkan extension PostGIS
 - [ ] Konfigurasi schema: `core_pm`, `plm`, `spatial`, `finance`
+- [ ] **Expose schema ke Data API:** Settings → Data API / API → Exposed schemas → tambahkan `core_pm` (dan `plm`, `spatial`, `finance` jika sudah dipakai). Lihat `docs/supabase-expose-schemas.md`.
 - [ ] Siapkan baseline SQL: schema creation + permissions awal
 - [ ] Aktifkan backup/PITR sesuai paket
 - [ ] Definisikan bucket storage:

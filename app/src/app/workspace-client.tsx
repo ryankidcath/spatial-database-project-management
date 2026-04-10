@@ -110,17 +110,40 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
   };
 
   if (fetchError) {
+    const isSchemaError =
+      /invalid schema|core_pm/i.test(fetchError) ||
+      fetchError.includes("PGRST106");
+
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
         <div className="max-w-lg rounded-lg border border-red-200 bg-white p-6 text-sm text-red-800">
           <p className="font-semibold">Gagal memuat data dari Supabase</p>
           <p className="mt-2 text-red-700">{fetchError}</p>
-          <p className="mt-4 text-slate-600">
-            Pastikan migration{" "}
-            <code className="rounded bg-slate-100 px-1">0002_core_pm_initial.sql</code>{" "}
-            sudah di-push:{" "}
-            <code className="rounded bg-slate-100 px-1">npx supabase db push</code>
-          </p>
+          {isSchemaError ? (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-950">
+              <p className="font-medium">Schema API belum di-expose</p>
+              <p className="mt-2 text-sm">
+                Di Supabase Dashboard:{" "}
+                <strong>Project Settings → Data API / API → Exposed schemas</strong>
+                , tambahkan{" "}
+                <code className="rounded bg-white px-1">core_pm</code> (dan nanti{" "}
+                <code className="rounded bg-white px-1">plm</code>,{" "}
+                <code className="rounded bg-white px-1">spatial</code>,{" "}
+                <code className="rounded bg-white px-1">finance</code> jika dipakai).
+              </p>
+              <p className="mt-2 text-sm">
+                Panduan di repo:{" "}
+                <code className="rounded bg-white px-1">docs/supabase-expose-schemas.md</code>
+              </p>
+            </div>
+          ) : (
+            <p className="mt-4 text-slate-600">
+              Pastikan migration{" "}
+              <code className="rounded bg-slate-100 px-1">0002_core_pm_initial.sql</code>{" "}
+              sudah di-push:{" "}
+              <code className="rounded bg-slate-100 px-1">npx supabase db push</code>
+            </p>
+          )}
         </div>
       </div>
     );
