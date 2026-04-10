@@ -973,6 +973,7 @@ Bagian ini daftar parameter yang perlu diputuskan sebelum coding utama.
 **Status implementasi saat ini**
 
 - Hingga **Increment 5**: **tanpa** UI kit besar (MUI/Chakra/dsb.); **Tailwind CSS** + markup React.
+- **Increment 6 (keputusan):** drag Kanban memakai **`@dnd-kit/core`** + **Tailwind**; **tanpa** shadcn/Radix penuh — cukup untuk DnD + aksesibilitas dasar (handle seret, `aria-label`). Kit primitif tambahan boleh mengikuti kebutuhan **Increment 7+** tanpa mengganti `@dnd-kit` untuk board.
 
 **Kriteria pemilihan (checklist singkat)**
 
@@ -989,7 +990,7 @@ Bagian ini daftar parameter yang perlu diputuskan sebelum coding utama.
 
 ---
 
-*Terakhir diperbarui: §13 — tambah §13.9 jadwal pemilihan UI library (sebelum Increment 6) + kriteria.*
+*Terakhir diperbarui: §13 — §13.9 + keputusan stack DnD Increment 6 (`@dnd-kit/core`).*
 
 ## 14. Progress eksekusi Fase 0 (realisasi awal)
 
@@ -1124,14 +1125,15 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 - [x] Dummy **increment 8**: migration `0004_spatial_demo_footprints.sql` + `docs/dummy-data-increment-6-8.md` (expose schema `spatial` di API).
 - [x] `npm run lint` + `npm run build` lulus.
 
-### Increment 6 (rencana) — Kanban (interaksi)
+### Increment 6 (selesai) — Kanban (interaksi)
 
-- [ ] **Prasyarat:** putuskan stack **UI library** (lihat **§13.9**); implementasi inc 6 memakai pilihan itu.
-- [ ] **Drag-and-drop** kartu antar kolom status (hanya task level atas / konsisten dengan aturan increment 4).
-- [ ] **Persistensi:** `PATCH` / `update` `core_pm.issues.status_id` (dan `sort_order` per kolom bila perlu).
-- [ ] Penanganan error + rollback/refresh jika update gagal (RLS atau validasi).
-- [ ] Opsional: indikator loading pada kartu yang dipindah.
-- [ ] `npm run lint` + `npm run build` lulus.
+- [x] **Stack interaksi:** `@dnd-kit/core` + Tailwind (lihat **§13.9** — keputusan inc 6).
+- [x] **Drag-and-drop** kartu antar kolom status + kolom **Tanpa status**; hanya task level atas; handle seret **⋮⋮** (klik judul tetap buka scope task).
+- [x] **Persistensi:** `update` Supabase (`anon` + schema `core_pm`) pada `status_id`, `sort_order`, `updated_at`; urutan kolom di-reindex; kolom asal ikut di-reindex jika pindah lintas status.
+- [x] Optimistik UI + rollback state lokal jika error; **`router.refresh()`** setelah sukses agar server RSC selaras.
+- [x] Indikator ring pada kartu saat menyimpan (`saving`).
+- [x] Komponen: `app/src/app/kanban-board.tsx`; dependency `app/package.json`: `@dnd-kit/core`.
+- [x] `npm run lint` + `npm run build` lulus.
 
 ### Increment 7 (rencana) — RLS + auth
 
@@ -1144,20 +1146,20 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 
 ### Increment 8 (rencana) — Map
 
-- [ ] **Leaflet** (atau stack yang disepakati §13.8) di view **Map**; styling konsisten dengan workspace.
+- [ ] **Leaflet** (atau stack peta yang disepakati) di view **Map**; styling konsisten dengan workspace.
 - [ ] Data geometri dari schema **`spatial`** (atau sumber yang sudah ada di catatan skema) — **filter** `organization` / `project` / `task` sesuai scope aktif (§11).
 - [ ] Placeholder diganti konten peta; pesan jika modul spasial nonaktif / belum ada geometri (selaras §11.5).
 - [ ] Performa dasar: tidak memuat seluruh dunia; bbox atau limit per project.
 - [ ] `npm run lint` + `npm run build` lulus.
 
-### 16.1 Yang perlu Anda lakukan setelah increment 5
+### 16.1 Yang perlu Anda lakukan setelah increment 6
 
-- [ ] `git pull` lalu dari root repo: `npx supabase db push` (terapkan `0003_issues_schedule` + `0004_spatial_demo_footprints`).
-- [ ] Supabase **Exposed schemas**: tambahkan **`spatial`** jika belum (lihat `docs/supabase-expose-schemas.md`).
-- [ ] `cd app` → `npm run dev`; tab **Kalender** / **Gantt** / **Tabel** — cek tanggal dummy April–Mei 2026.
+- [ ] `git pull` lalu `cd app` → `npm install` (ada `@dnd-kit/core`) → `npm run dev`.
+- [ ] Tab **Kanban:** seret via **⋮⋮** antar kolom; cek data di Supabase Table Editor (`issues.status_id` / `sort_order`).
+- [ ] Pastikan migration jadwal (`0003`) sudah di remote bila perlu tanggal; **`spatial`** di-expose untuk inc 8 nanti.
 - [ ] Deploy Vercel (root `app`) jika perlu.
-- [ ] **Sebelum increment 6:** pilih UI library / pola komponen (**§13.9**), lalu lanjut Kanban drag + persistensi.
+- [ ] Lanjut **increment 7** (RLS + auth).
 
 ---
 
-*Terakhir diperbarui: §16 — §13.9 jadwal UI library; checklist pasca increment 5.*
+*Terakhir diperbarui: §16 — Fase 1 increment 6 selesai (Kanban DnD + persistensi).*

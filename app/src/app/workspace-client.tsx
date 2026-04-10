@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
+import { KanbanBoard } from "./kanban-board";
 import { CalendarScheduleView, GanttScheduleView } from "./schedule-views";
 import { formatShortDate } from "./schedule-utils";
 import { parseViewParam, viewToParam } from "./workspace-url";
@@ -198,13 +199,6 @@ export function WorkspaceClient({
       .filter((s) => s.project_id === selectedProjectId)
       .sort((a, b) => a.position - b.position);
   }, [statuses, selectedProjectId]);
-
-  const kanbanTopLevel = useMemo(() => {
-    if (!selectedProjectId) return [];
-    return issues
-      .filter((i) => i.project_id === selectedProjectId && !i.parent_id)
-      .sort((a, b) => a.sort_order - b.sort_order);
-  }, [issues, selectedProjectId]);
 
   const issuesInScope = useMemo(() => {
     if (!selectedProjectId) return [];
@@ -553,7 +547,7 @@ export function WorkspaceClient({
                 setelah Leaflet + data geometri.
               </p>
             )}
-            {activeView === "Kanban" && (
+            {activeView === "Kanban" && selectedProjectId && (
               <div className="mt-4">
                 {selectedTaskId && (
                   <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
@@ -567,101 +561,14 @@ export function WorkspaceClient({
                     Belum ada status untuk project ini.
                   </p>
                 ) : (
-                  <div className="flex gap-3 overflow-x-auto pb-2">
-                    {statusesForProject.map((st) => {
-                      const columnIssues = kanbanTopLevel.filter(
-                        (i) => i.status_id === st.id
-                      );
-                      return (
-                        <div
-                          key={st.id}
-                          className="flex w-56 shrink-0 flex-col rounded-lg border border-slate-200 bg-slate-50"
-                        >
-                          <div className="border-b border-slate-200 px-3 py-2">
-                            <p className="text-sm font-semibold text-slate-800">
-                              {st.name}
-                            </p>
-                            <p className="text-xs capitalize text-slate-500">
-                              {st.category.replace("_", " ")}
-                            </p>
-                          </div>
-                          <ul className="flex flex-1 flex-col gap-2 p-2">
-                            {columnIssues.map((issue) => (
-                              <li key={issue.id}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!selectedProjectId) return;
-                                    replaceQuery((q) => {
-                                      const proj = projects.find(
-                                        (p) => p.id === selectedProjectId
-                                      );
-                                      if (proj)
-                                        q.set("org", proj.organization_id);
-                                      q.set("project", selectedProjectId);
-                                      q.set("task", issue.id);
-                                    });
-                                  }}
-                                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-2 text-left text-sm shadow-sm hover:border-blue-300 hover:bg-blue-50/60"
-                                >
-                                  <span className="font-mono text-xs text-slate-500">
-                                    {issue.key_display ?? "—"}
-                                  </span>
-                                  <span className="mt-0.5 block font-medium text-slate-800">
-                                    {issue.title}
-                                  </span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      );
-                    })}
-                    {(() => {
-                      const unassigned = kanbanTopLevel.filter(
-                        (i) => i.status_id == null
-                      );
-                      if (unassigned.length === 0) return null;
-                      return (
-                        <div className="flex w-56 shrink-0 flex-col rounded-lg border border-dashed border-slate-300 bg-white">
-                          <div className="border-b border-slate-200 px-3 py-2">
-                            <p className="text-sm font-semibold text-slate-700">
-                              Tanpa status
-                            </p>
-                          </div>
-                          <ul className="flex flex-1 flex-col gap-2 p-2">
-                            {unassigned.map((issue) => (
-                              <li key={issue.id}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!selectedProjectId) return;
-                                    replaceQuery((q) => {
-                                      const proj = projects.find(
-                                        (p) => p.id === selectedProjectId
-                                      );
-                                      if (proj)
-                                        q.set("org", proj.organization_id);
-                                      q.set("project", selectedProjectId);
-                                      q.set("task", issue.id);
-                                    });
-                                  }}
-                                  className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-left text-sm hover:bg-slate-100"
-                                >
-                                  <span className="font-mono text-xs text-slate-500">
-                                    {issue.key_display ?? "—"}
-                                  </span>
-                                  <span className="mt-0.5 block font-medium text-slate-800">
-                                    {issue.title}
-                                  </span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      );
-                    })()}
-                  </div>
+                  <KanbanBoard
+                    projectId={selectedProjectId}
+                    statuses={statusesForProject}
+                    issuesFromServer={issues}
+                    onSelectIssue={selectIssueInScope}
+                    onPersistError={() => {}}
+                    onPersisted={() => router.refresh()}
+                  />
                 )}
               </div>
             )}

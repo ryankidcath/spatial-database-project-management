@@ -10,8 +10,8 @@ Ringkasan apa yang sudah disiapkan di migration (selain `0002` seed Core PM).
 
 ## Increment 6 (Kanban drag)
 
-- Tidak ada tabel baru. Cukup pakai `status_id` + `sort_order` yang sudah ada.
-- Setelah `db push`, kartu Kanban punya rentang tanggal untuk konteks visual opsional nanti.
+- Tidak ada tabel baru. Pakai `core_pm.issues.status_id` + `sort_order` (+ `updated_at` saat drag).
+- UI: `@dnd-kit/core` di `app/src/app/kanban-board.tsx`; update via client Supabase (`NEXT_PUBLIC_SUPABASE_*`).
 
 ## Increment 7 (RLS + auth)
 

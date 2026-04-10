@@ -30,7 +30,8 @@ Lihat `docs/fase-0-eksekusi.md` untuk checklist detail eksekusi Fase 0.
 
 - Kode app: folder `app/`
 - Env lokal: salin `app/.env.example` → `app/.env.local` (isi `NEXT_PUBLIC_SUPABASE_*`)
-- Dev: `cd app` lalu `npm run dev`
+- Dev: `cd app` lalu `npm install` lalu `npm run dev`
+- Kanban (inc 6): drag memakai `@dnd-kit/core` — pastikan dependency terpasang setelah `git pull`
 - Migration DB: dari root, `npx supabase db push` (termasuk jadwal issue `0003_issues_schedule` + demo peta `0004_spatial_demo_footprints`)
 - Jika error **Invalid schema: core_pm** (atau **`spatial`** setelah `0004`): expose schema di Supabase (lihat `docs/supabase-expose-schemas.md`)
 - Data dummy untuk inc berikut: `docs/dummy-data-increment-6-8.md`
