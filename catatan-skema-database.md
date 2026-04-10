@@ -808,11 +808,12 @@ Aturan:
 
 - State filter utama = `active_scope` (`organization` | `project` | `task`).
 - Perubahan scope di sidebar harus memicu refresh seluruh view tanpa mengubah tab view aktif.
-- **Implementasi URL (increment 3):** query string berisi:
+- **Implementasi URL (increment 3 + 4):** query string berisi:
+  - `org` = UUID organisasi (`core_pm.organizations.id`) — increment 4; diselaraskan saat ganti project / organisasi.
   - `project` = UUID project (`core_pm.projects.id`),
   - `task` = UUID issue/task (opsional; jika ada, scope = task),
   - `view` = `dashboard` | `tabel` | `map` | `kanban` | `kalender` | `gantt`.
-- Contoh bookmark: `/?project=<uuid>&view=tabel` atau `/?project=<uuid>&task=<uuid>&view=dashboard`.
+- Contoh bookmark: `/?org=<uuid>&project=<uuid>&view=kanban` atau `/?project=<uuid>&task=<uuid>&view=dashboard`.
 
 ### 11.4 Perilaku per view (saat scope = project)
 
@@ -1064,19 +1065,26 @@ Status fase:
 - [x] URL sinkron dengan navigasi: `?project=&task=&view=` (lihat §11.3).
 - [x] `router.replace` tanpa scroll; kunjungan pertama tanpa `project` diisi default project pertama.
 - [x] View **Tabel**: daftar issue dalam scope project (semua task + indent) atau scope task (task + sub-task).
-- [x] Placeholder view **Map** (nanti modul spatial) dan **Kanban / Kalender / Gantt** (increment berikutnya).
+- [x] Placeholder view **Map** (nanti modul spatial); **Kanban** di increment 4; **Kalender / Gantt** menyusul.
 - [x] `Suspense` di `page.tsx` untuk `useSearchParams`.
 - [x] Pecahan util: `workspace-views.ts`, `workspace-url.ts`.
 - [x] Lint lulus.
 
-### 16.1 Yang perlu Anda lakukan setelah increment 3
+### Increment 4 (selesai)
 
-- [ ] `git pull` lalu `cd app` → `npm run dev`.
-- [ ] Buka `/` — URL harus terisi `?project=…&view=dashboard` (otomatis).
-- [ ] Coba bookmark: ganti `view=tabel`, pilih task — cek `task=` di URL dan isi tabel.
-- [ ] Deploy Vercel (root `app`) jika perlu verifikasi production.
-- [ ] Kabari untuk **increment 4** (mis. Kanban kolom status, atau perketat RLS, atau `organization` di URL).
+- [x] Fetch `core_pm.statuses` + field `status_id` pada issues; tipe UI selaras.
+- [x] View **Kanban**: kolom per status project (hanya task level atas / tanpa `parent_id`); kartu bisa dipilih ke scope task.
+- [x] Query **`org`**: filter project di sidebar per organisasi; sinkron URL saat ganti organisasi / project.
+- [x] **RLS** tetap mode dev (longgar) — perketat berdasarkan `project_members` + `auth.uid()` setelah flow login siap (increment berikut / Fase 1 lanjutan).
+
+### 16.1 Yang perlu Anda lakukan setelah increment 4
+
+- [ ] `git pull` lalu `cd app` → `npm run dev` (tanpa migration baru untuk increment ini).
+- [ ] Buka `/` — URL memuat `org=` dan `project=` (normalisasi otomatis bila ada param usang).
+- [ ] Tab **Kanban**: kolom To Do / Doing / Done (seed); klik kartu mengisi `task=` di URL.
+- [ ] Deploy Vercel (root `app`) jika perlu.
+- [ ] Kabari untuk **increment 5** (mis. Kalender/Gantt, drag status, atau RLS + auth).
 
 ---
 
-*Terakhir diperbarui: §16 — Fase 1 increment 3 (URL + view Tabel + Suspense).*
+*Terakhir diperbarui: §16 — Fase 1 increment 4 (Kanban + `org` di URL + statuses).*

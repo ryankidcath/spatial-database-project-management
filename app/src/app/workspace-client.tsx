@@ -5,6 +5,12 @@ import { useEffect, useMemo } from "react";
 import { parseViewParam, viewToParam } from "./workspace-url";
 import { VIEWS, type ViewId } from "./workspace-views";
 
+export type OrganizationRow = {
+  id: string;
+  name: string;
+  slug: string;
+};
+
 export type ProjectRow = {
   id: string;
   name: string;
@@ -12,17 +18,28 @@ export type ProjectRow = {
   organization_id: string;
 };
 
+export type StatusRow = {
+  id: string;
+  project_id: string;
+  name: string;
+  category: string;
+  position: number;
+};
+
 export type IssueRow = {
   id: string;
   project_id: string;
   parent_id: string | null;
+  status_id: string | null;
   key_display: string | null;
   title: string;
   sort_order: number;
 };
 
 type Props = {
+  organizations: OrganizationRow[];
   projects: ProjectRow[];
+  statuses: StatusRow[];
   issues: IssueRow[];
   fetchError: string | null;
 };
@@ -63,15 +80,47 @@ function flattenIssuesWithDepth(
   return out;
 }
 
-export function WorkspaceClient({ projects, issues, fetchError }: Props) {
+export function WorkspaceClient({
+  organizations,
+  projects,
+  statuses,
+  issues,
+  fetchError,
+}: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const orgsWithProjects = useMemo(() => {
+    const ids = new Set(projects.map((p) => p.organization_id));
+    return organizations
+      .filter((o) => ids.has(o.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [organizations, projects]);
+
+  const canonicalOrgId = useMemo(() => {
+    const o = searchParams.get("org");
+    if (
+      o &&
+      orgsWithProjects.some((x) => x.id === o) &&
+      projects.some((p) => p.organization_id === o)
+    ) {
+      return o;
+    }
+    return projects[0]?.organization_id ?? null;
+  }, [searchParams, orgsWithProjects, projects]);
+
+  const projectsInOrg = useMemo(() => {
+    if (!canonicalOrgId) return [];
+    return projects
+      .filter((p) => p.organization_id === canonicalOrgId)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [projects, canonicalOrgId]);
+
   const selectedProjectId = useMemo(() => {
     const q = searchParams.get("project");
-    if (q && projects.some((p) => p.id === q)) return q;
-    return projects[0]?.id ?? null;
-  }, [searchParams, projects]);
+    if (q && projectsInOrg.some((p) => p.id === q)) return q;
+    return projectsInOrg[0]?.id ?? null;
+  }, [searchParams, projectsInOrg]);
 
   const selectedTaskId = useMemo(() => {
     const q = searchParams.get("task");
@@ -87,14 +136,47 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
   }, [searchParams]);
 
   useEffect(() => {
-    if (projects.length === 0) return;
-    if (!searchParams.get("project")) {
-      const p = new URLSearchParams(searchParams.toString());
-      p.set("project", projects[0].id);
-      if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+    if (projects.length === 0 || !canonicalOrgId || !selectedProjectId) return;
+    const p = new URLSearchParams(searchParams.toString());
+    let dirty = false;
+    if (p.get("org") !== canonicalOrgId) {
+      p.set("org", canonicalOrgId);
+      dirty = true;
+    }
+    if (p.get("project") !== selectedProjectId) {
+      p.set("project", selectedProjectId);
+      dirty = true;
+    }
+    if (!p.get("view")) {
+      p.set("view", viewToParam("Dashboard"));
+      dirty = true;
+    }
+    const tid = p.get("task");
+    if (
+      tid &&
+      !issues.some(
+        (i) => i.id === tid && i.project_id === selectedProjectId
+      )
+    ) {
+      p.delete("task");
+      dirty = true;
+    }
+    if (dirty) {
       router.replace(`/?${p.toString()}`, { scroll: false });
     }
-  }, [projects, searchParams, router]);
+  }, [
+    projects.length,
+    canonicalOrgId,
+    selectedProjectId,
+    searchParams,
+    router,
+    issues,
+  ]);
+
+  const selectedOrganization = useMemo(
+    () => orgsWithProjects.find((o) => o.id === canonicalOrgId) ?? null,
+    [orgsWithProjects, canonicalOrgId]
+  );
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) ?? null,
@@ -105,6 +187,20 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
     () => issues.find((i) => i.id === selectedTaskId) ?? null,
     [issues, selectedTaskId]
   );
+
+  const statusesForProject = useMemo(() => {
+    if (!selectedProjectId) return [];
+    return statuses
+      .filter((s) => s.project_id === selectedProjectId)
+      .sort((a, b) => a.position - b.position);
+  }, [statuses, selectedProjectId]);
+
+  const kanbanTopLevel = useMemo(() => {
+    if (!selectedProjectId) return [];
+    return issues
+      .filter((i) => i.project_id === selectedProjectId && !i.parent_id)
+      .sort((a, b) => a.sort_order - b.sort_order);
+  }, [issues, selectedProjectId]);
 
   const issuesInScope = useMemo(() => {
     if (!selectedProjectId) return [];
@@ -204,9 +300,42 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
         </h1>
         <div className="mt-6 space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Organisasi
+          </p>
+          <div className="flex flex-col gap-1">
+            {orgsWithProjects.map((o) => {
+              const active = canonicalOrgId === o.id;
+              return (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => {
+                    replaceQuery((q) => {
+                      q.set("org", o.id);
+                      const first = projects
+                        .filter((p) => p.organization_id === o.id)
+                        .sort((a, b) => a.name.localeCompare(b.name))[0];
+                      if (first) q.set("project", first.id);
+                      q.delete("task");
+                    });
+                  }}
+                  className={`rounded-md px-3 py-2 text-left text-sm font-medium ${
+                    active
+                      ? "bg-blue-50 text-blue-800"
+                      : "bg-slate-50 text-slate-800 hover:bg-slate-100"
+                  }`}
+                >
+                  {o.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="mt-6 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
             Project
           </p>
-          {projects.map((p) => {
+          {projectsInOrg.map((p) => {
             const treeRows = flattenIssuesWithDepth(p.id, issues);
             const isSelectedProject =
               selectedProjectId === p.id && !selectedTaskId;
@@ -217,6 +346,7 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
                   type="button"
                   onClick={() => {
                     replaceQuery((q) => {
+                      q.set("org", p.organization_id);
                       q.set("project", p.id);
                       q.delete("task");
                     });
@@ -239,6 +369,7 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
                           type="button"
                           onClick={() => {
                             replaceQuery((q) => {
+                              q.set("org", p.organization_id);
                               q.set("project", p.id);
                               q.set("task", t.id);
                             });
@@ -274,10 +405,16 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
                 ? `Project: ${selectedProject.name}`
                 : "—"}
           </h2>
+          {selectedOrganization && (
+            <p className="mt-1 text-xs text-slate-600">
+              Organisasi:{" "}
+              <span className="font-medium">{selectedOrganization.name}</span>
+            </p>
+          )}
           <p className="mt-1 truncate text-xs text-slate-500">
             URL:{" "}
             <code className="rounded bg-slate-100 px-1">
-              ?project=…&amp;task=…&amp;view=…
+              ?org=…&amp;project=…&amp;task=…&amp;view=…
             </code>
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -309,6 +446,9 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
             <p className="mt-2 text-sm text-slate-600">
               Data dari <code className="rounded bg-slate-100 px-1">core_pm</code>
               . Query:{" "}
+              <code className="rounded bg-slate-100 px-1">
+                org={canonicalOrgId?.slice(0, 8)}…
+              </code>{" "}
               <code className="rounded bg-slate-100 px-1">
                 project={selectedProjectId?.slice(0, 8)}…
               </code>
@@ -391,12 +531,122 @@ export function WorkspaceClient({ projects, issues, fetchError }: Props) {
                 setelah Leaflet + data geometri.
               </p>
             )}
-            {(activeView === "Kanban" ||
-              activeView === "Kalender" ||
-              activeView === "Gantt") && (
+            {activeView === "Kanban" && (
+              <div className="mt-4">
+                {selectedTaskId && (
+                  <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                    Scope <strong>task</strong> aktif — board tetap menampilkan
+                    semua task level atas project ini. Klik nama project di kiri
+                    untuk fokus project saja.
+                  </p>
+                )}
+                {statusesForProject.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    Belum ada status untuk project ini.
+                  </p>
+                ) : (
+                  <div className="flex gap-3 overflow-x-auto pb-2">
+                    {statusesForProject.map((st) => {
+                      const columnIssues = kanbanTopLevel.filter(
+                        (i) => i.status_id === st.id
+                      );
+                      return (
+                        <div
+                          key={st.id}
+                          className="flex w-56 shrink-0 flex-col rounded-lg border border-slate-200 bg-slate-50"
+                        >
+                          <div className="border-b border-slate-200 px-3 py-2">
+                            <p className="text-sm font-semibold text-slate-800">
+                              {st.name}
+                            </p>
+                            <p className="text-xs capitalize text-slate-500">
+                              {st.category.replace("_", " ")}
+                            </p>
+                          </div>
+                          <ul className="flex flex-1 flex-col gap-2 p-2">
+                            {columnIssues.map((issue) => (
+                              <li key={issue.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!selectedProjectId) return;
+                                    replaceQuery((q) => {
+                                      const proj = projects.find(
+                                        (p) => p.id === selectedProjectId
+                                      );
+                                      if (proj)
+                                        q.set("org", proj.organization_id);
+                                      q.set("project", selectedProjectId);
+                                      q.set("task", issue.id);
+                                    });
+                                  }}
+                                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-2 text-left text-sm shadow-sm hover:border-blue-300 hover:bg-blue-50/60"
+                                >
+                                  <span className="font-mono text-xs text-slate-500">
+                                    {issue.key_display ?? "—"}
+                                  </span>
+                                  <span className="mt-0.5 block font-medium text-slate-800">
+                                    {issue.title}
+                                  </span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })}
+                    {(() => {
+                      const unassigned = kanbanTopLevel.filter(
+                        (i) => i.status_id == null
+                      );
+                      if (unassigned.length === 0) return null;
+                      return (
+                        <div className="flex w-56 shrink-0 flex-col rounded-lg border border-dashed border-slate-300 bg-white">
+                          <div className="border-b border-slate-200 px-3 py-2">
+                            <p className="text-sm font-semibold text-slate-700">
+                              Tanpa status
+                            </p>
+                          </div>
+                          <ul className="flex flex-1 flex-col gap-2 p-2">
+                            {unassigned.map((issue) => (
+                              <li key={issue.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!selectedProjectId) return;
+                                    replaceQuery((q) => {
+                                      const proj = projects.find(
+                                        (p) => p.id === selectedProjectId
+                                      );
+                                      if (proj)
+                                        q.set("org", proj.organization_id);
+                                      q.set("project", selectedProjectId);
+                                      q.set("task", issue.id);
+                                    });
+                                  }}
+                                  className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-left text-sm hover:bg-slate-100"
+                                >
+                                  <span className="font-mono text-xs text-slate-500">
+                                    {issue.key_display ?? "—"}
+                                  </span>
+                                  <span className="mt-0.5 block font-medium text-slate-800">
+                                    {issue.title}
+                                  </span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
+            {(activeView === "Kalender" || activeView === "Gantt") && (
               <p className="mt-4 text-sm text-slate-500">
                 View <strong>{activeView}</strong> diisi di increment berikutnya
-                (board / kalender / timeline).
+                (kalender / timeline).
               </p>
             )}
           </div>

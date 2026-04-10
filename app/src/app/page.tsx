@@ -3,7 +3,9 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   WorkspaceClient,
   type IssueRow,
+  type OrganizationRow,
   type ProjectRow,
+  type StatusRow,
 } from "./workspace-client";
 
 export default async function Home() {
@@ -39,15 +41,42 @@ export default async function Home() {
     .eq("is_archived", false)
     .order("name");
 
+  const projectList = (projects ?? []) as ProjectRow[];
+  const orgIds = [
+    ...new Set(projectList.map((p) => p.organization_id).filter(Boolean)),
+  ];
+
+  const { data: organizations, error: orgsError } =
+    orgIds.length > 0
+      ? await supabase
+          .schema("core_pm")
+          .from("organizations")
+          .select("id, name, slug")
+          .in("id", orgIds)
+          .is("deleted_at", null)
+          .order("name")
+      : { data: [] as OrganizationRow[], error: null };
+
+  const { data: statuses, error: statusesError } = await supabase
+    .schema("core_pm")
+    .from("statuses")
+    .select("id, project_id, name, category, position")
+    .order("project_id")
+    .order("position", { ascending: true });
+
   const { data: issues, error: issuesError } = await supabase
     .schema("core_pm")
     .from("issues")
-    .select("id, project_id, parent_id, key_display, title, sort_order")
+    .select(
+      "id, project_id, parent_id, status_id, key_display, title, sort_order"
+    )
     .is("deleted_at", null)
     .order("sort_order");
 
   const fetchError =
     projectsError?.message ??
+    orgsError?.message ??
+    statusesError?.message ??
     issuesError?.message ??
     null;
 
@@ -60,7 +89,9 @@ export default async function Home() {
       }
     >
       <WorkspaceClient
-        projects={(projects ?? []) as ProjectRow[]}
+        organizations={(organizations ?? []) as OrganizationRow[]}
+        projects={projectList}
+        statuses={(statuses ?? []) as StatusRow[]}
         issues={(issues ?? []) as IssueRow[]}
         fetchError={fetchError}
       />
