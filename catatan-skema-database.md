@@ -1065,7 +1065,7 @@ Status fase:
 - [x] URL sinkron dengan navigasi: `?project=&task=&view=` (lihat §11.3).
 - [x] `router.replace` tanpa scroll; kunjungan pertama tanpa `project` diisi default project pertama.
 - [x] View **Tabel**: daftar issue dalam scope project (semua task + indent) atau scope task (task + sub-task).
-- [x] Placeholder view **Map** (nanti modul spatial); **Kanban** di increment 4; **Kalender / Gantt** menyusul.
+- [x] Placeholder view **Map** (increment 8 + modul spatial); **Kanban** dasar di increment 4; **Kalender / Gantt** di increment 5.
 - [x] `Suspense` di `page.tsx` untuk `useSearchParams`.
 - [x] Pecahan util: `workspace-views.ts`, `workspace-url.ts`.
 - [x] Lint lulus.
@@ -1075,16 +1075,61 @@ Status fase:
 - [x] Fetch `core_pm.statuses` + field `status_id` pada issues; tipe UI selaras.
 - [x] View **Kanban**: kolom per status project (hanya task level atas / tanpa `parent_id`); kartu bisa dipilih ke scope task.
 - [x] Query **`org`**: filter project di sidebar per organisasi; sinkron URL saat ganti organisasi / project.
-- [x] **RLS** tetap mode dev (longgar) — perketat berdasarkan `project_members` + `auth.uid()` setelah flow login siap (increment berikut / Fase 1 lanjutan).
+- [x] **RLS** tetap mode dev (longgar) — perketat pada **increment 7** (auth + policy membership).
+
+### Rencana penutupan Fase 1 (empat increment berikut)
+
+Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan kecil/bugfix):
+
+| Increment | Fokus |
+|-----------|--------|
+| **5** | Kalender & Gantt |
+| **6** | Kanban (interaksi / persistensi) |
+| **7** | RLS + auth |
+| **8** | Map (peta) |
+
+*Catatan:* **Map** juga bersinggungan dengan **Fase 4 — Spasial dasar** (§12.1); increment 8 di Fase 1 = integrasi view **Map** + Leaflet + data geometri **terfilter scope** yang sudah ada; pengayaan validasi/atribut spasial bisa lanjut di fase spasial.
+
+### Increment 5 (rencana) — Kalender & Gantt
+
+- [ ] **Kalender:** tampilan per scope project (dan perilaku jelas saat scope = task); sumber data dari `core_pm.issues` (minimal: metadata tanggal — tambah kolom `due_at` / `start_at` jika belum ada, atau pakai field yang sudah disepakati di skema).
+- [ ] **Gantt:** timeline task level atas (dan/atau sub-task opsional) dalam project aktif; skala waktu (minggu/bulan) dan label key/judul.
+- [ ] Navigasi tab **Kalender** / **Gantt** mengikuti URL `view=` (sudah ada di §11.3).
+- [ ] `npm run lint` + `npm run build` lulus.
+
+### Increment 6 (rencana) — Kanban (interaksi)
+
+- [ ] **Drag-and-drop** kartu antar kolom status (hanya task level atas / konsisten dengan aturan increment 4).
+- [ ] **Persistensi:** `PATCH` / `update` `core_pm.issues.status_id` (dan `sort_order` per kolom bila perlu).
+- [ ] Penanganan error + rollback/refresh jika update gagal (RLS atau validasi).
+- [ ] Opsional: indikator loading pada kartu yang dipindah.
+- [ ] `npm run lint` + `npm run build` lulus.
+
+### Increment 7 (rencana) — RLS + auth
+
+- [ ] **Supabase Auth:** login/logout (email magic link atau metode yang dipilih), session di Next.js (middleware / server client sesuai pola Supabase + App Router).
+- [ ] **Profil:** sinkron atau trigger `core_pm.profiles` terhadap `auth.users` (sesuai skema yang ada).
+- [ ] **RLS:** ganti policy dev “buka lebar”; akses baca/tulis `organizations`, `projects`, `statuses`, `issues`, `project_members` berdasarkan **keanggotaan project** / organisasi (query policy memakai `auth.uid()`).
+- [ ] Hapus atau persempit grant/policy yang membiarkan `anon` mengubah data produksi (tetap bisa bedakan env `dev` vs `prod`).
+- [ ] Dokumentasi env / troubleshooting login di `README` atau `docs/` singkat.
+- [ ] `npm run lint` + `npm run build` lulus.
+
+### Increment 8 (rencana) — Map
+
+- [ ] **Leaflet** (atau stack yang disepakati §13.8) di view **Map**; styling konsisten dengan workspace.
+- [ ] Data geometri dari schema **`spatial`** (atau sumber yang sudah ada di catatan skema) — **filter** `organization` / `project` / `task` sesuai scope aktif (§11).
+- [ ] Placeholder diganti konten peta; pesan jika modul spasial nonaktif / belum ada geometri (selaras §11.5).
+- [ ] Performa dasar: tidak memuat seluruh dunia; bbox atau limit per project.
+- [ ] `npm run lint` + `npm run build` lulus.
 
 ### 16.1 Yang perlu Anda lakukan setelah increment 4
 
-- [ ] `git pull` lalu `cd app` → `npm run dev` (tanpa migration baru untuk increment ini).
+- [ ] `git pull` lalu `cd app` → `npm run dev` (tanpa migration baru untuk increment 4).
 - [ ] Buka `/` — URL memuat `org=` dan `project=` (normalisasi otomatis bila ada param usang).
 - [ ] Tab **Kanban**: kolom To Do / Doing / Done (seed); klik kartu mengisi `task=` di URL.
 - [ ] Deploy Vercel (root `app`) jika perlu.
-- [ ] Kabari untuk **increment 5** (mis. Kalender/Gantt, drag status, atau RLS + auth).
+- [ ] Lanjut eksekusi **increment 5** sesuai tabel *Rencana penutupan Fase 1* di atas.
 
 ---
 
-*Terakhir diperbarui: §16 — Fase 1 increment 4 (Kanban + `org` di URL + statuses).*
+*Terakhir diperbarui: §16 — rencana increment 5–8 (Kalender/Gantt, Kanban interaksi, RLS+auth, Map) untuk penutupan Fase 1.*
