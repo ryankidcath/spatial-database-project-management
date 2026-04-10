@@ -960,13 +960,36 @@ Bagian ini daftar parameter yang perlu diputuskan sebelum coding utama.
 
 ### 13.8 Catatan keputusan yang boleh ditunda
 
-- **UI library**: **belum perlu diputuskan di Fase 0**.
-- Waktu ideal memutuskan UI library: awal Fase 1, saat mulai implementasi komponen view (table, kanban, calendar, gantt, map wrapper).
-- Prinsip: pilih library yang mendukung data-dense internal app dan integrasi Leaflet tanpa friksi.
+- **UI library** tidak wajib diputuskan di Fase 0; jadwal tegas dan kriteria ada di **§13.9**.
+
+### 13.9 Pemilihan UI library — kapannya dan kriteria
+
+**Kapannya keputusan diambil**
+
+- **Batas:** stack UI library (kit / primitives / pola komponen) **wajib sudah dipilih sebelum koding Increment 6** (Kanban drag-and-drop + persistensi).
+- **Momen kerja:** **sesi perencanaan/teknis tepat setelah Increment 5 selesai** (Kalender & Gantt): dokumentasikan pilihan di commit atau cuplikan ADR singkat di repo (`docs/` opsional), lalu implementasi Increment 6 memakai stack itu.
+- **Alasan jadwal ini:** Increment 1–5 bisa jalan dengan **Tailwind + React** untuk prototyping; dari Increment 6 ke depan (DnD, state kartu, mungkin form edit) manfaat **primitif aksesibel + pola komponen** jelas; menunda lagi ke Increment 8 (Map) berisiko refactor Kanban/Auth.
+
+**Status implementasi saat ini**
+
+- Hingga **Increment 5**: **tanpa** UI kit besar (MUI/Chakra/dsb.); **Tailwind CSS** + markup React.
+
+**Kriteria pemilihan (checklist singkat)**
+
+- Cocok untuk **aplikasi internal data-padat** (tabel, filter, banyak baris).
+- **Aksesibilitas** dan keyboard untuk kontrol interaktif (nanti DnD, dialog, menu).
+- **Integrasi Leaflet** (Increment 8) tanpa bentrok styling/event — cek contoh komunitas untuk stack kandidat.
+- **Next.js App Router** + TypeScript + Tailwind (boleh tetap Tailwind sebagai lapisan gaya di atas primitif).
+- Ukuran bundle dan kurva belajar tim.
+
+**Arah kandidat (bukan keputusan final)**
+
+- Kombinasi umum: **primitives headless** (mis. Radix UI) + **Tailwind** + library **DnD** khusus (mis. `@dnd-kit`) untuk board; atau **shadcn/ui** (pola di atas Radix) jika tim setuju pola copy-paste komponen.
+- Alternatif: **kit lengkap** (MUI, Chakra, dsb.) — pertimbangkan konsistensi visual dan beban bundle untuk peta + tabel besar.
 
 ---
 
-*Terakhir diperbarui: §12 roadmap implementasi ditambahkan, dan §13 merinci parameter Fase 0 (Supabase/GitHub/Vercel + keamanan operasional).*
+*Terakhir diperbarui: §13 — tambah §13.9 jadwal pemilihan UI library (sebelum Increment 6) + kriteria.*
 
 ## 14. Progress eksekusi Fase 0 (realisasi awal)
 
@@ -985,7 +1008,7 @@ Progress aktual di workspace:
 - [x] Hubungkan Vercel + environment variables.
 
 Catatan:
-- UI library memang belum diputuskan, dan tetap ditunda ke awal Fase 1 sesuai keputusan.
+- UI library: **belum dipilih**; jadwal keputusan mengikuti **§13.9** (tepat sebelum **Increment 6**).
 
 ---
 
@@ -1103,6 +1126,7 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 
 ### Increment 6 (rencana) — Kanban (interaksi)
 
+- [ ] **Prasyarat:** putuskan stack **UI library** (lihat **§13.9**); implementasi inc 6 memakai pilihan itu.
 - [ ] **Drag-and-drop** kartu antar kolom status (hanya task level atas / konsisten dengan aturan increment 4).
 - [ ] **Persistensi:** `PATCH` / `update` `core_pm.issues.status_id` (dan `sort_order` per kolom bila perlu).
 - [ ] Penanganan error + rollback/refresh jika update gagal (RLS atau validasi).
@@ -1132,8 +1156,8 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 - [ ] Supabase **Exposed schemas**: tambahkan **`spatial`** jika belum (lihat `docs/supabase-expose-schemas.md`).
 - [ ] `cd app` → `npm run dev`; tab **Kalender** / **Gantt** / **Tabel** — cek tanggal dummy April–Mei 2026.
 - [ ] Deploy Vercel (root `app`) jika perlu.
-- [ ] Lanjut **increment 6** (Kanban drag + persistensi).
+- [ ] **Sebelum increment 6:** pilih UI library / pola komponen (**§13.9**), lalu lanjut Kanban drag + persistensi.
 
 ---
 
-*Terakhir diperbarui: §16 — Fase 1 increment 5 selesai (Kalender/Gantt + dummy spatial untuk inc 8).*
+*Terakhir diperbarui: §16 — §13.9 jadwal UI library; checklist pasca increment 5.*
