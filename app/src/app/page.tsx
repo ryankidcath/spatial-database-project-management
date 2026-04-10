@@ -68,7 +68,7 @@ export default async function Home() {
     .schema("core_pm")
     .from("issues")
     .select(
-      "id, project_id, parent_id, status_id, key_display, title, sort_order"
+      "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at"
     )
     .is("deleted_at", null)
     .order("sort_order");

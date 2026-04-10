@@ -20,6 +20,8 @@ Tabel di `core_pm.*` tidak akan bisa di-`select` dari client sampai schema itu d
 
 Untuk modul nanti, tambahkan juga: `plm`, `spatial`, `finance` (boleh sekalian sekarang agar tidak lupa).
 
+Setelah migration **`0004_spatial_demo_footprints`**, tabel demo Map membaca schema **`spatial`** — pastikan **`spatial`** ikut di **Exposed schemas** (selain `core_pm`).
+
 ## Setelah itu
 
 - Refresh aplikasi (`npm run dev` / reload browser).

@@ -2,6 +2,8 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
+import { CalendarScheduleView, GanttScheduleView } from "./schedule-views";
+import { formatShortDate } from "./schedule-utils";
 import { parseViewParam, viewToParam } from "./workspace-url";
 import { VIEWS, type ViewId } from "./workspace-views";
 
@@ -34,6 +36,8 @@ export type IssueRow = {
   key_display: string | null;
   title: string;
   sort_order: number;
+  starts_at: string | null;
+  due_at: string | null;
 };
 
 type Props = {
@@ -236,6 +240,16 @@ export function WorkspaceClient({
     const p = new URLSearchParams(searchParams.toString());
     mutate(p);
     router.replace(`/?${p.toString()}`, { scroll: false });
+  };
+
+  const selectIssueInScope = (issueId: string) => {
+    if (!selectedProjectId) return;
+    const proj = projects.find((p) => p.id === selectedProjectId);
+    replaceQuery((q) => {
+      if (proj) q.set("org", proj.organization_id);
+      q.set("project", selectedProjectId);
+      q.set("task", issueId);
+    });
   };
 
   if (fetchError) {
@@ -493,6 +507,8 @@ export function WorkspaceClient({
                     <tr className="border-b border-slate-200 text-slate-600">
                       <th className="py-2 pr-4 font-medium">Key</th>
                       <th className="py-2 pr-4 font-medium">Judul</th>
+                      <th className="py-2 pr-4 font-medium">Mulai</th>
+                      <th className="py-2 pr-4 font-medium">Tenggat</th>
                       <th className="py-2 pr-4 font-medium">Sub-task?</th>
                     </tr>
                   </thead>
@@ -510,6 +526,12 @@ export function WorkspaceClient({
                             </span>
                           </td>
                           <td className="py-2 pr-4">{issue.title}</td>
+                          <td className="py-2 pr-4 text-slate-600">
+                            {formatShortDate(issue.starts_at)}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-600">
+                            {formatShortDate(issue.due_at)}
+                          </td>
                           <td className="py-2 pr-4 text-slate-600">
                             {isChild ? "Ya" : "—"}
                           </td>
@@ -643,11 +665,27 @@ export function WorkspaceClient({
                 )}
               </div>
             )}
-            {(activeView === "Kalender" || activeView === "Gantt") && (
-              <p className="mt-4 text-sm text-slate-500">
-                View <strong>{activeView}</strong> diisi di increment berikutnya
-                (kalender / timeline).
-              </p>
+            {activeView === "Kalender" && selectedProjectId && (
+              <div className="mt-4">
+                <CalendarScheduleView
+                  key={`cal-${selectedProjectId}-${selectedTaskId ?? "p"}`}
+                  issues={issues}
+                  projectId={selectedProjectId}
+                  taskId={selectedTaskId}
+                  onSelectIssue={selectIssueInScope}
+                />
+              </div>
+            )}
+            {activeView === "Gantt" && selectedProjectId && (
+              <div className="mt-4">
+                <GanttScheduleView
+                  key={`gantt-${selectedProjectId}-${selectedTaskId ?? "p"}`}
+                  issues={issues}
+                  projectId={selectedProjectId}
+                  taskId={selectedTaskId}
+                  onSelectIssue={selectIssueInScope}
+                />
+              </div>
             )}
           </div>
         </section>

@@ -814,6 +814,7 @@ Aturan:
   - `task` = UUID issue/task (opsional; jika ada, scope = task),
   - `view` = `dashboard` | `tabel` | `map` | `kanban` | `kalender` | `gantt`.
 - Contoh bookmark: `/?org=<uuid>&project=<uuid>&view=kanban` atau `/?project=<uuid>&task=<uuid>&view=dashboard`.
+- Jadwal issue: `core_pm.issues.starts_at`, `due_at` (timestamptz, nullable) — dipakai **Kalender** & **Gantt** (increment 5).
 
 ### 11.4 Perilaku per view (saat scope = project)
 
@@ -1090,12 +1091,15 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 
 *Catatan:* **Map** juga bersinggungan dengan **Fase 4 — Spasial dasar** (§12.1); increment 8 di Fase 1 = integrasi view **Map** + Leaflet + data geometri **terfilter scope** yang sudah ada; pengayaan validasi/atribut spasial bisa lanjut di fase spasial.
 
-### Increment 5 (rencana) — Kalender & Gantt
+### Increment 5 (selesai) — Kalender & Gantt
 
-- [ ] **Kalender:** tampilan per scope project (dan perilaku jelas saat scope = task); sumber data dari `core_pm.issues` (minimal: metadata tanggal — tambah kolom `due_at` / `start_at` jika belum ada, atau pakai field yang sudah disepakati di skema).
-- [ ] **Gantt:** timeline task level atas (dan/atau sub-task opsional) dalam project aktif; skala waktu (minggu/bulan) dan label key/judul.
-- [ ] Navigasi tab **Kalender** / **Gantt** mengikuti URL `view=` (sudah ada di §11.3).
-- [ ] `npm run lint` + `npm run build` lulus.
+- [x] Migration `0003_issues_schedule.sql`: kolom `starts_at`, `due_at` pada `core_pm.issues` + update seed + issue demo (`PLM-5`, `PLM-6`, `INT-3`).
+- [x] **Kalender:** grid bulan (navigasi bulan); scope project = semua issue ber-jadwal; scope task = task + sub-task; klik isi `task=` di URL.
+- [x] **Gantt:** timeline harian (scroll horizontal); scope project = task level atas ber-jadwal; scope task = induk + sub-task ber-jadwal; label key/judul + rentang tanggal.
+- [x] View **Tabel:** kolom Mulai / Tenggat.
+- [x] Util UI: `schedule-utils.ts`, `schedule-views.tsx`.
+- [x] Dummy **increment 8**: migration `0004_spatial_demo_footprints.sql` + `docs/dummy-data-increment-6-8.md` (expose schema `spatial` di API).
+- [x] `npm run lint` + `npm run build` lulus.
 
 ### Increment 6 (rencana) — Kanban (interaksi)
 
@@ -1122,14 +1126,14 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 - [ ] Performa dasar: tidak memuat seluruh dunia; bbox atau limit per project.
 - [ ] `npm run lint` + `npm run build` lulus.
 
-### 16.1 Yang perlu Anda lakukan setelah increment 4
+### 16.1 Yang perlu Anda lakukan setelah increment 5
 
-- [ ] `git pull` lalu `cd app` → `npm run dev` (tanpa migration baru untuk increment 4).
-- [ ] Buka `/` — URL memuat `org=` dan `project=` (normalisasi otomatis bila ada param usang).
-- [ ] Tab **Kanban**: kolom To Do / Doing / Done (seed); klik kartu mengisi `task=` di URL.
+- [ ] `git pull` lalu dari root repo: `npx supabase db push` (terapkan `0003_issues_schedule` + `0004_spatial_demo_footprints`).
+- [ ] Supabase **Exposed schemas**: tambahkan **`spatial`** jika belum (lihat `docs/supabase-expose-schemas.md`).
+- [ ] `cd app` → `npm run dev`; tab **Kalender** / **Gantt** / **Tabel** — cek tanggal dummy April–Mei 2026.
 - [ ] Deploy Vercel (root `app`) jika perlu.
-- [ ] Lanjut eksekusi **increment 5** sesuai tabel *Rencana penutupan Fase 1* di atas.
+- [ ] Lanjut **increment 6** (Kanban drag + persistensi).
 
 ---
 
-*Terakhir diperbarui: §16 — rencana increment 5–8 (Kalender/Gantt, Kanban interaksi, RLS+auth, Map) untuk penutupan Fase 1.*
+*Terakhir diperbarui: §16 — Fase 1 increment 5 selesai (Kalender/Gantt + dummy spatial untuk inc 8).*
