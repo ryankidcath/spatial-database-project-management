@@ -2,6 +2,14 @@
 
 Panduan operasional melengkapi fitur di aplikasi: **kontrol pendaftaran**, **banner pilot**, dan **matriks modul** per organisasi.
 
+## Checklist cepat operator (isi manual)
+
+- [ ] Isi tabel organisasi pilot di bagian 1 (nama, UUID, kontak admin).
+- [ ] Tetapkan kebijakan signup (`AUTH_SIGNUP_MODE`, opsional domain) di Vercel.
+- [ ] Putuskan banner pilot aktif/tidak dan isi teksnya bila perlu.
+- [ ] Tetapkan matriks modul per organisasi (minimal `core_pm`; aktifkan `plm`/`spatial`/`finance` sesuai pilot).
+- [ ] Simpan bukti perubahan (screenshot env + SQL editor history) untuk audit rollout.
+
 ## 1. Daftar organisasi pilot
 
 Isi tabel di bawah (salin dari Supabase → **Table Editor** → `core_pm.organizations` atau query `select id, name, slug from core_pm.organizations`).
@@ -49,6 +57,12 @@ do update set is_enabled = excluded.is_enabled, enabled_at = excluded.enabled_at
 ```
 
 Kode modul tersedia di **`core_pm.module_registry`**. UI **Organisasi → toggle modul** (workspace) memanggil aksi yang sama.
+
+Template matriks yang direkomendasikan:
+
+| Organisasi | `core_pm` | `plm` | `spatial` | `finance` | Catatan |
+|------------|-----------|-------|-----------|-----------|---------|
+| *(isi nama org)* | on | on/off | on/off | on/off | *(scope pilot)* |
 
 ## 5. Rujukan
 

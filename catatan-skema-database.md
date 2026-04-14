@@ -1454,7 +1454,7 @@ Tujuan selaras **§12.1 langkah 8**: satu atau beberapa **organisasi pilot** mem
 - [x] **`README.md`**: rujukan deploy + **Root Directory** Vercel **`app`**.
 - [x] **`app/.env.example`** + **`/.env.example`**: **`NEXT_PUBLIC_SITE_URL`** + catatan **`SUPABASE_SERVICE_ROLE_KEY`** (server-only).
 - [x] **`playwright.config.ts`**: jika **`PLAYWRIGHT_BASE_URL`** diset, E2E memakai URL deployment (tanpa **`webServer`** lokal).
-- [ ] *Operator:* checklist akhir **`DEPLOY.md`** (Vercel Production + Supabase + Auth).
+- [ ] *Operator:* checklist akhir **`DEPLOY.md`** (Vercel Production + Supabase + Auth) + simpan bukti verifikasi.
 
 ### F7-2 (selesai) — Pilot & kontrol akses
 
@@ -1464,7 +1464,7 @@ Tujuan selaras **§12.1 langkah 8**: satu atau beberapa **organisasi pilot** mem
 - [x] **`login/page.tsx`**: sembunyikan form daftar jika **`closed`**; teks bantuan domain.
 - [x] **`workspace-client.tsx`**: banner opsional **`NEXT_PUBLIC_SHOW_PILOT_BANNER`** + **`NEXT_PUBLIC_PILOT_BANNER_TEXT`**.
 - [x] **`app/.env.example`**, **`/.env.example`**, **`DEPLOY.md`**, **`README.md`**: variabel pilot terdokumentasi.
-- [ ] *Operator:* isi tabel pilot di **`docs/PILOT.md`**, set env di Vercel, atur baris **`organization_modules`** sesuai matriks.
+- [ ] *Operator:* isi tabel pilot di **`docs/PILOT.md`** (termasuk checklist cepat), set env di Vercel, atur baris **`organization_modules`** sesuai matriks.
 
 ### F7-3 (selesai) — Migrasi & cadangan
 
@@ -1479,7 +1479,7 @@ Tujuan selaras **§12.1 langkah 8**: satu atau beberapa **organisasi pilot** mem
 - [x] **`docs/RUNBOOK-OPERASI.md`**: kontak template, rollback production, runtime error, migration freeze, auth.
 - [x] **`docs/KRITERIA-KELUAR-PILOT.md`**: checklist keluar pilot (stabil, feedback, operasi, go/no-go).
 - [x] **`DEPLOY.md`**, **`README.md`**, **`docs/PILOT.md`**: rujukan F7-4.
-- [ ] *Operator:* isi tabel kontak di runbook; aktifkan Sentry bila versi SDK mendukung Next 16 atau setelah uji `--legacy-peer-deps`.
+- [ ] *Operator:* isi tabel kontak + checklist cepat di runbook; aktifkan Sentry bila versi SDK mendukung Next 16 atau setelah uji `--legacy-peer-deps`.
 
 ### Catatan dependensi
 

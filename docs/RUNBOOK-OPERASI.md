@@ -2,6 +2,13 @@
 
 Dokumen singkat saat **insiden** atau **rilis bermasalah**. Sesuaikan nama tim, saluran chat, dan nomor telepon di bagian **Kontak**.
 
+## Checklist cepat operator (isi manual)
+
+- [ ] Isi tabel **Kontak & eskalasi** dengan nama/tim yang benar-benar on-call.
+- [ ] Pastikan semua saluran kontak valid (uji ping singkat di Slack/WA/email).
+- [ ] Tentukan PIC keputusan go/no-go pilot.
+- [ ] Simpan tanggal review berkala runbook (mis. tiap 2 minggu selama pilot).
+
 ## Kontak & eskalasi
 
 | Peran | Nama / tim | Saluran | Catatan |
