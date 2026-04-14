@@ -751,13 +751,13 @@ Catatan:
 
 ### 10.4 `finance` (opsional)
 
-- [ ] `invoice`
-- [ ] `invoice_item` / `invoice_berkas`
-- [ ] `pembayaran` / `kwitansi`
+- [x] `invoice` (termasuk `berkas_id` opsional → `plm.berkas_permohonan`) — migration **`0018`**
+- [x] `invoice_item` — **`0018`** (bukan tabel `invoice_berkas` terpisah; tautan berkas di header invoice)
+- [x] `pembayaran` — **`0018`** (peran kwitansi ringkas: `amount`, `paid_at`, `method`, `reference`)
 
 Catatan:
-- Dukung invoice dengan dan tanpa `penerimaan_kunjungan` (FK nullable).
-- Satu berkas tidak boleh masuk lebih dari satu invoice (sesuai keputusan bisnis saat ini).
+- MVP: invoice **dengan atau tanpa** `berkas_id`; indeks unik parsial menjamin **satu invoice aktif per berkas** bila `berkas_id` diisi.
+- Rencana lanjutan (bila dibutuhkan): FK nullable ke `penerimaan_kunjungan` selain/alih-alih tautan langsung ke berkas.
 
 ### 10.5 Urutan migrasi yang disarankan
 
@@ -1444,8 +1444,8 @@ Tujuan selaras **§12.1 langkah 8**: satu atau beberapa **organisasi pilot** mem
 |--------|--------|--------|
 | **F7-1** | **Lingkungan & deploy:** **`DEPLOY.md`** — **satu** Vercel Production + **satu** Supabase, minus dokumentasi; **`infra/environments.md`**; **`.env.example`**; Root **`app`**; smoke + **`PLAYWRIGHT_BASE_URL`** | Selesai |
 | **F7-2** | **Pilot & kontrol akses:** **`docs/PILOT.md`** (daftar org + SQL modul); **`AUTH_SIGNUP_MODE`** / domain; banner **`NEXT_PUBLIC_SHOW_PILOT_BANNER`**; UI login + **`pilot-config`** + banner workspace | Selesai |
-| **F7-3** | **Migrasi DB & cadangan produksi:** prosedur urutan **migration** sebelum/bersama rilis; cek **backup / PITR** Supabase; perkuat CI dengan **cek migrasi** (dry-run / `supabase` CLI) pada PR bila toolchain siap — selaras **§13.2** | Rencana |
-| **F7-4** | **Monitoring, runbook, komunikasi rollout:** agregasi error (mis. Sentry atau setara), log Supabase/Vercel; **runbook** insiden (rollback deploy, nonaktifkan modul, komunikasi ke pengguna); kriteria “siap perluas” dari pilot ke org berikutnya | Rencana |
+| **F7-3** | **Migrasi DB & cadangan:** **`docs/MIGRASI-DAN-CADANGAN.md`** (satu DB, `db push`, backup/PITR, `reload schema`); CI **`scripts/verify-migration-files.mjs`**; dry-run SQL ke Postgres tetap manual / tool terpisah | Selesai |
+| **F7-4** | **Monitoring & rollout:** **`docs/MONITORING.md`** (Vercel/Supabase, Sentry opsional + catatan Next 16); **`docs/RUNBOOK-OPERASI.md`**; **`docs/KRITERIA-KELUAR-PILOT.md`**; tautan dari **`DEPLOY.md`** / **`README.md`** | Selesai |
 
 ### F7-1 (selesai) — Lingkungan & deploy
 
@@ -1466,17 +1466,20 @@ Tujuan selaras **§12.1 langkah 8**: satu atau beberapa **organisasi pilot** mem
 - [x] **`app/.env.example`**, **`/.env.example`**, **`DEPLOY.md`**, **`README.md`**: variabel pilot terdokumentasi.
 - [ ] *Operator:* isi tabel pilot di **`docs/PILOT.md`**, set env di Vercel, atur baris **`organization_modules`** sesuai matriks.
 
-### F7-3 (rencana) — Migrasi & cadangan
+### F7-3 (selesai) — Migrasi & cadangan
 
-- [ ] Prosedur menjalankan migration baru ke **staging** lalu ke **prod** (urutan, downtime jika ada).
-- [ ] Verifikasi backup harian / PITR sesuai paket Supabase — **§13.2**.
-- [ ] CI: langkah tambahan **validasi skema** (dry-run migration, atau job terpisah) setelah pola repo stabil.
+- [x] **`docs/MIGRASI-DAN-CADANGAN.md`**: prasyarat, **`supabase db push`** vs SQL manual, pasca-migration (**`notify pgrst`**), rollback, satu jalur production.
+- [x] **`scripts/verify-migration-files.mjs`** + job CI **`migration-verify`** (nama `NNNN_*.sql`, tanpa duplikat awalan).
+- [x] **`docs/supabase-expose-schemas.md`**: rujukan **`reload schema`** setelah view baru.
+- [ ] *Operator:* aktifkan/cek **backup & PITR** di dashboard Supabase; jalankan **`db push`** (atau SQL terurut) saat rilis.
 
-### F7-4 (rencana) — Monitoring & rollout
+### F7-4 (selesai) — Monitoring & rollout
 
-- [ ] Error tracking untuk frontend/server (contoh: Sentry + environment tags).
-- [ ] Runbook 1–2 halaman: siapa dihubungi, cara rollback Vercel, cara freeze migration berbahaya.
-- [ ] Kriteria exit pilot (stabilitas, feedback, metrik) sebelum menambah organisasi.
+- [x] **`docs/MONITORING.md`**: Vercel Logs/Observability, Supabase logs & backup, smoke Playwright; **Sentry** — langkah wizard + catatan **peer Next 16** (SDK tidak dipasang di repo agar hindari konflik npm).
+- [x] **`docs/RUNBOOK-OPERASI.md`**: kontak template, rollback production, runtime error, migration freeze, auth.
+- [x] **`docs/KRITERIA-KELUAR-PILOT.md`**: checklist keluar pilot (stabil, feedback, operasi, go/no-go).
+- [x] **`DEPLOY.md`**, **`README.md`**, **`docs/PILOT.md`**: rujukan F7-4.
+- [ ] *Operator:* isi tabel kontak di runbook; aktifkan Sentry bila versi SDK mendukung Next 16 atau setelah uji `--legacy-peer-deps`.
 
 ### Catatan dependensi
 
@@ -1486,4 +1489,4 @@ Tujuan selaras **§12.1 langkah 8**: satu atau beberapa **organisasi pilot** mem
 
 ---
 
-*Terakhir diperbarui: §22 — Fase 7: **F7-1**–**F7-2** selesai; F7-3–F7-4 rencana.*
+*Terakhir diperbarui: §10.4 — tabel inti **finance** (invoice / item / pembayaran) lewat migration **`0018`**; §22 — Fase 7: **F7-1**–**F7-4** selesai.*

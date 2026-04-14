@@ -17,7 +17,7 @@ Jika tidak akan memakai env untuk PR: **Vercel → Project → Settings → Git 
 ## Supabase — satu project
 
 - Salin **URL** dan **anon key** dari dashboard Supabase ke Vercel (scope **Production** saja untuk variabel publik).
-- Migration dari folder `supabase/` diterapkan ke **project ini** (hati-hati sebelum merge — lihat **F7-3** di `catatan-skema-database.md` §22).
+- Migration dari folder `supabase/` diterapkan ke **project ini** — prosedur lengkap: **`docs/MIGRASI-DAN-CADANGAN.md`** (F7-3).
 
 ## Kekurangan (minus) setup “1 Vercel Production + 1 Supabase”
 
@@ -87,6 +87,12 @@ CI di GitHub tetap membangun app lokal (`CI=true`).
 ## Pilot & pendaftaran (F7-2)
 
 Kebijakan undangan / domain email / banner beta: variabel env di **`app/.env.example`** dan panduan operasional **`docs/PILOT.md`**.
+
+## Monitoring & insiden (F7-4)
+
+- **`docs/MONITORING.md`** — log Vercel/Supabase, opsi Sentry.  
+- **`docs/RUNBOOK-OPERASI.md`** — rollback, migration freeze, auth.  
+- **`docs/KRITERIA-KELUAR-PILOT.md`** — sebelum menambah organisasi.
 
 ## Checklist operator
 

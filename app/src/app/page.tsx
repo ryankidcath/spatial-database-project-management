@@ -34,6 +34,11 @@ import type {
   PlmLegalisasiTahapSummaryRow,
   PlmPengukuranStatusSummaryRow,
 } from "./laporan-panel";
+import type {
+  FinanceInvoiceItemRow,
+  FinanceInvoiceRow,
+  FinancePembayaranRow,
+} from "./finance-types";
 
 type HomeProps = {
   searchParams: Promise<{ joinError?: string }>;
@@ -344,6 +349,58 @@ export default async function Home({ searchParams }: HomeProps) {
   const plmLegalisasiTahapSummary = (lSumRaw ?? []) as PlmLegalisasiTahapSummaryRow[];
   const plmPengukuranStatusSummary = (pSumRaw ?? []) as PlmPengukuranStatusSummaryRow[];
 
+  const financeEnabledForAnyOrg = organizationModules.some(
+    (m) =>
+      m.is_enabled &&
+      m.module_code === "finance" &&
+      orgIds.includes(m.organization_id)
+  );
+
+  const { data: finInvRaw, error: finInvErr } =
+    projectIds.length > 0 && financeEnabledForAnyOrg
+      ? await supabase
+          .schema("finance")
+          .from("invoice")
+          .select(
+            "id, organization_id, project_id, berkas_id, nomor_invoice, status, currency, total_amount, notes, issued_at, due_at, created_at, updated_at, deleted_at"
+          )
+          .in("project_id", projectIds)
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+      : { data: [] as FinanceInvoiceRow[], error: null };
+
+  const financeInvoices = (finInvRaw ?? []) as FinanceInvoiceRow[];
+  const financeInvoiceIds = financeInvoices.map((i) => i.id);
+
+  const { data: finItemRaw, error: finItemErr } =
+    financeInvoiceIds.length > 0
+      ? await supabase
+          .schema("finance")
+          .from("invoice_item")
+          .select(
+            "id, invoice_id, urutan, description, quantity, unit_price, line_total, created_at"
+          )
+          .in("invoice_id", financeInvoiceIds)
+          .order("invoice_id")
+          .order("urutan")
+      : { data: [] as FinanceInvoiceItemRow[], error: null };
+
+  const financeInvoiceItems = (finItemRaw ?? []) as FinanceInvoiceItemRow[];
+
+  const { data: finPayRaw, error: finPayErr } =
+    financeInvoiceIds.length > 0
+      ? await supabase
+          .schema("finance")
+          .from("pembayaran")
+          .select(
+            "id, invoice_id, amount, paid_at, method, reference, notes, created_at"
+          )
+          .in("invoice_id", financeInvoiceIds)
+          .order("paid_at", { ascending: false })
+      : { data: [] as FinancePembayaranRow[], error: null };
+
+  const financePembayaran = (finPayRaw ?? []) as FinancePembayaranRow[];
+
   if (user?.id && projectList.length > 0) {
     await syncSpatialOverlapNotifications(supabase, {
       userId: user.id,
@@ -395,6 +452,9 @@ export default async function Home({ searchParams }: HomeProps) {
     bSumErr?.message ??
     lSumErr?.message ??
     pSumErr?.message ??
+    finInvErr?.message ??
+    finItemErr?.message ??
+    finPayErr?.message ??
     null;
 
   return (
@@ -427,6 +487,9 @@ export default async function Home({ searchParams }: HomeProps) {
         plmBerkasStatusSummary={plmBerkasStatusSummary}
         plmLegalisasiTahapSummary={plmLegalisasiTahapSummary}
         plmPengukuranStatusSummary={plmPengukuranStatusSummary}
+        financeInvoices={financeInvoices}
+        financeInvoiceItems={financeInvoiceItems}
+        financePembayaran={financePembayaran}
         fetchError={fetchError}
         userEmail={user?.email ?? null}
         userNotifications={userNotifications}

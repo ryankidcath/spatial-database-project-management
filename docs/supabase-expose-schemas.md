@@ -32,6 +32,8 @@ Setelah **`0011_spatial_v_bidang_hasil_ukur_map.sql`** / **`0012_spatial_v_bidan
 - Refresh aplikasi (`npm run dev` / reload browser).
 - Tidak perlu migration baru hanya untuk expose schema ini.
 
+Setelah menambah **view** atau objek baru lewat migration, jalankan juga **`notify pgrst, 'reload schema';`** (lihat **`docs/MIGRASI-DAN-CADANGAN.md`** §3).
+
 ## Referensi
 
 - [Supabase: Exposing schemas in the API](https://supabase.com/docs/guides/api/using-custom-schemas)

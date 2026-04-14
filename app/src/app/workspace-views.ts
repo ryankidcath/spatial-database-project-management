@@ -3,6 +3,7 @@ export const VIEWS = [
   "Tabel",
   "Berkas",
   "Laporan",
+  "Keuangan",
   "Map",
   "Kanban",
   "Kalender",

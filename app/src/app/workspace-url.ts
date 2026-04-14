@@ -5,6 +5,7 @@ const VIEW_PARAMS: Record<ViewId, string> = {
   Tabel: "tabel",
   Berkas: "berkas",
   Laporan: "laporan",
+  Keuangan: "keuangan",
   Map: "map",
   Kanban: "kanban",
   Kalender: "kalender",

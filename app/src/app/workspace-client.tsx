@@ -12,6 +12,12 @@ import {
   type PlmLegalisasiTahapSummaryRow,
   type PlmPengukuranStatusSummaryRow,
 } from "./laporan-panel";
+import { FinancePanel } from "./finance-panel";
+import type {
+  FinanceInvoiceItemRow,
+  FinanceInvoiceRow,
+  FinancePembayaranRow,
+} from "./finance-types";
 import { BerkasListPanel } from "./berkas-list-panel";
 import { OrganizationModuleToggles } from "./organization-module-toggles";
 import type { BerkasPermohonanRow } from "./plm-berkas-types";
@@ -127,6 +133,9 @@ type Props = {
   plmBerkasStatusSummary?: PlmBerkasStatusSummaryRow[];
   plmLegalisasiTahapSummary?: PlmLegalisasiTahapSummaryRow[];
   plmPengukuranStatusSummary?: PlmPengukuranStatusSummaryRow[];
+  financeInvoices?: FinanceInvoiceRow[];
+  financeInvoiceItems?: FinanceInvoiceItemRow[];
+  financePembayaran?: FinancePembayaranRow[];
   fetchError: string | null;
   userEmail: string | null;
   userNotifications?: UserNotificationRow[];
@@ -191,6 +200,9 @@ export function WorkspaceClient({
   plmBerkasStatusSummary = [],
   plmLegalisasiTahapSummary = [],
   plmPengukuranStatusSummary = [],
+  financeInvoices = [],
+  financeInvoiceItems = [],
+  financePembayaran = [],
   fetchError,
   userEmail,
   userNotifications = [],
@@ -361,6 +373,10 @@ export function WorkspaceClient({
       p.set("view", viewToParam("Dashboard"));
       dirty = true;
     }
+    if (parseViewParam(p.get("view")) === "Keuangan" && !enabled.has("finance")) {
+      p.set("view", viewToParam("Dashboard"));
+      dirty = true;
+    }
     const viewParsed = parseViewParam(p.get("view"));
     const berkasParam = p.get("berkas");
     const berkasAllowedViews = new Set(["Berkas", "Map"]);
@@ -493,6 +509,33 @@ export function WorkspaceClient({
     if (!selectedProjectId) return [];
     return berkasPermohonan.filter((b) => b.project_id === selectedProjectId);
   }, [berkasPermohonan, selectedProjectId]);
+
+  const financeInvoicesInProject = useMemo(
+    () =>
+      financeInvoices.filter((i) => i.project_id === (selectedProjectId ?? "")),
+    [financeInvoices, selectedProjectId]
+  );
+
+  const financeInvoiceIdsInProject = useMemo(
+    () => new Set(financeInvoicesInProject.map((i) => i.id)),
+    [financeInvoicesInProject]
+  );
+
+  const financeItemsInProject = useMemo(
+    () =>
+      financeInvoiceItems.filter((it) =>
+        financeInvoiceIdsInProject.has(it.invoice_id)
+      ),
+    [financeInvoiceItems, financeInvoiceIdsInProject]
+  );
+
+  const financePembayaranInProject = useMemo(
+    () =>
+      financePembayaran.filter((p) =>
+        financeInvoiceIdsInProject.has(p.invoice_id)
+      ),
+    [financePembayaran, financeInvoiceIdsInProject]
+  );
 
   const tableRows = useMemo((): TableRow[] => {
     if (!selectedProjectId) return [];
@@ -1034,6 +1077,22 @@ export function WorkspaceClient({
                   berkasByStatus={plmBerkasStatusSummary}
                   legalisasiByTahap={plmLegalisasiTahapSummary}
                   pengukuranByStatus={plmPengukuranStatusSummary}
+                />
+              </div>
+            )}
+            {activeView === "Keuangan" && (
+              <div className="mt-4">
+                <FinancePanel
+                  projectId={selectedProjectId}
+                  organizationId={canonicalOrgId}
+                  plmEnabled={enabledModulesForOrg.has("plm")}
+                  berkasOptions={berkasForSelectedProject.map((b) => ({
+                    id: b.id,
+                    nomor_berkas: b.nomor_berkas,
+                  }))}
+                  invoices={financeInvoicesInProject}
+                  invoiceItems={financeItemsInProject}
+                  pembayaran={financePembayaranInProject}
                 />
               </div>
             )}

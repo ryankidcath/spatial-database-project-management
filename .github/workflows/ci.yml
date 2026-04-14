@@ -7,6 +7,16 @@ on:
     branches: [main, master]
 
 jobs:
+  migration-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify migration filenames
+        run: node scripts/verify-migration-files.mjs
+
   lint-typecheck:
     runs-on: ubuntu-latest
     defaults:
@@ -25,7 +35,7 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    needs: lint-typecheck
+    needs: [lint-typecheck, migration-verify]
     defaults:
       run:
         working-directory: app

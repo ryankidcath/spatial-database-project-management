@@ -32,6 +32,7 @@ export function effectiveEnabledModuleCodes(
 export function viewRequiredModuleCode(view: ViewId): string | null {
   if (view === "Map") return "spatial";
   if (view === "Berkas" || view === "Laporan") return "plm";
+  if (view === "Keuangan") return "finance";
   return null;
 }
 

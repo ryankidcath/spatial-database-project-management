@@ -54,3 +54,4 @@ Kode modul tersedia di **`core_pm.module_registry`**. UI **Organisasi → toggle
 
 - Deploy satu jalur: **`DEPLOY.md`**
 - Progress fase: **`catatan-skema-database.md`** §22 (F7-2)
+- Monitoring & keluar pilot: **`docs/MONITORING.md`**, **`docs/RUNBOOK-OPERASI.md`**, **`docs/KRITERIA-KELUAR-PILOT.md`** (F7-4)
