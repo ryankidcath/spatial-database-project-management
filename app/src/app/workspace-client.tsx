@@ -10,6 +10,17 @@ import {
 } from "@/app/auth/actions";
 import { NotificationsBell } from "./notifications-bell";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -34,6 +45,7 @@ import type {
 } from "./finance-types";
 import { BerkasListPanel } from "./berkas-list-panel";
 import { OrganizationModuleToggles } from "./organization-module-toggles";
+import { ThemeToggle } from "@/components/theme-toggle";
 import type { BerkasPermohonanRow } from "./plm-berkas-types";
 import type {
   LegalisasiGuFileRow,
@@ -69,7 +81,7 @@ const WorkspaceMap = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-[min(70vh,560px)] items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-sm text-slate-600">
+      <div className="flex h-[min(70vh,560px)] items-center justify-center rounded-md border border-border bg-muted/40 text-sm text-muted-foreground">
         Memuat peta…
       </div>
     ),
@@ -160,15 +172,20 @@ type Props = {
 };
 
 type TableRow = { issue: IssueRow; depth: number };
+type TaskConfirmState = { issueId: string; mode: "done" | "reopen"; title: string };
+
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  done:
+    "border border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+  in_progress:
+    "border border-blue-500/30 bg-blue-500/15 text-blue-700 dark:text-blue-300",
+  todo:
+    "border border-border bg-muted text-muted-foreground",
+};
 
 function statusBadgeClass(category: string | null | undefined): string {
-  if (category === "done") {
-    return "bg-emerald-100 text-emerald-800";
-  }
-  if (category === "in_progress") {
-    return "bg-blue-100 text-blue-800";
-  }
-  return "bg-slate-100 text-slate-700";
+  if (!category) return STATUS_BADGE_CLASS.todo;
+  return STATUS_BADGE_CLASS[category] ?? STATUS_BADGE_CLASS.todo;
 }
 
 function computeIssueProgressPercent(
@@ -297,6 +314,10 @@ export function WorkspaceClient({
   const searchParams = useSearchParams();
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
   const [taskPending, startTaskTransition] = useTransition();
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [subtaskDialogOpen, setSubtaskDialogOpen] = useState(false);
+  const [progressDialogOpen, setProgressDialogOpen] = useState(false);
+  const [taskConfirm, setTaskConfirm] = useState<TaskConfirmState | null>(null);
   const [collapsedIssueIds, setCollapsedIssueIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -720,33 +741,33 @@ export function WorkspaceClient({
       fetchError.includes("PGRST106");
 
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-        <div className="max-w-lg rounded-lg border border-red-200 bg-white p-6 text-sm text-red-800">
+      <div className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
+        <div className="max-w-lg rounded-lg border border-destructive/30 bg-card p-6 text-sm text-destructive">
           <p className="font-semibold">Gagal memuat data dari Supabase</p>
           <p className="mt-2 text-red-700">{fetchError}</p>
           {isSchemaError ? (
-            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-950">
+            <div className="mt-4 rounded-md border border-primary/25 bg-primary/10 p-3 text-foreground">
               <p className="font-medium">Schema API belum di-expose</p>
               <p className="mt-2 text-sm">
                 Di Supabase Dashboard:{" "}
                 <strong>Project Settings → Data API / API → Exposed schemas</strong>
                 , tambahkan{" "}
-                <code className="rounded bg-white px-1">core_pm</code>,{" "}
-                <code className="rounded bg-white px-1">plm</code> (Fase 3),{" "}
-                <code className="rounded bg-white px-1">spatial</code>,{" "}
-                <code className="rounded bg-white px-1">finance</code> sesuai kebutuhan.
+                <code className="rounded bg-card px-1">core_pm</code>,{" "}
+                <code className="rounded bg-card px-1">plm</code> (Fase 3),{" "}
+                <code className="rounded bg-card px-1">spatial</code>,{" "}
+                <code className="rounded bg-card px-1">finance</code> sesuai kebutuhan.
               </p>
               <p className="mt-2 text-sm">
                 Panduan di repo:{" "}
-                <code className="rounded bg-white px-1">docs/supabase-expose-schemas.md</code>
+                <code className="rounded bg-card px-1">docs/supabase-expose-schemas.md</code>
               </p>
             </div>
           ) : (
-            <p className="mt-4 text-slate-600">
+            <p className="mt-4 text-muted-foreground">
               Pastikan migration{" "}
-              <code className="rounded bg-slate-100 px-1">0002_core_pm_initial.sql</code>{" "}
+              <code className="rounded bg-muted px-1">0002_core_pm_initial.sql</code>{" "}
               sudah di-push:{" "}
-              <code className="rounded bg-slate-100 px-1">npx supabase db push</code>
+              <code className="rounded bg-muted px-1">npx supabase db push</code>
             </p>
           )}
         </div>
@@ -756,12 +777,12 @@ export function WorkspaceClient({
 
   if (projects.length === 0) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6">
-        <div className="max-w-lg rounded-lg border border-amber-200 bg-white p-6 text-sm text-amber-900">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-muted/30 p-6">
+        <div className="max-w-lg rounded-lg border border-border bg-card p-6 text-sm text-foreground">
           <p className="font-semibold">Tidak ada project yang dapat diakses</p>
-          <p className="mt-2 text-amber-800">
+          <p className="mt-2 text-muted-foreground">
             Dengan RLS aktif, Anda hanya melihat project tempat akun menjadi{" "}
-            <code className="rounded bg-slate-100 px-1">project_members</code>.
+            <code className="rounded bg-muted px-1">project_members</code>.
             User baru sekarang mulai dari kosong; Anda bisa membuat organisasi
             dan project pertama langsung dari form di bawah.
           </p>
@@ -772,74 +793,74 @@ export function WorkspaceClient({
           )}
           {userEmail && (
             <form action={createOrganizationProjectAction} className="mt-4 space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Buat organisasi + project pertama
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <Label className="text-xs text-slate-700">Nama organisasi *</Label>
+                  <Label className="text-xs text-muted-foreground">Nama organisasi *</Label>
                   <Input
                     name="organization_name"
                     required
                     placeholder="Contoh: KJSB Cirebon"
-                    className="h-8 bg-white text-sm text-slate-900"
+                    className="h-8 bg-background text-sm"
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-slate-700">
+                  <Label className="text-xs text-muted-foreground">
                     Slug organisasi (opsional)
                   </Label>
                   <Input
                     name="organization_slug"
                     placeholder="kjsb-cirebon"
-                    className="h-8 bg-white text-sm text-slate-900"
+                    className="h-8 bg-background text-sm"
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-slate-700">Nama project *</Label>
+                  <Label className="text-xs text-muted-foreground">Nama project *</Label>
                   <Input
                     name="project_name"
                     required
                     placeholder="Contoh: PLM Cirebon 2027"
-                    className="h-8 bg-white text-sm text-slate-900"
+                    className="h-8 bg-background text-sm"
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-slate-700">Kode project (opsional)</Label>
+                  <Label className="text-xs text-muted-foreground">Kode project (opsional)</Label>
                   <Input
                     name="project_key"
                     placeholder="PLM27"
-                    className="h-8 bg-white text-sm text-slate-900"
+                    className="h-8 bg-background text-sm"
                   />
                 </div>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-slate-700">
+                <Label className="text-xs text-muted-foreground">
                   Deskripsi project (opsional)
                 </Label>
                 <Textarea
                   name="project_description"
                   rows={2}
                   placeholder="Catatan singkat project"
-                  className="min-h-14 bg-white text-sm text-slate-900"
+                  className="min-h-14 bg-background text-sm"
                 />
               </div>
-              <Button type="submit" className="bg-emerald-700 hover:bg-emerald-800">
+              <Button type="submit">
                 Buat organisasi & project
               </Button>
             </form>
           )}
           {userEmail && (
             <form action={joinDemoProjectsAction} className="mt-3">
-              <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
+              <Button type="submit" variant="secondary">
                 Atau gabung ke project demo (KJSB)
               </Button>
             </form>
           )}
-          <p className="mt-4 text-xs text-slate-600">
+          <p className="mt-4 text-xs text-muted-foreground">
             Jika tetap kosong, tambahkan baris di{" "}
-            <code className="rounded bg-slate-100 px-1">core_pm.project_members</code>{" "}
-            untuk <code className="rounded bg-slate-100 px-1">auth.users.id</code> Anda,
+            <code className="rounded bg-muted px-1">core_pm.project_members</code>{" "}
+            untuk <code className="rounded bg-muted px-1">auth.users.id</code> Anda,
             atau minta admin menambahkan ke project.
           </p>
           {userEmail && (
@@ -848,7 +869,7 @@ export function WorkspaceClient({
                 type="submit"
                 variant="ghost"
                 size="sm"
-                className="h-auto px-1 text-xs text-slate-500 underline hover:text-slate-800"
+                className="h-auto px-1 text-xs text-muted-foreground underline hover:text-foreground"
               >
                 Keluar ({userEmail})
               </Button>
@@ -867,31 +888,33 @@ export function WorkspaceClient({
     "Versi pilot — fitur dan data dapat berubah. Laporkan masalah ke tim proyek.";
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
       {pilotBannerOn ? (
         <div
           role="status"
-          className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-950"
+          className="shrink-0 border-b border-primary/25 bg-primary/10 px-4 py-2 text-center text-xs font-medium text-foreground"
         >
           {pilotBannerText}
         </div>
       ) : null}
       <div className="flex min-h-0 flex-1">
-      <aside className="w-72 shrink-0 border-r border-slate-200 bg-white p-4">
-        <h1 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+      <aside className="w-72 shrink-0 border-r border-sidebar-border/90 bg-sidebar/95 p-4 text-sidebar-foreground">
+        <h1 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Spatial PM
         </h1>
-        <div className="mt-6 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        <div className="mt-6 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/20 p-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Organisasi
           </p>
           <div className="flex flex-col gap-1">
             {orgsWithProjects.map((o) => {
               const active = canonicalOrgId === o.id;
               return (
-                <button
+                <Button
                   key={o.id}
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => {
                     replaceQuery((q) => {
                       q.set("org", o.id);
@@ -902,20 +925,20 @@ export function WorkspaceClient({
                       q.delete("task");
                     });
                   }}
-                  className={`rounded-md px-3 py-2 text-left text-sm font-medium ${
+                  className={`h-auto w-full justify-start px-3 py-2 text-left text-sm font-medium ${
                     active
-                      ? "bg-blue-50 text-blue-800"
-                      : "bg-slate-50 text-slate-800 hover:bg-slate-100"
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
                   }`}
                 >
                   {o.name}
-                </button>
+                </Button>
               );
             })}
           </div>
         </div>
-        <div className="mt-6 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        <div className="mt-6 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/20 p-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Project
           </p>
           {projectsInOrg.map((p) => {
@@ -939,9 +962,11 @@ export function WorkspaceClient({
               selectedProjectId === p.id && !selectedTaskId;
 
             return (
-              <div key={p.id} className="rounded-md border border-slate-100">
-                <button
+              <div key={p.id} className="rounded-xl border border-sidebar-border/80 bg-sidebar-accent/35 shadow-sm">
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => {
                     replaceQuery((q) => {
                       q.set("org", p.organization_id);
@@ -949,16 +974,16 @@ export function WorkspaceClient({
                       q.delete("task");
                     });
                   }}
-                  className={`flex w-full items-center gap-2 rounded-t-md px-3 py-2 text-left text-sm font-medium ${
+                  className={`h-auto w-full justify-start gap-2 rounded-t-md px-3 py-2 text-left text-sm font-medium ${
                     isSelectedProject
-                      ? "bg-blue-50 text-blue-800"
-                      : "bg-slate-50 text-slate-800 hover:bg-slate-100"
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
                   }`}
                 >
-                  <span className="text-xs text-slate-400">▾</span>
+                  <span className="text-xs text-muted-foreground">▾</span>
                   {p.name}
-                </button>
-                <ul className="space-y-0.5 border-t border-slate-100 py-1 pl-2">
+                </Button>
+                <ul className="space-y-0.5 border-t border-sidebar-border/70 py-1 pl-2">
                   {visibleTreeRows.map(({ issue: t, depth }) => {
                     const isTask = selectedTaskId === t.id;
                     const hasChildren = issueIdsWithChildren.has(t.id);
@@ -967,9 +992,11 @@ export function WorkspaceClient({
                       <li key={t.id} style={{ paddingLeft: depth * 12 }}>
                         <div className="flex items-center gap-1">
                           {hasChildren ? (
-                            <button
+                            <Button
                               type="button"
-                              className="rounded px-1 text-xs text-slate-500 hover:bg-slate-100"
+                              variant="ghost"
+                              size="sm"
+                              className="h-auto rounded px-1 text-xs text-muted-foreground hover:bg-sidebar-accent"
                               title={isCollapsed ? "Expand" : "Collapse"}
                               onClick={() => {
                                 setCollapsedIssueIds((prev) => {
@@ -981,14 +1008,16 @@ export function WorkspaceClient({
                               }}
                             >
                               {isCollapsed ? "▸" : "▾"}
-                            </button>
+                            </Button>
                           ) : (
-                            <span className="inline-block w-4 text-center text-xs text-slate-300">
+                            <span className="inline-block w-4 text-center text-xs text-muted-foreground/50">
                               ·
                             </span>
                           )}
-                          <button
+                          <Button
                             type="button"
+                            variant="ghost"
+                            size="sm"
                             onClick={() => {
                               replaceQuery((q) => {
                                 q.set("org", p.organization_id);
@@ -996,14 +1025,14 @@ export function WorkspaceClient({
                                 q.set("task", t.id);
                               });
                             }}
-                            className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
+                            className={`h-auto w-full justify-start rounded-md px-2 py-1.5 text-left text-sm ${
                               isTask
-                                ? "bg-blue-100 text-blue-900"
-                                : "text-slate-600 hover:bg-slate-50"
+                                ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                                : "text-sidebar-foreground hover:bg-sidebar-accent/70"
                             }`}
                           >
                             {t.title}
-                          </button>
+                          </Button>
                         </div>
                       </li>
                     );
@@ -1022,11 +1051,11 @@ export function WorkspaceClient({
         )}
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-slate-200 bg-white px-6 py-4">
+      <main className="flex min-w-0 flex-1 flex-col bg-muted/40">
+        <header className="border-b border-border bg-card/90 px-6 py-4 backdrop-blur">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-          <p className="text-xs uppercase tracking-wide text-slate-500">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
             Scope aktif
           </p>
           <h2 className="text-lg font-semibold">
@@ -1037,14 +1066,14 @@ export function WorkspaceClient({
                 : "—"}
           </h2>
           {selectedOrganization && (
-            <p className="mt-1 text-xs text-slate-600">
+            <p className="mt-1 text-xs text-muted-foreground">
               Organisasi:{" "}
               <span className="font-medium">{selectedOrganization.name}</span>
             </p>
           )}
-          <p className="mt-1 truncate text-xs text-slate-500">
+          <p className="mt-1 truncate text-xs text-muted-foreground">
             URL:{" "}
-            <code className="rounded bg-slate-100 px-1">
+            <code className="rounded bg-muted px-1">
               ?org=…&amp;project=…&amp;task=…&amp;view=…&amp;berkas=…
             </code>
           </p>
@@ -1052,14 +1081,17 @@ export function WorkspaceClient({
             {userEmail && (
               <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-start">
                 <NotificationsBell notifications={userNotifications} />
+                <ThemeToggle />
                 <form action={signOut} className="shrink-0">
-                  <p className="text-right text-xs text-slate-600">{userEmail}</p>
-                  <button
+                  <p className="text-right text-xs text-muted-foreground">{userEmail}</p>
+                  <Button
                     type="submit"
-                    className="mt-1 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                    variant="outline"
+                    size="sm"
+                    className="mt-1 h-auto px-2 py-1 text-xs"
                   >
                     Keluar
-                  </button>
+                  </Button>
                 </form>
               </div>
             )}
@@ -1069,11 +1101,13 @@ export function WorkspaceClient({
               {joinError}
             </p>
           )}
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-5 flex flex-wrap gap-2">
             {visibleViews.map((view) => (
-              <button
+              <Button
                 key={view}
                 type="button"
+                variant={activeView === view ? "default" : "secondary"}
+                size="sm"
                 onClick={() =>
                   replaceQuery((q) => {
                     q.set("view", viewToParam(view));
@@ -1082,164 +1116,164 @@ export function WorkspaceClient({
                     }
                   })
                 }
-                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                  activeView === view
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                }`}
+                className="h-8 rounded-full px-3 text-sm font-medium"
               >
                 {view}
-              </button>
+              </Button>
             ))}
           </div>
         </header>
 
         <section className="flex-1 overflow-auto p-6">
-          <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6">
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <h3 className="text-base font-semibold">
               {activeView} —{" "}
               {selectedTask ? "fokus task" : "cakupan project"}
             </h3>
-            <p className="mt-2 text-sm text-slate-600">
-              Data dari <code className="rounded bg-slate-100 px-1">core_pm</code>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Data dari <code className="rounded bg-muted px-1">core_pm</code>
               . Query:{" "}
-              <code className="rounded bg-slate-100 px-1">
+              <code className="rounded bg-muted px-1">
                 org={canonicalOrgId?.slice(0, 8)}…
               </code>{" "}
-              <code className="rounded bg-slate-100 px-1">
+              <code className="rounded bg-muted px-1">
                 project={selectedProjectId?.slice(0, 8)}…
               </code>
               {selectedTaskId && (
                 <>
                   {" "}
-                  <code className="rounded bg-slate-100 px-1">
+                  <code className="rounded bg-muted px-1">
                     task={selectedTaskId.slice(0, 8)}…
                   </code>
                 </>
               )}{" "}
-              <code className="rounded bg-slate-100 px-1">
+              <code className="rounded bg-muted px-1">
                 view={viewToParam(activeView)}
               </code>
             </p>
             {activeView === "Dashboard" && (
               <>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="rounded-md bg-slate-50 p-3 text-sm">
-                    Task level atas:{" "}
-                    <span className="font-semibold">{topLevelCount}</span>
-                  </div>
-                  <div className="rounded-md bg-slate-50 p-3 text-sm">
-                    Total baris terurut (dengan sub-task):{" "}
-                    <span className="font-semibold">{issuesInScope.length}</span>
-                  </div>
-                  <div className="rounded-md bg-slate-50 p-3 text-sm">
-                    Nama project:{" "}
-                    <span className="font-semibold">
-                      {selectedProject?.name ?? "—"}
-                    </span>
-                  </div>
-                  <div className="rounded-md bg-slate-50 p-3 text-sm">
-                    View aktif:{" "}
-                    <span className="font-semibold">{activeView}</span>
-                  </div>
-                  <div className="rounded-md bg-slate-50 p-3 text-sm">
-                    Progress project:{" "}
-                    <span className="font-semibold">
-                      {projectProgressPercent.toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="rounded-md bg-slate-50 p-3 text-sm sm:col-span-2 lg:col-span-4">
-                    Modul organisasi (Fase 2):{" "}
-                    <span className="font-semibold">{enabledModuleLabels}</span>
-                  </div>
+                <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <Card className="shadow-none">
+                    <CardContent className="p-4 text-sm text-muted-foreground">
+                      Task level atas:{" "}
+                      <span className="font-semibold text-foreground">{topLevelCount}</span>
+                    </CardContent>
+                  </Card>
+                  <Card className="shadow-none">
+                    <CardContent className="p-4 text-sm text-muted-foreground">
+                      Total baris terurut (dengan sub-task):{" "}
+                      <span className="font-semibold text-foreground">{issuesInScope.length}</span>
+                    </CardContent>
+                  </Card>
+                  <Card className="shadow-none">
+                    <CardContent className="p-4 text-sm text-muted-foreground">
+                      Nama project:{" "}
+                      <span className="font-semibold text-foreground">
+                        {selectedProject?.name ?? "—"}
+                      </span>
+                    </CardContent>
+                  </Card>
+                  <Card className="shadow-none">
+                    <CardContent className="p-4 text-sm text-muted-foreground">
+                      View aktif:{" "}
+                      <span className="font-semibold text-foreground">{activeView}</span>
+                    </CardContent>
+                  </Card>
+                  <Card className="shadow-none">
+                    <CardContent className="p-4 text-sm text-muted-foreground">
+                      Progress project:{" "}
+                      <span className="font-semibold text-foreground">
+                        {projectProgressPercent.toFixed(1)}%
+                      </span>
+                    </CardContent>
+                  </Card>
+                  <Card className="shadow-none sm:col-span-2 lg:col-span-4">
+                    <CardContent className="p-4 text-sm text-muted-foreground">
+                      Modul organisasi (Fase 2):{" "}
+                      <span className="font-semibold text-foreground">{enabledModuleLabels}</span>
+                    </CardContent>
+                  </Card>
                 </div>
                 {selectedProjectId && (
-                  <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Tambah task cepat (core PM)
-                    </p>
-                    <form
-                      className="mt-2 flex flex-wrap items-end gap-2"
-                      action={(fd) => {
-                        setTaskMsg(null);
-                        fd.set("project_id", selectedProjectId);
-                        if (defaultStatusId) fd.set("status_id", defaultStatusId);
-                        startTaskTransition(async () => {
-                          const r = await createProjectTaskAction(fd);
-                          if (r.error) {
-                            setTaskMsg(r.error);
-                            return;
-                          }
-                          router.refresh();
-                        });
-                      }}
-                    >
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Judul task *</Label>
-                        <Input
-                          name="title"
-                          required
-                          placeholder="Contoh: Susun jadwal kickoff"
-                          className="h-8 w-72 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Mulai</Label>
-                        <Input
-                          name="starts_at"
-                          type="date"
-                          className="h-8 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Tenggat</Label>
-                        <Input
-                          name="due_at"
-                          type="date"
-                          className="h-8 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Target (opsional)</Label>
-                        <Input
-                          name="progress_target"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          placeholder="0"
-                          className="h-8 w-28 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Realisasi (opsional)</Label>
-                        <Input
-                          name="progress_actual"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          placeholder="0"
-                          className="h-8 w-28 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Bobot</Label>
-                        <Input
-                          name="issue_weight"
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          defaultValue="1"
-                          className="h-8 w-24 bg-white text-sm"
-                        />
-                      </div>
-                      <Button
-                        type="submit"
-                        disabled={taskPending}
-                        className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
-                      >
-                        Tambah task
-                      </Button>
-                    </form>
+                  <div className="mt-5 rounded-xl border border-border bg-muted/40 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Tambah task cepat (core PM)
+                      </p>
+                      <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
+                        <DialogTrigger render={<Button size="sm" />}>
+                          + Task
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Tambah task</DialogTitle>
+                            <DialogDescription>
+                              Buat task level project dengan data jadwal dan progres opsional.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <form
+                            className="grid gap-3"
+                            action={(fd) => {
+                              setTaskMsg(null);
+                              fd.set("project_id", selectedProjectId);
+                              if (defaultStatusId) fd.set("status_id", defaultStatusId);
+                              startTaskTransition(async () => {
+                                const r = await createProjectTaskAction(fd);
+                                if (r.error) {
+                                  setTaskMsg(r.error);
+                                  return;
+                                }
+                                setTaskDialogOpen(false);
+                                router.refresh();
+                              });
+                            }}
+                          >
+                            <div className="space-y-1">
+                              <Label>Judul task *</Label>
+                              <Input
+                                name="title"
+                                required
+                                placeholder="Contoh: Susun jadwal kickoff"
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <Label>Mulai</Label>
+                                <Input name="starts_at" type="date" />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Tenggat</Label>
+                                <Input name="due_at" type="date" />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="space-y-1">
+                                <Label>Target</Label>
+                                <Input name="progress_target" type="number" min="0" step="0.01" />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Realisasi</Label>
+                                <Input name="progress_actual" type="number" min="0" step="0.01" />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Bobot</Label>
+                                <Input
+                                  name="issue_weight"
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  defaultValue="1"
+                                />
+                              </div>
+                            </div>
+                            <Button type="submit" disabled={taskPending}>
+                              Simpan task
+                            </Button>
+                          </form>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
                     {taskMsg && (
                       <p className="mt-2 text-xs text-red-600" role="alert">
                         {taskMsg}
@@ -1248,100 +1282,110 @@ export function WorkspaceClient({
                   </div>
                 )}
                 {selectedProjectId && selectedTask && (
-                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">
-                      Tambah subtask ke task terpilih
-                    </p>
-                    <p className="mt-1 text-xs text-amber-900/90">
+                  <div className="mt-3 rounded-md border border-primary/25 bg-primary/10 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-foreground">
+                        Tambah subtask ke task terpilih
+                      </p>
+                      <Dialog
+                        open={subtaskDialogOpen}
+                        onOpenChange={setSubtaskDialogOpen}
+                      >
+                        <DialogTrigger
+                          render={
+                            <Button size="sm" variant="secondary" />
+                          }
+                        >
+                          + Subtask
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Tambah subtask</DialogTitle>
+                            <DialogDescription>
+                              Subtask akan ditambahkan di bawah task terpilih.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <form
+                            className="grid gap-3"
+                            action={(fd) => {
+                              setTaskMsg(null);
+                              fd.set("project_id", selectedProjectId);
+                              fd.set("parent_id", selectedTask.id);
+                              const childStatusId =
+                                selectedTask.status_id ?? defaultStatusId;
+                              if (childStatusId) fd.set("status_id", childStatusId);
+                              startTaskTransition(async () => {
+                                const r = await createProjectTaskAction(fd);
+                                if (r.error) {
+                                  setTaskMsg(r.error);
+                                  return;
+                                }
+                                setSubtaskDialogOpen(false);
+                                router.refresh();
+                              });
+                            }}
+                          >
+                            <div className="space-y-1">
+                              <Label>Judul subtask *</Label>
+                              <Input
+                                name="title"
+                                required
+                                placeholder="Contoh: Lengkapi dokumen pendukung"
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <Label>Mulai</Label>
+                                <Input name="starts_at" type="date" />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Tenggat</Label>
+                                <Input name="due_at" type="date" />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="space-y-1">
+                                <Label>Target</Label>
+                                <Input
+                                  name="progress_target"
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Realisasi</Label>
+                                <Input
+                                  name="progress_actual"
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Bobot</Label>
+                                <Input
+                                  name="issue_weight"
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  defaultValue="1"
+                                />
+                              </div>
+                            </div>
+                            <Button type="submit" disabled={taskPending}>
+                              Simpan subtask
+                            </Button>
+                          </form>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
                       Parent:{" "}
                       <span className="font-medium">
                         {selectedTask.title}
                       </span>
                     </p>
-                    <form
-                      className="mt-2 flex flex-wrap items-end gap-2"
-                      action={(fd) => {
-                        setTaskMsg(null);
-                        fd.set("project_id", selectedProjectId);
-                        fd.set("parent_id", selectedTask.id);
-                        const childStatusId = selectedTask.status_id ?? defaultStatusId;
-                        if (childStatusId) fd.set("status_id", childStatusId);
-                        startTaskTransition(async () => {
-                          const r = await createProjectTaskAction(fd);
-                          if (r.error) {
-                            setTaskMsg(r.error);
-                            return;
-                          }
-                          router.refresh();
-                        });
-                      }}
-                    >
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Judul subtask *</Label>
-                        <Input
-                          name="title"
-                          required
-                          placeholder="Contoh: Lengkapi dokumen pendukung"
-                          className="h-8 w-72 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Mulai</Label>
-                        <Input
-                          name="starts_at"
-                          type="date"
-                          className="h-8 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Tenggat</Label>
-                        <Input
-                          name="due_at"
-                          type="date"
-                          className="h-8 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Target (opsional)</Label>
-                        <Input
-                          name="progress_target"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          placeholder="0"
-                          className="h-8 w-28 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Realisasi (opsional)</Label>
-                        <Input
-                          name="progress_actual"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          placeholder="0"
-                          className="h-8 w-28 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Bobot</Label>
-                        <Input
-                          name="issue_weight"
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          defaultValue="1"
-                          className="h-8 w-24 bg-white text-sm"
-                        />
-                      </div>
-                      <Button
-                        type="submit"
-                        disabled={taskPending}
-                        className="bg-amber-700 hover:bg-amber-800 disabled:opacity-50"
-                      >
-                        Tambah subtask
-                      </Button>
-                    </form>
                     {taskMsg && (
                       <p className="mt-2 text-xs text-red-600" role="alert">
                         {taskMsg}
@@ -1351,74 +1395,92 @@ export function WorkspaceClient({
                 )}
                 {selectedProjectId && selectedTask && (
                   <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/60 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-sky-900">
-                      Progress angka (opsional)
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-sky-900">
+                        Progress angka (opsional)
+                      </p>
+                      <Dialog
+                        open={progressDialogOpen}
+                        onOpenChange={setProgressDialogOpen}
+                      >
+                        <DialogTrigger
+                          render={
+                            <Button size="sm" variant="outline" />
+                          }
+                        >
+                          Update progress
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Update progress angka</DialogTitle>
+                            <DialogDescription>
+                              Ubah target, realisasi, dan bobot task terpilih.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <form
+                            className="grid gap-3"
+                            action={(fd) => {
+                              setTaskMsg(null);
+                              fd.set("project_id", selectedProjectId);
+                              fd.set("issue_id", selectedTask.id);
+                              startTaskTransition(async () => {
+                                const r = await updateTaskProgressAction(fd);
+                                if (r.error) {
+                                  setTaskMsg(r.error);
+                                  return;
+                                }
+                                setProgressDialogOpen(false);
+                                router.refresh();
+                              });
+                            }}
+                          >
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="space-y-1">
+                                <Label>Target</Label>
+                                <Input
+                                  name="progress_target"
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  defaultValue={selectedTask.progress_target ?? ""}
+                                  placeholder="mis. 120"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Realisasi</Label>
+                                <Input
+                                  name="progress_actual"
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  defaultValue={selectedTask.progress_actual ?? ""}
+                                  placeholder="mis. 48"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Bobot</Label>
+                                <Input
+                                  name="issue_weight"
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  defaultValue={selectedTask.issue_weight ?? "1"}
+                                />
+                              </div>
+                            </div>
+                            <Button type="submit" disabled={taskPending}>
+                              Simpan angka
+                            </Button>
+                          </form>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
                     <p className="mt-1 text-xs text-sky-900/90">
                       Task:{" "}
                       <span className="font-medium">
                         {selectedTask.title}
                       </span>
                     </p>
-                    <form
-                      className="mt-2 flex flex-wrap items-end gap-2"
-                      action={(fd) => {
-                        setTaskMsg(null);
-                        fd.set("project_id", selectedProjectId);
-                        fd.set("issue_id", selectedTask.id);
-                        startTaskTransition(async () => {
-                          const r = await updateTaskProgressAction(fd);
-                          if (r.error) {
-                            setTaskMsg(r.error);
-                            return;
-                          }
-                          router.refresh();
-                        });
-                      }}
-                    >
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Target</Label>
-                        <Input
-                          name="progress_target"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          defaultValue={selectedTask.progress_target ?? ""}
-                          placeholder="mis. 120"
-                          className="h-8 w-32 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Realisasi</Label>
-                        <Input
-                          name="progress_actual"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          defaultValue={selectedTask.progress_actual ?? ""}
-                          placeholder="mis. 48"
-                          className="h-8 w-32 bg-white text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-700">Bobot</Label>
-                        <Input
-                          name="issue_weight"
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          defaultValue={selectedTask.issue_weight ?? "1"}
-                          className="h-8 w-24 bg-white text-sm"
-                        />
-                      </div>
-                      <Button
-                        type="submit"
-                        disabled={taskPending}
-                        className="bg-sky-700 hover:bg-sky-800 disabled:opacity-50"
-                      >
-                        Simpan angka
-                      </Button>
-                    </form>
                   </div>
                 )}
                 {enabledModulesForOrg.has("plm") && selectedProjectId && (
@@ -1429,7 +1491,7 @@ export function WorkspaceClient({
                       description={
                         <>
                           Project{" "}
-                          <span className="font-medium text-slate-700">
+                          <span className="font-medium text-foreground">
                             {selectedProject?.name ?? "—"}
                           </span>
                           . Klik baris atau buka tab{" "}
@@ -1449,37 +1511,37 @@ export function WorkspaceClient({
               </>
             )}
             {activeView === "Tabel" && (
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-5 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
                 <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200 text-slate-600">
-                      <th className="py-2 pr-4 font-medium">Judul</th>
-                      <th className="py-2 pr-4 font-medium">Status</th>
-                      <th className="py-2 pr-4 font-medium">Bobot</th>
-                      <th className="py-2 pr-4 font-medium">Realisasi/Target</th>
-                      <th className="py-2 pr-4 font-medium">Progress %</th>
-                      <th className="py-2 pr-4 font-medium">Mulai</th>
-                      <th className="py-2 pr-4 font-medium">Tenggat</th>
-                      <th className="py-2 pr-4 font-medium">Sub-task?</th>
-                      <th className="py-2 pr-4 font-medium">Aksi</th>
+                    <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
+                      <th className="px-4 py-3 pr-4 font-medium">Judul</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Status</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Bobot</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Realisasi/Target</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Progress %</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Mulai</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Tenggat</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Sub-task?</th>
+                      <th className="px-4 py-3 pr-4 font-medium">Aksi</th>
                     </tr>
                   </thead>
                   <tbody>
                     {!selectedTaskId && selectedProject && (
-                      <tr className="border-b border-blue-100 bg-blue-50/60">
-                        <td className="py-2 pr-4 font-semibold text-blue-900">
+                      <tr className="border-b border-border bg-primary/10">
+                        <td className="px-4 py-3 pr-4 font-semibold text-primary">
                           {selectedProject.name}
                         </td>
-                        <td className="py-2 pr-4 text-blue-900">Ringkasan</td>
-                        <td className="py-2 pr-4 text-blue-900">—</td>
-                        <td className="py-2 pr-4 text-blue-900">— / —</td>
-                        <td className="py-2 pr-4 font-semibold text-blue-900">
+                        <td className="px-4 py-3 pr-4 text-primary">Ringkasan</td>
+                        <td className="px-4 py-3 pr-4 text-primary">—</td>
+                        <td className="px-4 py-3 pr-4 text-primary">— / —</td>
+                        <td className="px-4 py-3 pr-4 font-semibold text-primary">
                           {projectProgressPercent.toFixed(1)}%
                         </td>
-                        <td className="py-2 pr-4 text-blue-900">—</td>
-                        <td className="py-2 pr-4 text-blue-900">—</td>
-                        <td className="py-2 pr-4 text-blue-900">—</td>
-                        <td className="py-2 pr-4 text-blue-900">—</td>
+                        <td className="px-4 py-3 pr-4 text-primary">—</td>
+                        <td className="px-4 py-3 pr-4 text-primary">—</td>
+                        <td className="px-4 py-3 pr-4 text-primary">—</td>
+                        <td className="px-4 py-3 pr-4 text-primary">—</td>
                       </tr>
                     )}
                     {tableRows.map(({ issue, depth }) => {
@@ -1492,8 +1554,8 @@ export function WorkspaceClient({
                       return (
                         <tr
                           key={issue.id}
-                          className={`border-b border-slate-100 hover:bg-slate-50 ${
-                            selectedTaskId === issue.id ? "bg-blue-50/60" : ""
+                          className={`border-b border-border/70 hover:bg-muted/60 ${
+                            selectedTaskId === issue.id ? "bg-primary/10" : ""
                           }`}
                           role="button"
                           tabIndex={0}
@@ -1507,85 +1569,118 @@ export function WorkspaceClient({
                         >
                           <td
                             className={`py-2 pr-4 ${
-                              isSelectedRootRow ? "font-semibold text-blue-900" : ""
+                              isSelectedRootRow ? "font-semibold text-primary" : ""
                             }`}
                           >
-                            <span style={{ paddingLeft: depth * 12 }}>
+                            <span className="pl-4" style={{ paddingLeft: depth * 12 }}>
                               {issue.title}
                             </span>
                           </td>
                           <td className="py-2 pr-4">
-                            <span
-                              className={`rounded px-2 py-0.5 text-xs font-medium ${statusBadgeClass(
-                                st?.category
-                              )}`}
-                            >
+                            <Badge className={statusBadgeClass(st?.category)}>
                               {st?.name ?? "Tanpa status"}
-                            </span>
+                            </Badge>
                           </td>
-                          <td className="py-2 pr-4 text-slate-600">
+                          <td className="py-2 pr-4 text-muted-foreground">
                             {issue.issue_weight ?? "1"}
                           </td>
-                          <td className="py-2 pr-4 text-slate-600">
+                          <td className="py-2 pr-4 text-muted-foreground">
                             {issue.progress_actual ?? "—"} / {issue.progress_target ?? "—"}
                           </td>
-                          <td className="py-2 pr-4 text-slate-600">
+                          <td className="py-2 pr-4 text-muted-foreground">
                             {progressPct.toFixed(1)}%
                           </td>
-                          <td className="py-2 pr-4 text-slate-600">
+                          <td className="py-2 pr-4 text-muted-foreground">
                             {formatShortDate(issue.starts_at)}
                           </td>
-                          <td className="py-2 pr-4 text-slate-600">
+                          <td className="py-2 pr-4 text-muted-foreground">
                             {formatShortDate(issue.due_at)}
                           </td>
-                          <td className="py-2 pr-4 text-slate-600">
+                          <td className="py-2 pr-4 text-muted-foreground">
                             {isChild ? "Ya" : "—"}
                           </td>
                           <td className="py-2 pr-4">
                             {selectedProjectId ? (
-                              <form
+                              <div
                                 onClick={(e) => e.stopPropagation()}
                                 onKeyDown={(e) => e.stopPropagation()}
-                                action={(fd) => {
-                                  fd.set("issue_id", issue.id);
-                                  fd.set("project_id", selectedProjectId);
-                                  startTaskTransition(async () => {
-                                    const r = await setTaskDoneAction(fd);
-                                    if (r.error) {
-                                      setTaskMsg(r.error);
-                                      return;
-                                    }
-                                    router.refresh();
-                                  });
-                                }}
                               >
-                                <button
-                                  type="submit"
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={isDone ? "outline" : "secondary"}
                                   disabled={taskPending}
-                                  className={`rounded px-2 py-0.5 text-xs font-medium ${
-                                    isDone
-                                      ? "bg-amber-100 text-amber-800 hover:bg-amber-200"
-                                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                                  } disabled:opacity-70`}
+                                  className="h-auto px-2 py-0.5 text-xs font-medium disabled:opacity-70"
                                   onClick={(e) => {
-                                    if (!isDone) return;
                                     e.preventDefault();
-                                    const fd = new FormData();
-                                    fd.set("issue_id", issue.id);
-                                    fd.set("project_id", selectedProjectId);
-                                    startTaskTransition(async () => {
-                                      const r = await reopenTaskAction(fd);
-                                      if (r.error) {
-                                        setTaskMsg(r.error);
-                                        return;
-                                      }
-                                      router.refresh();
+                                    setTaskConfirm({
+                                      issueId: issue.id,
+                                      mode: isDone ? "reopen" : "done",
+                                      title: issue.title,
                                     });
                                   }}
                                 >
                                   {isDone ? "Buka lagi" : "Selesaikan"}
-                                </button>
-                              </form>
+                                </Button>
+                                <Dialog
+                                  open={taskConfirm?.issueId === issue.id}
+                                  onOpenChange={(open) => {
+                                    if (!open) setTaskConfirm(null);
+                                  }}
+                                >
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>
+                                        {taskConfirm?.mode === "reopen"
+                                          ? "Konfirmasi buka lagi task"
+                                          : "Konfirmasi selesaikan task"}
+                                      </DialogTitle>
+                                      <DialogDescription>
+                                        {taskConfirm?.mode === "reopen"
+                                          ? `Task "${taskConfirm?.title ?? issue.title}" akan dibuka lagi.`
+                                          : `Task "${taskConfirm?.title ?? issue.title}" dan seluruh child-nya akan ditandai selesai.`}
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="flex justify-end gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => setTaskConfirm(null)}
+                                      >
+                                        Batal
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        disabled={taskPending}
+                                        onClick={() => {
+                                          const current = taskConfirm;
+                                          if (!current || !selectedProjectId) return;
+                                          setTaskMsg(null);
+                                          const fd = new FormData();
+                                          fd.set("issue_id", current.issueId);
+                                          fd.set("project_id", selectedProjectId);
+                                          startTaskTransition(async () => {
+                                            const r =
+                                              current.mode === "reopen"
+                                                ? await reopenTaskAction(fd)
+                                                : await setTaskDoneAction(fd);
+                                            if (r.error) {
+                                              setTaskMsg(r.error);
+                                              return;
+                                            }
+                                            setTaskConfirm(null);
+                                            router.refresh();
+                                          });
+                                        }}
+                                      >
+                                        {taskConfirm?.mode === "reopen"
+                                          ? "Ya, buka lagi"
+                                          : "Ya, selesaikan"}
+                                      </Button>
+                                    </div>
+                                  </DialogContent>
+                                </Dialog>
+                              </div>
                             ) : null}
                           </td>
                         </tr>
@@ -1594,7 +1689,7 @@ export function WorkspaceClient({
                   </tbody>
                 </table>
                 {tableRows.length === 0 && (
-                  <p className="mt-2 text-sm text-slate-500">
+                  <p className="m-4 text-sm text-muted-foreground">
                     Tidak ada baris untuk scope ini.
                   </p>
                 )}
@@ -1603,13 +1698,13 @@ export function WorkspaceClient({
             {activeView === "Berkas" && (
               <div className="mt-4 space-y-3">
                 {!selectedProjectId ? (
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-muted-foreground">
                     Pilih project untuk melihat daftar berkas.
                   </p>
                 ) : (
                   <>
                     {selectedTaskId && (
-                      <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                      <p className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                         Scope <strong>task</strong> aktif — daftar berkas tetap
                         untuk seluruh <strong>project</strong> ini.
                       </p>
@@ -1662,7 +1757,7 @@ export function WorkspaceClient({
             )}
             {activeView === "Laporan" && (
               <div className="mt-4">
-                <p className="mb-3 text-sm text-slate-600">
+                <p className="mb-3 text-sm text-muted-foreground">
                   Agregat dari view SQL schema{" "}
                   <span className="font-mono">plm</span> (RLS mengikuti akses
                   berkas). Lingkup: project yang Anda miliki di sidebar.
@@ -1694,13 +1789,13 @@ export function WorkspaceClient({
             {activeView === "Map" && (
               <div className="mt-4 space-y-3">
                 {!selectedProjectId ? (
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-muted-foreground">
                     Pilih project untuk melihat peta.
                   </p>
                 ) : (
                   <>
                     {selectedTaskId && (
-                      <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                      <p className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                         Scope <strong>task</strong> aktif — peta menampilkan
                         footprint demo dan bidang hasil ukur untuk seluruh
                         project ini (bukan geometri per task).
@@ -1708,33 +1803,33 @@ export function WorkspaceClient({
                     )}
                     {mapLayersForSelectedProject.length > 0 &&
                     visibleMapLayers.length === 0 ? (
-                      <p className="text-sm text-slate-600">
+                      <p className="text-sm text-muted-foreground">
                         Semua lapisan peta dimatikan. Aktifkan minimal satu
                         checkbox di bawah.
                       </p>
                     ) : mapLayersForSelectedProject.length === 0 ? (
-                      <p className="text-sm text-slate-600">
+                      <p className="text-sm text-muted-foreground">
                         Belum ada geometri di peta untuk project ini. Footprint
                         demo: migration{" "}
-                        <code className="rounded bg-slate-100 px-1">
+                        <code className="rounded bg-muted px-1">
                           0004_spatial_demo_footprints.sql
                         </code>
                         . Bidang hasil ukur (PLM):{" "}
-                        <code className="rounded bg-slate-100 px-1">
+                        <code className="rounded bg-muted px-1">
                           0010
                         </code>{" "}
                         + view{" "}
-                        <code className="rounded bg-slate-100 px-1">
+                        <code className="rounded bg-muted px-1">
                           0011
                         </code>
                         /{" "}
-                        <code className="rounded bg-slate-100 px-1">
+                        <code className="rounded bg-muted px-1">
                           0012
                         </code>
                         , modul <strong>plm</strong> aktif di organisasi, schema{" "}
-                        <code className="rounded bg-slate-100 px-1">spatial</code>{" "}
+                        <code className="rounded bg-muted px-1">spatial</code>{" "}
                         di Data API (
-                        <code className="rounded bg-slate-100 px-1">
+                        <code className="rounded bg-muted px-1">
                           docs/supabase-expose-schemas.md
                         </code>
                         ).
@@ -1742,7 +1837,7 @@ export function WorkspaceClient({
                     ) : (
                       <div className="space-y-3">
                         {mapHighlightBerkasId && (
-                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                             <span>
                               Sorotan peta: berkas{" "}
                               <span className="font-mono font-semibold">
@@ -1751,9 +1846,11 @@ export function WorkspaceClient({
                                 )?.nomor_berkas ?? "—"}
                               </span>
                             </span>
-                            <button
+                            <Button
                               type="button"
-                              className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-xs text-amber-900 hover:bg-amber-100"
+                              variant="outline"
+                              size="sm"
+                              className="h-auto px-2 py-1 text-xs"
                               onClick={() =>
                                 replaceQuery((q) => {
                                   q.delete("berkas");
@@ -1761,11 +1858,11 @@ export function WorkspaceClient({
                               }
                             >
                               Hapus sorotan
-                            </button>
+                            </Button>
                           </div>
                         )}
                         {mapOverlapWarnings.length > 0 && (
-                          <div className="rounded-md border border-amber-300 bg-amber-50/95 px-3 py-2 text-sm text-amber-950">
+                          <div className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                             <p className="font-medium">
                               Peringatan tumpang tindih (periksa di peta)
                             </p>
@@ -1787,52 +1884,58 @@ export function WorkspaceClient({
                                 </li>
                               ))}
                             </ul>
-                            <p className="mt-2 text-[11px] text-amber-900/85">
+                            <p className="mt-2 text-[11px] text-muted-foreground">
                               Pemeriksaan di browser; aturan server/trigger
                               dapat ditambahkan sesuai §10.3.
                             </p>
                           </div>
                         )}
                         {mapLayersForSelectedProject.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-slate-700">
-                            <span className="font-medium text-slate-600">
-                              Lapisan:
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="font-medium text-muted-foreground">
+                              Lapisan peta:
                             </span>
-                            <label className="inline-flex cursor-pointer items-center gap-2">
-                              <input
-                                type="checkbox"
-                                className="rounded border-slate-300"
-                                checked={mapShowDemo}
-                                disabled={
-                                  footprintsForSelectedProject.length === 0
-                                }
-                                onChange={(e) =>
-                                  setMapShowDemo(e.target.checked)
-                                }
-                              />
-                              Footprint demo
-                            </label>
-                            <label className="inline-flex cursor-pointer items-center gap-2">
-                              <input
-                                type="checkbox"
-                                className="rounded border-slate-300"
-                                checked={mapShowHasilUkur}
-                                disabled={
-                                  bidangHasilUkurForSelectedProject.length === 0
-                                }
-                                onChange={(e) =>
-                                  setMapShowHasilUkur(e.target.checked)
-                                }
-                              />
-                              Bidang hasil ukur
-                            </label>
+                            <Popover>
+                              <PopoverTrigger
+                                render={<Button type="button" size="sm" variant="outline" />}
+                              >
+                                Atur lapisan
+                              </PopoverTrigger>
+                              <PopoverContent className="w-64 space-y-3">
+                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                  Tampilkan lapisan
+                                </p>
+                                <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                                  <input
+                                    type="checkbox"
+                                    className="rounded border-border"
+                                    checked={mapShowDemo}
+                                    disabled={footprintsForSelectedProject.length === 0}
+                                    onChange={(e) => setMapShowDemo(e.target.checked)}
+                                  />
+                                  Footprint demo
+                                </label>
+                                <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                                  <input
+                                    type="checkbox"
+                                    className="rounded border-border"
+                                    checked={mapShowHasilUkur}
+                                    disabled={
+                                      bidangHasilUkurForSelectedProject.length === 0
+                                    }
+                                    onChange={(e) => setMapShowHasilUkur(e.target.checked)}
+                                  />
+                                  Bidang hasil ukur
+                                </label>
+                              </PopoverContent>
+                            </Popover>
                           </div>
                         )}
                         <WorkspaceMap
                           footprints={visibleMapLayers}
                           highlightBerkasId={mapHighlightBerkasId}
                         />
-                        <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                        <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                           <span>
                             <span
                               className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
@@ -1849,7 +1952,7 @@ export function WorkspaceClient({
                           </span>
                           <span>
                             <span
-                              className="mr-1 inline-block h-2 w-2 rounded-sm border border-amber-600 align-middle"
+                              className="mr-1 inline-block h-2 w-2 rounded-sm border border-primary/60 align-middle"
                               style={{ background: "#ea580c" }}
                             />{" "}
                             Sorotan berkas (URL{" "}
@@ -1865,14 +1968,14 @@ export function WorkspaceClient({
             {activeView === "Kanban" && selectedProjectId && (
               <div className="mt-4">
                 {selectedTaskId && (
-                  <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                  <p className="mb-3 rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                     Scope <strong>task</strong> aktif — board tetap menampilkan
                     semua task level atas project ini. Klik nama project di kiri
                     untuk fokus project saja.
                   </p>
                 )}
                 {statusesForProject.length === 0 ? (
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-muted-foreground">
                     Belum ada status untuk project ini.
                   </p>
                 ) : (
