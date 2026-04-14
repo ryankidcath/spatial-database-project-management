@@ -3,6 +3,8 @@ import type { ViewId } from "./workspace-views";
 const VIEW_PARAMS: Record<ViewId, string> = {
   Dashboard: "dashboard",
   Tabel: "tabel",
+  Berkas: "berkas",
+  Laporan: "laporan",
   Map: "map",
   Kanban: "kanban",
   Kalender: "kalender",

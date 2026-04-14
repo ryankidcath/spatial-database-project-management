@@ -3,6 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import {
+  getSignupMode,
+  isEmailAllowedForSignup,
+} from "@/lib/pilot-config";
 
 async function bootstrapDemoProjects() {
   const supabase = await createServerSupabaseClient();
@@ -40,6 +44,22 @@ export async function signup(formData: FormData) {
 
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
+
+  const mode = getSignupMode();
+  if (mode === "closed") {
+    redirect(
+      "/login?error=" +
+        encodeURIComponent("Pendaftaran akun baru dinonaktifkan. Hubungi admin.")
+    );
+  }
+  if (!isEmailAllowedForSignup(email)) {
+    redirect(
+      "/login?error=" +
+        encodeURIComponent(
+          "Alamat email ini tidak diizinkan untuk pendaftaran (kebijakan pilot)."
+        )
+    );
+  }
 
   const site =
     process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ?? "http://localhost:3000";

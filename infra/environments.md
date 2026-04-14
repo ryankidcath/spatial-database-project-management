@@ -1,18 +1,17 @@
 # Environment Blueprint
 
-## Environments
+## Model disepakati (satu jalur)
 
-- `dev` - untuk pengembangan harian
-- `staging` - untuk QA/UAT
-- `prod` - untuk produksi
+- **Lokal:** `dev` — `npm run dev` + `app/.env.local`.
+- **Cloud:** satu deployment **Vercel Production** + satu **project Supabase** (tanpa jalur Preview/DB kedua wajib).
 
-## Mapping
+Detail, checklist, dan **daftar kekurangan (minus)** setup ini: **[`DEPLOY.md`](../DEPLOY.md)**.
 
-- Git branch `main` -> Vercel Production -> Supabase `prod`
-- Pull Request Preview -> Vercel Preview -> Supabase `staging` (atau `dev`)
+## Mapping (ringkas)
+
+- Branch **`main`** → **Vercel Production** → **satu** Supabase.
 
 ## Notes
 
-- Jangan gunakan database production untuk testing manual.
-- Semua perubahan schema masuk lewat migration.
-
+- Perubahan schema lewat migration di repo; dampak langsung ke project Supabase yang dipakai production.
+- Backup / PITR Supabase tetap disarankan untuk data nyata.

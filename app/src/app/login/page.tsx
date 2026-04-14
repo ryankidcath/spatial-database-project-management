@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { login, signup } from "@/app/auth/actions";
+import {
+  shouldShowSignupForm,
+  signupRestrictionDescription,
+} from "@/lib/pilot-config";
 
 type Props = {
   searchParams: Promise<{ error?: string; message?: string }>;
@@ -9,6 +13,8 @@ export default async function LoginPage({ searchParams }: Props) {
   const q = await searchParams;
   const error = q.error ? decodeURIComponent(q.error) : null;
   const message = q.message ? decodeURIComponent(q.message) : null;
+  const showSignup = shouldShowSignupForm();
+  const signupNote = signupRestrictionDescription();
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-100 px-4 py-12">
@@ -76,50 +82,64 @@ export default async function LoginPage({ searchParams }: Props) {
 
         <div className="my-6 border-t border-slate-100" />
 
-        <p className="text-center text-xs font-medium text-slate-500">
-          Belum punya akun?
-        </p>
-        <form action={signup} className="mt-3 space-y-4">
-          <div>
-            <label
-              htmlFor="signup-email"
-              className="block text-xs font-medium text-slate-600"
-            >
-              Email (daftar)
-            </label>
-            <input
-              id="signup-email"
-              name="email"
-              type="email"
-              required
-              autoComplete="email"
-              className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label
-              htmlFor="signup-password"
-              className="block text-xs font-medium text-slate-600"
-            >
-              Sandi (daftar)
-            </label>
-            <input
-              id="signup-password"
-              name="password"
-              type="password"
-              required
-              autoComplete="new-password"
-              minLength={6}
-              className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            className="w-full rounded-md border border-slate-300 bg-white py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
-          >
-            Daftar
-          </button>
-        </form>
+        {showSignup ? (
+          <>
+            <p className="text-center text-xs font-medium text-slate-500">
+              Belum punya akun?
+            </p>
+            {signupNote ? (
+              <p className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-center text-xs text-slate-700">
+                {signupNote}
+              </p>
+            ) : null}
+            <form action={signup} className="mt-3 space-y-4">
+              <div>
+                <label
+                  htmlFor="signup-email"
+                  className="block text-xs font-medium text-slate-600"
+                >
+                  Email (daftar)
+                </label>
+                <input
+                  id="signup-email"
+                  name="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="signup-password"
+                  className="block text-xs font-medium text-slate-600"
+                >
+                  Sandi (daftar)
+                </label>
+                <input
+                  id="signup-password"
+                  name="password"
+                  type="password"
+                  required
+                  autoComplete="new-password"
+                  minLength={6}
+                  className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full rounded-md border border-slate-300 bg-white py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Daftar
+              </button>
+            </form>
+          </>
+        ) : (
+          <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-center text-xs text-slate-700">
+            {signupNote ??
+              "Pendaftaran akun baru dinonaktifkan. Hubungi admin untuk akses."}
+          </p>
+        )}
 
         <p className="mt-6 text-center text-xs text-slate-500">
           <Link href="/" className="text-blue-600 hover:underline">

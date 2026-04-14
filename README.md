@@ -4,8 +4,9 @@ Fondasi implementasi aplikasi Project Management modular dengan dukungan domain 
 
 ## Status
 
-- Fase aktif: **Fase 0 (Fondasi)**
 - Dokumen utama analisis: `catatan-skema-database.md`
+- Deploy (Vercel + Supabase): **`DEPLOY.md`**
+- Pilot / undangan / modul per org: **`docs/PILOT.md`**
 
 ## Struktur awal
 
@@ -28,8 +29,8 @@ Lihat `docs/fase-0-eksekusi.md` untuk checklist detail eksekusi Fase 0.
 
 ## Frontend (Fase 1)
 
-- Kode app: folder `app/`
-- Env lokal: salin `app/.env.example` → `app/.env.local` (isi `NEXT_PUBLIC_SUPABASE_*`)
+- Kode app: folder `app/` — di Vercel set **Root Directory** = `app` (lihat `DEPLOY.md`)
+- Env lokal: salin `app/.env.example` → `app/.env.local` (isi `NEXT_PUBLIC_SUPABASE_*` dan `NEXT_PUBLIC_SITE_URL`)
 - Dev: `cd app` lalu `npm install` lalu `npm run dev`
 - Kanban (inc 6): drag memakai `@dnd-kit/core` — pastikan dependency terpasang setelah `git pull`
 - Auth + RLS (inc 7): wajib login di `/login`; migration `0005` + `0006_rls_project_member_helper.sql` (hindari rekursi policy) + panduan `docs/supabase-auth-increment-7.md`

@@ -31,6 +31,14 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Panduan deploy (Root Directory **`app`**, satu Production + satu Supabase, trade-off di dokumen): **[`../DEPLOY.md`](../DEPLOY.md)**.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Smoke E2E terhadap URL yang sudah live (tanpa menjalankan dev server lokal):
+
+```bash
+# PowerShell: $env:PLAYWRIGHT_BASE_URL="https://…"
+# cmd: set PLAYWRIGHT_BASE_URL=https://…
+npm run test:e2e
+```
+
+Lihat juga [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying).

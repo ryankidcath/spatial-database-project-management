@@ -1,6 +1,8 @@
 export const VIEWS = [
   "Dashboard",
   "Tabel",
+  "Berkas",
+  "Laporan",
   "Map",
   "Kanban",
   "Kalender",

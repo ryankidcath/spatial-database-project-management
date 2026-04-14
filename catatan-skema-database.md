@@ -334,7 +334,7 @@ Proses ini mendaftarkan hasil ukur ke sistem BPN sampai selesai legalisasi admin
 
 - Simpan `luas_hasil_ukur` sebagai bilangan bulat (sesuai proses Anda).
 - `nomor_gu`, `nib_baru`, `nomor_pbt` sebaiknya diindeks dan diberi unik sesuai kebijakan domain.
-- Jika alur perlu jejak perubahan per tahap yang ketat, tambahkan `legalisasi_gu_history` (event log per perubahan field/status).
+- Jejak perubahan: **`plm.legalisasi_gu_history`** (F5-4 / migrasi **`0014`**) mencatat patch field, naik tahap, lampiran, dan pembuatan draft.
 
 ### 3.12 Model geometri bidang (eksisting vs hasil ukur)
 
@@ -657,6 +657,8 @@ Tambahkan registry modul, misalnya:
 - `core.organization_modules` (modul aktif per organization)
   - `organization_id`, `module_code`, `is_enabled`, `enabled_at`.
 
+*Implementasi saat ini:* kedua konsep di atas ada di schema **`core_pm`** sebagai `module_registry` dan `organization_modules` (satu schema dengan PM untuk PostgREST — lihat **§17**).
+
 Aturan:
 
 - `core_pm` selalu `is_enabled = true`.
@@ -696,8 +698,10 @@ Bagian ini menjadi acuan implementasi migration SQL per modul.
 - [ ] `attachments`
 - [ ] `activity_log`
 - [ ] `notifications`
-- [ ] `module_registry` (jika diletakkan di core)
-- [ ] `organization_modules` (aktivasi modul per organization)
+- [x] `module_registry` — di **`core_pm`** (Fase 2 slice F2-1, migration `0007`)
+- [x] `organization_modules` — di **`core_pm`** (Fase 2 slice F2-1, migration `0007`)
+- [x] `audit_log` — append-only, RLS org/project; migration **`0015`** (Fase 6 **F6-1**)
+- [x] `user_notifications` — per user, RLS; migration **`0016`** (Fase 6 **F6-2**)
 
 Catatan:
 - `core_pm` harus bisa berdiri sendiri tanpa tabel PLM.
@@ -705,23 +709,24 @@ Catatan:
 
 ### 10.2 `plm` (opsional)
 
-- [ ] `berkas_permohonan` (`project_id` wajib diisi sesuai keputusan akses)
-- [ ] `pemilik_tanah`
+- [x] `berkas_permohonan` — **`project_id` wajib** (FK `core_pm.projects`); migration **`0009`** (Fase 3 F3-1)
+- [x] `pemilik_tanah` — per **`organization_id`**; seed demo **F3-1**
 - [ ] `kontak`
-- [ ] `berkas_pemilik`
+- [x] `berkas_pemilik` — junction M:N; **F3-1**
 - [ ] `kontak_pemilik`
 - [ ] `kontak_berkas`
 - [ ] `penerimaan_kunjungan`
 - [ ] `penerimaan_berkas`
-- [ ] `permohonan_informasi_spasial` (metadata proses + `hasil_geojson`/`hasil_geom`)
-- [ ] `pengukuran_lapangan`
-- [ ] `pengukuran_surveyor`
-- [ ] `alat_ukur`
-- [ ] `pengukuran_alat`
-- [ ] `pengukuran_dokumen`
-- [ ] `legalisasi_gu` (1:N per berkas untuk daftar ulang)
-- [ ] `legalisasi_gu_file` (file wajib tahap 1,2,5)
-- [ ] `legalisasi_gu_history` (opsional, event log)
+- [x] `permohonan_informasi_spasial` (metadata proses + `hasil_geojson`/`hasil_geom`) — migration **`0013`** (Fase 5 F5-1)
+- [x] `pengukuran_lapangan` — **`0013`**
+- [x] `pengukuran_surveyor` — **`0013`**
+- [x] `alat_ukur` — **`0013`**
+- [x] `pengukuran_alat` — **`0013`**
+- [x] `pengukuran_dokumen` — **`0013`**
+- [x] `legalisasi_gu` (1:N per berkas untuk daftar ulang) — **`0013`** (`bidang_hasil_ukur_id` opsional)
+- [x] `legalisasi_gu_file` (file wajib tahap 1,2,5 — aturan di app) — **`0013`**
+- [x] `legalisasi_gu_history` (event log) — migration **`0014`** (F5-4)
+- [x] View pelaporan **`v_berkas_permohonan_summary_by_status`**, **`v_legalisasi_gu_summary_by_tahap`**, **`v_pengukuran_lapangan_summary_by_status`** — migration **`0017`** (F6-3)
 
 Catatan:
 - `legalisasi_gu` daftar ulang harus tetap menaut ke proses info spasial yang relevan.
@@ -730,9 +735,9 @@ Catatan:
 ### 10.3 `spatial` (opsional)
 
 - [ ] `bidang_eksisting_bpn` (hasil extract data referensi BPN, queryable)
-- [ ] `bidang_hasil_ukur` (1:1 ke `plm.berkas_permohonan`)
-- [ ] indeks spasial GiST pada semua kolom `geom`
-- [ ] fungsi/constraint validasi geometri:
+- [x] `bidang_hasil_ukur` (1:1 ke `plm.berkas_permohonan`) — migration **`0010`** (Fase 4 F4-1)
+- [x] indeks spasial GiST pada kolom **`geom`** (`bidang_hasil_ukur`) — **F4-1**
+- [ ] fungsi/constraint validasi geometri (tambahan: overlap **di server** / trigger notifikasi, dll.):
   - tipe `Polygon/MultiPolygon`
   - SRID `4326`
   - valid geometry wajib
@@ -740,6 +745,7 @@ Catatan:
   - overlap boleh + trigger warning/notifikasi
 
 Catatan:
+- **F4-3 (app):** peringatan tumpang tindih **di browser** (pasangan hasil–hasil + demo–hasil) memakai `@turf/boolean-intersects` — bukan pengganti trigger DB.
 - Geometri invalid ditolak (tanpa auto-fix).
 - Mapping draft -> terbit mengikuti keputusan opsi 1: `nib_baru` di `plm.legalisasi_gu`.
 
@@ -812,25 +818,27 @@ Aturan:
   - `org` = UUID organisasi (`core_pm.organizations.id`) — increment 4; diselaraskan saat ganti project / organisasi.
   - `project` = UUID project (`core_pm.projects.id`),
   - `task` = UUID issue/task (opsional; jika ada, scope = task),
-  - `view` = `dashboard` | `tabel` | `map` | `kanban` | `kalender` | `gantt`.
-- Contoh bookmark: `/?org=<uuid>&project=<uuid>&view=kanban` atau `/?project=<uuid>&task=<uuid>&view=dashboard`.
+  - `view` = `dashboard` | `tabel` | `berkas` (modul **plm**) | `map` | `kanban` | `kalender` | `gantt`.
+  - `berkas` = UUID **`plm.berkas_permohonan`** (opsional; detail di tab **Berkas** F3-4; pada **`view=map`** memakai sorotan bidang hasil ukur — F4-3).
+- Contoh bookmark: `/?org=<uuid>&project=<uuid>&view=berkas&berkas=<uuid>` atau `/?org=<uuid>&project=<uuid>&view=map&berkas=<uuid>` atau `/?org=<uuid>&project=<uuid>&view=kanban` atau `/?project=<uuid>&task=<uuid>&view=dashboard`.
 - Jadwal issue: `core_pm.issues.starts_at`, `due_at` (timestamptz, nullable) — dipakai **Kalender** & **Gantt** (increment 5).
 
 ### 11.4 Perilaku per view (saat scope = project)
 
 - **Dashboard:** KPI dan ringkasan workflow hanya untuk project aktif.
 - **Tabel:** daftar berkas/task/dokumen yang terfilter project aktif.
-- **Map:** tampilkan geometri terkait project aktif (eksisting + hasil ukur sesuai modul aktif).
+- **Berkas:** daftar + detail berkas PLM (`plm.berkas_permohonan`); detail lewat query **`berkas=`** + stepper status (F3-4).
+- **Map:** geometri project (footprint demo + hasil ukur PLM); lapisan & peringatan overlap klien (F4-2/3).
 - **Kanban:** board workflow global project aktif.
 - **Kalender:** jadwal janji ukur, tenggat, dan milestone project aktif.
 - **Gantt:** timeline fase kerja dalam project aktif.
 
 ### 11.5 Kesesuaian dengan modul opsional
 
-- Jika modul nonaktif, tab view tetap ada tetapi isi disesuaikan:
+- Jika modul nonaktif, tab view disembunyikan atau isi disesuaikan:
+  - `Berkas` muncul hanya jika modul `plm` aktif untuk organisasi (Fase 2 + 3).
   - `Map` muncul hanya jika modul `spatial` aktif.
-  - `Kanban/Kalender/Gantt` bisa tetap dari `core_pm`.
-  - View yang tidak relevan pada modul nonaktif disembunyikan dari tab.
+  - `Kanban/Kalender/Gantt` dari `core_pm` (modul `core_pm` selalu relevan).
 
 ### 11.6 Kriteria UX yang perlu dijaga
 
@@ -840,7 +848,7 @@ Aturan:
 
 ---
 
-*Terakhir diperbarui: §11 ditambahkan — pola navigasi kiri (project->task) dan view atas (Dashboard/Tabel/Map/Kanban/Kalender/Gantt) berbasis scope aktif.*
+*Terakhir diperbarui: §11 — view **Berkas** (modul plm) + penyesuaian §11.5 tab modul.*
 
 ## 12. Roadmap implementasi bertahap (langkah kecil)
 
@@ -872,14 +880,17 @@ Tujuan: realisasi aplikasi secara iteratif, selalu menghasilkan increment yang b
 6. **Fase 5 — Pengukuran & legalisasi**
    - Implement `pengukuran_*` + wizard legalisasi GU tahap 1-6.
    - Implement daftar ulang legalisasi (1:N) sesuai keputusan.
+   - *Progress terinci:* **§20** (migration **`0013`**–**`0014`**; F5-2–F5-4 UI & Storage).
 
 7. **Fase 6 — Hardening**
    - Audit log, notifikasi warning, report/materialized view.
    - Test end-to-end skenario core-only dan PLM full-flow.
+   - *Progress terinci & pemecahan slice:* **§21**.
 
 8. **Fase 7 — Go-live bertahap**
    - Pilot organization terbatas.
    - Monitoring dan rollout bertahap.
+   - *Progress terinci & pemecahan slice:* **§22**.
 
 ### 12.2 Pola eksekusi
 
@@ -1067,7 +1078,7 @@ Status fase:
 - [x] Tambah util client Supabase: `app/src/lib/supabase/client.ts`.
 - [x] Implement halaman awal dengan pola UI yang disepakati:
   - sidebar `Project -> Task` (dropdown/expand),
-  - view tabs atas (`Dashboard`, `Tabel`, `Map`, `Kanban`, `Kalender`, `Gantt`),
+  - view tabs atas (`Dashboard`, `Tabel`, `Berkas` jika modul PLM, `Map`, `Kanban`, `Kalender`, `Gantt`),
   - area konten terikat scope aktif project.
 - [x] Update metadata app.
 - [x] Lint berhasil (`npm run lint`).
@@ -1090,7 +1101,7 @@ Status fase:
 - [x] URL sinkron dengan navigasi: `?project=&task=&view=` (lihat §11.3).
 - [x] `router.replace` tanpa scroll; kunjungan pertama tanpa `project` diisi default project pertama.
 - [x] View **Tabel**: daftar issue dalam scope project (semua task + indent) atau scope task (task + sub-task).
-- [x] Placeholder view **Map** (increment 8 + modul spatial); **Kanban** dasar di increment 4; **Kalender / Gantt** di increment 5.
+- [x] Placeholder view **Map** (isi penuh di increment 8); **Kanban** dasar di increment 4; **Kalender / Gantt** di increment 5.
 - [x] `Suspense` di `page.tsx` untuk `useSearchParams`.
 - [x] Pecahan util: `workspace-views.ts`, `workspace-url.ts`.
 - [x] Lint lulus.
@@ -1145,22 +1156,334 @@ Urutan disepakati untuk menutup **Fase 1 — Core PM minimal** (selain pekerjaan
 - [x] Dokumentasi: **`docs/supabase-auth-increment-7.md`**, env **`NEXT_PUBLIC_SITE_URL`** opsional di **`app/.env.example`**.
 - [x] `npm run lint` + `npm run build` lulus.
 
-### Increment 8 (rencana) — Map
+### Increment 8 (selesai) — Map
 
-- [ ] **Leaflet** (atau stack peta yang disepakati) di view **Map**; styling konsisten dengan workspace.
-- [ ] Data geometri dari schema **`spatial`** (atau sumber yang sudah ada di catatan skema) — **filter** `organization` / `project` / `task` sesuai scope aktif (§11).
-- [ ] Placeholder diganti konten peta; pesan jika modul spasial nonaktif / belum ada geometri (selaras §11.5).
-- [ ] Performa dasar: tidak memuat seluruh dunia; bbox atau limit per project.
-- [ ] `npm run lint` + `npm run build` lulus.
+- [x] **Leaflet** di view **Map** (`leaflet` + OSM tiles); komponen klien `workspace-map.tsx` dimuat lewat `next/dynamic` (`ssr: false`) + CSS Leaflet.
+- [x] Data **`spatial.project_demo_footprints`** di-fetch server (`page.tsx`) untuk **project id** yang user punya akses (`.in("project_id", …)`); di klien **filter** ke project aktif; scope **task** = banner + peta tetap per project (§11).
+- [x] Pesan jika belum ada footprint / belum pilih project; error fetch mengenali schema **`spatial`** (expose API).
+- [x] Hanya geometri project ter-scope (bukan seluruh dunia).
+- [x] `npm run lint` + `npm run build` lulus.
 
 ### 16.1 Yang perlu Anda lakukan setelah increment 7
 
-- [ ] `git pull` → `npx supabase db push` (migration **`0005`** + **`0006`**) → `cd app` → `npm install` → `npm run dev`.
+- [ ] `git pull` → `npx supabase db push` (migration sampai **`0017`** bila Fase 5–6 terkait ikut) → `cd app` → `npm install` → `npm run dev`.
+  - **Penting:** jalankan `supabase link` / `db push` / `migration list` dari **akar repo** (folder yang berisi `supabase/migrations/`), **bukan** dari `app/`. Dari `app/`, CLI sering gagal dengan *Remote migration versions not found in local migrations directory* meskipun file migration ada.
 - [ ] Supabase **Auth:** redirect URL **`/auth/callback`**; untuk dev pertimbangkan matikan **Confirm email** atau gunakan tautan verifikasi.
 - [ ] Buka **`/login`** → daftar/masuk → workspace harus memuat project demo (atau tombol **Gabung ke project demo**).
 - [ ] Vercel: set **`NEXT_PUBLIC_SITE_URL`** production URL jika konfirmasi email dipakai.
-- [ ] Lanjut **increment 8** (Map / Leaflet).
+- [x] Lanjut **increment 8** (Map / Leaflet) — selesai.
+
+### 16.2 Penutupan Fase 1
+
+- [x] Increment **1–8** selesai (§16.1 tetap checklist operasional opsional untuk tim).
+- [x] Lanjutan kerja fitur **Core PM** kecil / bugfix tetap boleh paralel; **kerangka modul** masuk **Fase 2** (**§17**).
 
 ---
 
-*Terakhir diperbarui: §16 — Fase 1 increment 7 selesai (Auth + RLS membership).*
+## 17. Progress eksekusi Fase 2 — Kerangka modul
+
+Tujuan selaras **§9** dan **§12.1 langkah 3**: registry modul + aktivasi per organisasi; lalu aplikasi membaca status modul untuk menyembunyikan/menampilkan area fitur (§9.5, §11.5).
+
+### Pemecahan slice
+
+| Slice | Fokus | Status |
+|--------|--------|--------|
+| **F2-1** | Migration: `module_registry`, `organization_modules`, seed demo, RLS baca (`authenticated`) | Selesai |
+| **F2-2** | App: fetch modul aktif per organisasi scope workspace, props ke klien (tanpa mengubah tab dulu, atau sekalian tab) | Selesai |
+| **F2-3** | UI: tab/view mengikuti flag modul (mis. **Map** hanya jika `spatial` aktif untuk org itu) | Selesai |
+| **F2-4** | Admin atau RPC `security definer`: mengaktifkan/menonaktifkan modul (selain `core_pm`), audit sederhana | Selesai |
+
+### F2-1 (selesai) — DB registry + aktivasi
+
+- [x] Migration **`0007_core_pm_module_registry.sql`**: tabel **`core_pm.module_registry`** (`module_code` PK, `display_name`, `is_core`, `sort_order`, …) dan **`core_pm.organization_modules`** (`organization_id`, `module_code`, `is_enabled`, `enabled_at`).
+- [x] Seed katalog: `core_pm`, `plm`, `spatial`, `finance` (kode modul huruf kecil + constraint nama).
+- [x] Seed organisasi demo **KJSB** (`11111111-…`): `core_pm` + `plm` + `spatial` aktif; `finance` nonaktif (boleh diubah manual / slice F2-4).
+- [x] Aturan data: `core_pm` tidak boleh `is_enabled = false`; baris `core_pm` tidak boleh di-**delete** (trigger `organization_modules_prevent_drop_core`).
+- [x] **RLS:** `module_registry` **select** untuk semua `authenticated`; `organization_modules` **select** hanya jika user anggota minimal satu project di organisasi itu (subquery ke `projects` + **`core_pm.is_project_member`**). Tanpa policy **insert/update** untuk `authenticated` pada slice ini (kelola lewat SQL admin atau slice F2-4).
+- [x] **Grant:** `select` ke `authenticated` saja (bukan `anon`), konsisten increment 7.
+
+*Verifikasi remote:* setelah `db push` dari akar repo, migration **`0007`** harus tercatat di riwayat migrasi project Supabase.
+
+### F2-2 (selesai) — Read path aplikasi
+
+- [x] Fetch **`module_registry`** + **`organization_modules`** di `app/src/app/page.tsx` (filter `.in("organization_id", orgIds)`); error gabung ke **`fetchError`**.
+- [x] Props ke **`WorkspaceClient`**: `moduleRegistry`, `organizationModules`.
+
+### F2-3 (selesai) — UI mengikuti modul
+
+- [x] Util **`app/src/app/workspace-modules.ts`**: `effectiveEnabledModuleCodes`, `viewRequiredModuleCode` / `isViewAllowedForModules`, `viewsForEnabledModules` (tab **Map** ↔ modul **`spatial`**).
+- [x] Tab view memakai **`visibleViews`**; URL `view=map` tanpa `spatial` dinormalisasi ke **Dashboard** (`useEffect` + **`activeView`** memakai aturan modul).
+- [x] Ringkasan modul aktif di **Dashboard** (label dari registry).
+
+### F2-4 (selesai) — Mutasi modul
+
+- [x] Migration **`0008_organization_modules_set_rpc.sql`**: fungsi **`core_pm.is_organization_member(uuid)`** (`SECURITY DEFINER`, cek `project_members` + `projects` di org) dan RPC **`core_pm.set_organization_module_enabled(organization_id, module_code, enabled)`** — validasi modul di **`module_registry`**, **larang menonaktifkan `core_pm`**, upsert / update baris **`organization_modules`**; `grant execute` ke **`authenticated`**.
+- [x] Mutasi tabel tetap **tanpa** policy INSERT/UPDATE untuk role anon/client pada **`organization_modules`** (hanya lewat RPC).
+- [x] Server action **`app/src/app/workspace-modules-actions.ts`** (`setOrganizationModuleAction`) memanggil RPC + **`revalidatePath("/", "layout")`**.
+- [x] UI sidebar **`OrganizationModuleToggles`** (`organization-module-toggles.tsx`): toggle modul **non-`is_core`** untuk organisasi aktif (user terautentikasi).
+- [ ] *Pengerjaan lanjutan opsional:* batasi RPC ke peran **admin org** (tabel membership peran) jika kebutuhan audit/otorisasi ketat.
+
+---
+
+## 18. Progress eksekusi Fase 3 — PLM inti
+
+Tujuan selaras **§12.1 langkah 4** dan **§10.2**: entitas domain PLM di schema **`plm`**, akses terikat **project** / **organisasi**, lalu UI (slice berikutnya).
+
+### Pemecahan slice (disepakati)
+
+| Slice | Fokus | Status |
+|--------|--------|--------|
+| **F3-1** | Migration: `berkas_permohonan`, `pemilik_tanah`, `berkas_pemilik` + RLS + seed demo | Selesai |
+| **F3-2** | App: fetch berkas (scoped project) + error `plm` di expose API | Selesai |
+| **F3-3** | UI daftar berkas / tautan dari workspace | Selesai |
+| **F3-4** | Detail berkas + stepper ringkas | Selesai |
+
+### F3-1 (selesai) — Schema + tabel minimal + RLS + seed
+
+- [x] Migration **`0009_plm_berkas_pemilik_core.sql`**: tabel **`plm.berkas_permohonan`** (`project_id`, `nomor_berkas`, `tanggal_berkas`, `status`, `catatan`, soft delete), **`plm.pemilik_tanah`** (`organization_id`, `nama_lengkap`, kontak ringkas), **`plm.berkas_pemilik`** (junction + `urutan`).
+- [x] **RLS** `authenticated`: berkas & junction memakai **`core_pm.is_project_member(berkas.project_id)`**; pemilik memakai **anggota minimal satu project** di organisasi yang sama (`projects.organization_id`).
+- [x] **Grant:** `usage` schema **`plm`** + DML tabel ke **`authenticated`** saja (bukan **`anon`**).
+- [x] **Seed** demo: dua pemilik + dua berkas di project **PLM Cirebon 2026** + tautan junction.
+- [x] **Supabase API:** schema **`plm`** harus ada di **Exposed schemas** (lihat **`docs/supabase-expose-schemas.md`**) agar client bisa query setelah F3-2.
+
+### F3-2 (selesai) — Read path aplikasi
+
+- [x] **`page.tsx`:** fetch **`plm.berkas_permohonan`** hanya jika modul **`plm`** aktif untuk salah satu organisasi user (`.in("project_id", projectIds)`); embed **`berkas_pemilik(urutan, pemilik_tanah(id, nama_lengkap))`**; error gabung ke **`fetchError`**.
+- [x] **`WorkspaceClient`:** prop **`berkasPermohonan`**, ringkasan tabel **Dashboard** untuk project aktif bila modul **`plm`** aktif di org; helper **`pemilikLabelsForBerkas`**; deteksi error schema **`plm`** di pesan gagal muat.
+
+### F3-3 (selesai) — UI daftar berkas di workspace
+
+- [x] View tab **`Berkas`** (`view=berkas`) di **`workspace-views.ts`** / **`workspace-url.ts`**; tampil hanya jika modul **`plm`** aktif (**`viewRequiredModuleCode`** di **`workspace-modules.ts`**).
+- [x] Normalisasi URL: `view=berkas` tanpa modul **`plm`** → **Dashboard** (sama pola **Map** / **spatial**).
+- [x] Konten tab: daftar berkas + kolom **catatan**; banner scope **task** (daftar tetap per project).
+- [x] **`BerkasListPanel`** + **`plm-berkas-types.ts`** — ringkasan di **Dashboard** tetap ada; tautan kejelasan ke tab **Berkas**.
+
+### F3-4 (selesai) — Detail berkas + stepper status
+
+- [x] Query **`berkas=<uuid>`** (hanya bermakna bersama **`view=berkas`**); normalisasi URL di **`workspace-client`** (hapus jika view lain / id tidak di project).
+- [x] **`BerkasDetailPanel`**: ringkasan nomor/tanggal/status, daftar pemilik, catatan; **stepper** empat langkah (`draft` → `diajukan` → `diproses` → `selesai`) dengan klik untuk **`update`** (server action **`plm-berkas-actions.ts`** + **`revalidatePath`**).
+- [x] Konstanta alur di **`plm-berkas-status.ts`**; daftar pemilik multi-baris di **`plm-berkas-types`** (`pemilikLinesForBerkas`).
+- [x] **`BerkasListPanel`**: baris dapat difokus dan diklik / Enter untuk buka detail; tab view lain menghapus **`berkas`** dari query.
+
+---
+
+*Terakhir diperbarui: §18 — F3-4 selesai (detail + stepper + `berkas=` URL).*
+
+---
+
+## 19. Progress eksekusi Fase 4 — Spasial dasar
+
+Tujuan selaras **§12.1 langkah 5** dan **§10.3**: geometri riil (PostGIS), validasi dasar, kaitan ke **berkas PLM**; peta Leaflet sudah ada (Fase 1 inc 8) — Fase 4 menguatkan **data** dan **aturan**.
+
+### Pemecahan slice (disepakati)
+
+| Slice | Fokus | Status |
+|--------|--------|--------|
+| **F4-1** | PostGIS + `bidang_hasil_ukur` + GiST + constraint + seed + RLS | Selesai |
+| **F4-2** | App: fetch GeoJSON / geometri untuk Map (gabung dengan atau mengganti footprint demo) | Selesai |
+| **F4-3** | UI: lapisan berkas / validasi UX; opsi overlap / peringatan (§10.3) | Selesai |
+
+### F4-1 (selesai) — Migration `0010`
+
+- [x] Migration **`0010_spatial_bidang_hasil_ukur.sql`**: **`create extension if not exists postgis`**.
+- [x] Tabel **`spatial.bidang_hasil_ukur`**: **`berkas_id`** unik → **`plm.berkas_permohonan`**, **`geom geometry(MultiPolygon, 4326)`**, **`label`**, **`ST_IsValid`**, **`ST_Area(geom::geography) > 0`**.
+- [x] Indeks **GiST** pada **`geom`**; indeks pada **`berkas_id`** (unik sudah mendukung lookup).
+- [x] **Seed** satu poligon (koordinat selaras demo footprint) untuk berkas demo **`BKS-2026-0042`** (`66666666-6666-4666-8666-666666660001`).
+- [x] **RLS** `authenticated`: **select/insert/update/delete** jika **`core_pm.is_project_member(b.project_id)`** pada berkas terkait.
+- [x] **Grant:** hanya **`authenticated`** (bukan **`anon`**), konsisten data tenant.
+
+*Catatan deploy:* jika **`create extension postgis`** ditolak di lingkungan Anda, aktifkan **PostGIS** lewat **Dashboard → Database → Extensions**, lalu jalankan ulang / perbaiki migration sesuai kebijakan host.
+
+### F4-2 (selesai) — Migration `0011` + Map
+
+- [x] View **`spatial.v_bidang_hasil_ukur_map`**: **`id`**, **`project_id`**, **`label`**, **`geojson`** (`jsonb` dari **`ST_AsGeoJSON(geom)`**), join **`plm.berkas_permohonan`** ( **`deleted_at is null`** ).
+- [x] **Grant** `select` untuk **`authenticated`** saja pada view; **`anon`** di-**revoke**.
+- [x] **`page.tsx`**: query view bila modul **`plm`** aktif di salah satu org project; prop **`bidangHasilUkurMap`** ke **`WorkspaceClient`**.
+- [x] **`WorkspaceClient`**: gabung footprint demo + bidang hasil ukur per project; legenda warna; pesan kosong memuat **`0010`/`0011`**.
+- [x] **`workspace-map`**: **`layerKind`** (`demo` vs **`bidang_hasil_ukur`**) untuk gaya dan popup.
+
+### F4-3 (selesai) — Migration `0012` + UX peta / berkas
+
+- [x] View **`spatial.v_bidang_hasil_ukur_map`** di-**recreate** dengan kolom **`berkas_id`** (tautan sorotan & daftar).
+- [x] **Map:** checkbox lapisan (footprint demo / bidang hasil ukur); banner **tumpang tindih** klien (`map-spatial-overlap.ts` + **`@turf/boolean-intersects`**); sorotan poligon lewat **`berkas=`** pada **`view=map`**; legenda sorotan.
+- [x] **URL:** parameter **`berkas`** dipertahankan untuk **Map** dan **Berkas**; validasi anggota project.
+- [x] **Berkas:** **`BerkasDetailPanel`** — tombol **Lihat di peta**; **`BerkasListPanel`** — kolom **Peta** bila modul **plm** + **spatial** aktif.
+
+---
+
+*Terakhir diperbarui: §19 — Fase 4 F4-1–F4-3 (migration `0010`–`0012`).*
+
+---
+
+## 20. Progress eksekusi Fase 5 — Pengukuran & legalisasi
+
+Tujuan selaras **§12.1 langkah 6** dan **§3.9–§3.11**: data permohonan informasi spasial, rantai pengukuran, legalisasi GU (multi-baris per berkas), lalu UI wizard (slice berikutnya).
+
+### Pemecahan slice (disepakati)
+
+| Slice | Fokus | Status |
+|--------|--------|--------|
+| **F5-1** | Migration: `permohonan_informasi_spasial`, `alat_ukur`, `pengukuran_*`, `legalisasi_gu` + `legalisasi_gu_file`, RLS, seed demo | Selesai |
+| **F5-2** | App: wizard tahap legalisasi (1–6), validasi file wajib, gating tahap | Selesai |
+| **F5-3** | App: CRUD pengukuran + surveyor/alat/dokumen; integrasi tab Berkas | Selesai |
+| **F5-4** | `legalisasi_gu_history`, unik domain `nomor_gu`/`nib_baru` per tahun+Kantah, bucket Storage + UI unggah/unduh | Selesai |
+
+### F5-1 (selesai) — Migration `0013`
+
+- [x] **`plm.permohonan_informasi_spasial`**: satu baris per **`berkas_id`** (unik); **`hasil_geom`** + GiST opsional; **`status_hasil`** terbatasi check.
+- [x] **`plm.alat_ukur`**: master per **`organization_id`**; unik **`(organization_id, kode_aset)`**.
+- [x] **`plm.pengukuran_lapangan`** + **`pengukuran_surveyor`** + **`pengukuran_alat`** + **`pengukuran_dokumen`**.
+- [x] **`plm.legalisasi_gu`**: **1:N** **`berkas_id`**; FK opsional ke **`permohonan`**, **`pengukuran`**, **`spatial.bidang_hasil_ukur`**; kolom tahap §3.11.
+- [x] **`plm.legalisasi_gu_file`**: **`tipe_file`** sesuai §3.11.
+- [x] **RLS** `authenticated` via **`core_pm.is_project_member`** (berkas / proyek); alat via organisasi proyek; **`pengukuran_alat`** memastikan organisasi alat = organisasi project berkas.
+- [x] **Seed** konsisten berkas demo **BKS-2026-0042** + alat GNSS org KJSB + satu pengukuran + satu legalisasi **draft**.
+
+*Catatan:* gating bisnis (mis. pengukuran hanya jika **`layak_lanjut`**, jumlah GNSS 1–2) belum di-enforce di DB — F5-3+ di aplikasi atau constraint lanjutan.
+
+### F5-2 (selesai) — Wizard legalisasi GU
+
+- [x] Modul **`plm-legalisasi-wizard.ts`**: urutan **`status_tahap`**, label tahap, **`canAdvanceLegalisasi`** (gating §3.11 + file wajib tahap 1, 2, 5).
+- [x] **`plm-legalisasi-actions.ts`**: **`patchLegalisasiGuAction`**, **`advanceLegalisasiGuAction`**, **`createLegalisasiGuDraftAction`**, **`addLegalisasiGuFileAction`** (metadata lampiran; **`storage_key`** unggah nyata di F5-4 atau placeholder **`pending:`**).
+- [x] **`legalisasi-gu-wizard.tsx`**: stepper 7 status, form kolom §3.11, multi-proses per berkas, **Simpan** / **Lanjut**, catat lampiran per **`tipe_file`**.
+- [x] **`page.tsx`** + **`WorkspaceClient`**: fetch **`legalisasi_gu`** + **`legalisasi_gu_file`**; **`BerkasDetailPanel`** menanamkan wizard.
+
+### F5-3 (selesai) — Panel pengukuran di Berkas
+
+- [x] **`plm-pengukuran-types.ts`**: tipe baris permohonan informasi spasial, pengukuran, surveyor, alat, dokumen.
+- [x] **`plm-pengukuran-actions.ts`**: **`patchPengukuranLapanganAction`** (whitelist; gating surveyor untuk **`diukur`** / **`olah_cad`** / **`selesai`**; **`hasil_cad`** wajib untuk **`selesai`**), **`createPengukuranLapanganAction`** (hanya jika permohonan **`layak_lanjut`**), CRUD surveyor/alat (maks. 2 alat) / tambah dokumen (metadata + **`storage_key`** placeholder).
+- [x] **`pengukuran-panel.tsx`**: ringkasan permohonan, kegiatan baru, form status/header, surveyor ±, alat dari master org proyek, dokumen **`gu_referensi`** / **`hasil_cad`**.
+- [x] **`BerkasDetailPanel`**: **`PengukuranPanel`** di atas wizard legalisasi (alur pengukuran → legalisasi).
+- [x] **`page.tsx`**: fetch permohonan, pengukuran, relasi, **`alat_ukur`** ter-scope; **`WorkspaceClient`**: **`organizationId`** untuk filter alat.
+
+### F5-4 (selesai) — Riwayat, unik domain, Storage
+
+- [x] **Migration `0014`**: tabel **`plm.legalisasi_gu_history`** ( **`patch` / `advance` / `file_added` / `draft_created`** + **`payload` jsonb** ) + RLS anggota project; indeks unik parsial **`uq_plm_leg_nomor_gu_kantor_tahun`** dan **`uq_plm_leg_nib_baru_kantor_tahun`** ( **`lower(trim(kantor))`**, tahun dari **`tanggal_gu`** / **`tanggal_nib`** ); bucket **`plm-legalisasi`** & **`plm-pengukuran`** + policy **`storage.objects`** (path **`{legalisasi_gu_id}/…`** / **`{pengukuran_id}/…`** ).
+- [x] **`plm-legalisasi-actions.ts`**: tulis riwayat setelah patch / naik tahap / lampiran / draft; pesan ramah untuk bentrok **`23505`**; validasi **`storage_key`** ( **`pending:`** atau prefix ID proses ).
+- [x] **`plm-pengukuran-actions.ts`**: validasi **`storage_key`** untuk dokumen.
+- [x] **`plm-storage.ts`**: konstanta bucket, sanitasi nama file, helper path unggah.
+- [x] **`legalisasi-gu-wizard.tsx`**: panel **Riwayat**, unggah file ke Storage lalu metadata; tautan **Unduh** (signed URL).
+- [x] **`pengukuran-panel.tsx`**: unggah dokumen ke **`plm-pengukuran`** + **Unduh**.
+- [x] **`page.tsx`** + **`WorkspaceClient`** + **`BerkasDetailPanel`**: fetch & oper **`legalisasiGuHistory`**.
+
+---
+
+*Terakhir diperbarui: §20 — Fase 5 F5-1–F5-4 (migration `0013`–`0014`, wizard + pengukuran + Storage).*
+
+---
+
+## 21. Progress eksekusi Fase 6 — Hardening
+
+Tujuan selaras **§12.1 langkah 7**: sistem lebih terawasi (audit), pengguna mendapat peringatan yang konsisten, ringkasan data untuk operasional (view/MV), dan jaminan regresi lewat tes alur utama.
+
+*Prasyarat:* Fase 5 selesai (**§20**). Jejak domain legalisasi sudah ada di **`plm.legalisasi_gu_history`**; Fase 6 bisa melengkapi dengan **audit lintas-domain** dan **polishing operasional**.
+
+### Pemecahan slice (disepakati)
+
+| Slice | Fokus | Status |
+|--------|--------|--------|
+| **F6-1** | **Audit trail generik:** `core_pm.audit_log` — `actor_user_id`, `action`, `entity`, `entity_id`, `payload` jsonb, `organization_id` / `project_id`; RLS; penulisan dari server actions (status berkas, modul org, legalisasi patch/advance/draft/file); *lanjutan opsional:* login, pengukuran, aksi lain | Selesai |
+| **F6-2** | **Notifikasi in-app:** `user_notifications` + sinkron overlap spasial **server** (selaras Turf/F4-3) + bell/dropdown; *lanjutan:* trigger DB, preferensi user, legalisasi “macet” | Selesai |
+| **F6-3** | **Laporan:** view SQL ringkas (berkas / legalisasi / pengukuran per project) + tab **Laporan** + CSV klien; *lanjutan:* MV + refresh terjadwal | Selesai |
+| **F6-4** | **QA & CI:** Playwright — smoke **login** + root; **PLM** berkas (opsional, butuh **`E2E_EMAIL`** / **`E2E_PASSWORD`** di CI); **`npm run typecheck`**; workflow **lint + typecheck + E2E** (`chromium`, tanpa unit runner terpisah) | Selesai |
+
+### F6-1 (selesai) — Audit trail generik
+
+- [x] **Migration `0015`**: tabel **`core_pm.audit_log`** (append-only: tanpa grant **update**/**delete** ke **`authenticated`**); RLS **baca** per anggota project (baris berisi **`project_id`**) atau anggota org (baris **`project_id` null**); **insert** jika **`actor_user_id = auth.uid()`** dan anggota org + konsistensi org↔project.
+- [x] **`app/src/lib/audit-log.ts`**: **`fetchOrgProjectForBerkasId`**, **`fetchOrgProjectForLegalisasiGuId`**, **`insertAuditLogRow`** (pemendekan JSON **`payload`** ~12k karakter).
+- [x] **`plm-berkas-actions.ts`**: audit **`plm.berkas_permohonan.status_update`** (`from` / `to`).
+- [x] **`workspace-modules-actions.ts`**: audit **`core_pm.organization_modules.set`**.
+- [x] **`plm-legalisasi-actions.ts`**: audit **`plm.legalisasi_gu.patch`** (daftar field), **`advance`**, **`draft_created`**, **`plm.legalisasi_gu_file.insert`** (tanpa log panjang **`storage_key`**; flag **`pending_storage`**).
+- [ ] *Lanjutan opsional:* audit login, mutasi pengukuran, aksi PLM lain — pola sama.
+
+### F6-2 (selesai) — Notifikasi & peringatan
+
+- [x] **Migration `0016`**: **`core_pm.user_notifications`** (`kind` **`spatial_overlap`** | **`system`**, `severity`, judul, isi, `payload`, `read_at`); RLS milik **`user_id = auth.uid()`** + insert dengan anggota project/org konsisten.
+- [x] **`spatial-overlap-notifications-sync.ts`**: per project (modul **plm** + **spatial** aktif) hitung **`findMapOverlapWarnings`** lalu hapus unread **`spatial_overlap`** lama per project dan sisip satu baris peringatan bila masih ada tumpang tindih.
+- [x] **`page.tsx`**: panggil sinkron lalu fetch notifikasi untuk user; prop ke **`WorkspaceClient`**.
+- [x] **`notifications-bell.tsx`** + **`user-notifications-actions.ts`**: bell, daftar, **Dibaca** / **Tandai semua dibaca**, tautan ke tab **Map**.
+- [ ] *Lanjutan opsional:* notifikasi dari trigger PostGIS overlap, legalisasi idle, preferensi channel.
+
+### F6-3 (selesai) — View laporan + UI
+
+- [x] **Migration `0017`**: view **`plm.v_berkas_permohonan_summary_by_status`**, **`plm.v_legalisasi_gu_summary_by_tahap`**, **`plm.v_pengukuran_lapangan_summary_by_status`** dengan **`(security_invoker = true)`** agar RLS tabel dasar tetap dipakai; grant **select** ke **`authenticated`**.
+- [x] **`page.tsx`**: fetch tiga view untuk **`project_id`** di scope sidebar; prop ke **`WorkspaceClient`**.
+- [x] **`laporan-panel.tsx`**: tiga tabel ringkas + tombol **Unduh CSV** per bagian.
+- [x] Tab **Laporan** (`view=laporan`): **`workspace-views`**, **`workspace-url`**, **`workspace-modules`** (syarat modul **plm**), **`workspace-client`** + normalisasi URL bila modul nonaktif.
+- [ ] *Lanjutan opsional:* **materialized view** + `REFRESH` terjadwal / manual, laporan tambahan (invoice, dll.).
+
+### F6-4 (selesai) — E2E & pipeline
+
+- [x] **`@playwright/test`**, **`playwright.config.ts`** (`webServer`: prod di CI dengan env Supabase kosong untuk smoke; dev lokal dengan **`reuseExistingServer`**).
+- [x] **`e2e/smoke.spec.ts`**: halaman login + root (redirect / pesan env / scope).
+- [x] **`e2e/plm-authenticated.spec.ts`**: alur berkas bila **`E2E_EMAIL`** / **`E2E_PASSWORD`** diset; dilewati jika tidak.
+- [x] **`package.json`**: skrip **`typecheck`**, **`test:e2e`**, **`test:e2e:ui`**, **`test:e2e:install`**.
+- [x] **`.github/workflows/ci.yml`**: job **lint-typecheck** + **e2e** ( **`playwright install --with-deps chromium`** ); rahasia opsional untuk tes terautentikasi.
+- [ ] *Lanjutan opsional:* skenario task board / org switch; **Vitest** (unit) bila ingin job “unit” eksplisit.
+
+### Catatan dependensi
+
+- **F6-1** bisa berjalan paralel parsial dengan **F6-4** (smoke test dulu tanpa audit DB).
+- **F6-3** mengandalkan data Fase 3–5 sudah stabil; hindari MV yang mengunci kolom yang masih sering berubah tanpa versi skema.
+- **F6-2** overlap server: selaras **§10.3** (constraint/trigger) — koordinasikan dengan keputusan “overlap boleh + warning”.
+
+---
+
+*Terakhir diperbarui: §21 — Fase 6: F6-1–F6-4 (`0015`–`0017` + Playwright/CI).*
+
+---
+
+## 22. Progress eksekusi Fase 7 — Go-live bertahap
+
+Tujuan selaras **§12.1 langkah 8**: satu atau beberapa **organisasi pilot** memakai sistem dengan **satu jalur deploy** (**Vercel Production** + **satu project Supabase** — lihat **`DEPLOY.md`** termasuk bagian *minus*). **Migrasi skema** dan **cadangan** terdokumentasi, serta **monitoring** dan **runbook** operasional agar rollout bisa diperlebar bertahap. Perlu isolasi Preview/DB kedua adalah **opsional** ke depan, bukan syarat dokumen ini.
+
+*Prasyarat:* Fase 6 selesai (**§21**). Parameter platform awal sudah dirangkum di **§13** (Supabase, GitHub, Vercel); Fase 7 mengeksekusi keputusan itu untuk jalur **non-dev**.
+
+### Pemecahan slice (disepakati)
+
+| Slice | Fokus | Status |
+|--------|--------|--------|
+| **F7-1** | **Lingkungan & deploy:** **`DEPLOY.md`** — **satu** Vercel Production + **satu** Supabase, minus dokumentasi; **`infra/environments.md`**; **`.env.example`**; Root **`app`**; smoke + **`PLAYWRIGHT_BASE_URL`** | Selesai |
+| **F7-2** | **Pilot & kontrol akses:** **`docs/PILOT.md`** (daftar org + SQL modul); **`AUTH_SIGNUP_MODE`** / domain; banner **`NEXT_PUBLIC_SHOW_PILOT_BANNER`**; UI login + **`pilot-config`** + banner workspace | Selesai |
+| **F7-3** | **Migrasi DB & cadangan produksi:** prosedur urutan **migration** sebelum/bersama rilis; cek **backup / PITR** Supabase; perkuat CI dengan **cek migrasi** (dry-run / `supabase` CLI) pada PR bila toolchain siap — selaras **§13.2** | Rencana |
+| **F7-4** | **Monitoring, runbook, komunikasi rollout:** agregasi error (mis. Sentry atau setara), log Supabase/Vercel; **runbook** insiden (rollback deploy, nonaktifkan modul, komunikasi ke pengguna); kriteria “siap perluas” dari pilot ke org berikutnya | Rencana |
+
+### F7-1 (selesai) — Lingkungan & deploy
+
+- [x] **`DEPLOY.md`** (root): satu jalur Vercel Production + satu Supabase; tabel env; **Auth**; **minus** setup; opsi mematikan Preview; smoke.
+- [x] **`infra/environments.md`**: tautan ke **`DEPLOY.md`**.
+- [x] **`README.md`**: rujukan deploy + **Root Directory** Vercel **`app`**.
+- [x] **`app/.env.example`** + **`/.env.example`**: **`NEXT_PUBLIC_SITE_URL`** + catatan **`SUPABASE_SERVICE_ROLE_KEY`** (server-only).
+- [x] **`playwright.config.ts`**: jika **`PLAYWRIGHT_BASE_URL`** diset, E2E memakai URL deployment (tanpa **`webServer`** lokal).
+- [ ] *Operator:* checklist akhir **`DEPLOY.md`** (Vercel Production + Supabase + Auth).
+
+### F7-2 (selesai) — Pilot & kontrol akses
+
+- [x] **`docs/PILOT.md`**: template daftar org pilot + contoh SQL **`organization_modules`** + rujukan env.
+- [x] **`app/src/lib/pilot-config.ts`**: **`AUTH_SIGNUP_MODE`** (`open` / `closed` / `email_domain`), **`AUTH_SIGNUP_ALLOWED_EMAIL_DOMAIN`**.
+- [x] **`auth/actions.ts`** **`signup`**: penolakan server selaras mode/domain.
+- [x] **`login/page.tsx`**: sembunyikan form daftar jika **`closed`**; teks bantuan domain.
+- [x] **`workspace-client.tsx`**: banner opsional **`NEXT_PUBLIC_SHOW_PILOT_BANNER`** + **`NEXT_PUBLIC_PILOT_BANNER_TEXT`**.
+- [x] **`app/.env.example`**, **`/.env.example`**, **`DEPLOY.md`**, **`README.md`**: variabel pilot terdokumentasi.
+- [ ] *Operator:* isi tabel pilot di **`docs/PILOT.md`**, set env di Vercel, atur baris **`organization_modules`** sesuai matriks.
+
+### F7-3 (rencana) — Migrasi & cadangan
+
+- [ ] Prosedur menjalankan migration baru ke **staging** lalu ke **prod** (urutan, downtime jika ada).
+- [ ] Verifikasi backup harian / PITR sesuai paket Supabase — **§13.2**.
+- [ ] CI: langkah tambahan **validasi skema** (dry-run migration, atau job terpisah) setelah pola repo stabil.
+
+### F7-4 (rencana) — Monitoring & rollout
+
+- [ ] Error tracking untuk frontend/server (contoh: Sentry + environment tags).
+- [ ] Runbook 1–2 halaman: siapa dihubungi, cara rollback Vercel, cara freeze migration berbahaya.
+- [ ] Kriteria exit pilot (stabilitas, feedback, metrik) sebelum menambah organisasi.
+
+### Catatan dependensi
+
+- **F7-1** menjadi fondasi untuk smoke **F7-4** di URL production (satu jalur).
+- **F7-2** dan **F7-3** bisa berjalan paralel setelah deploy production hidup; keputusan pilot sering mengunci konfig modul sebelum data penuh.
+- **F7-3** dengan satu DB: migration langsung ke project yang dipakai — hindari migrasi besar tanpa review/backup; jika nanti ada DB staging terpisah, prosedur “staging dulu” bisa dihidupkan lagi.
+
+---
+
+*Terakhir diperbarui: §22 — Fase 7: **F7-1**–**F7-2** selesai; F7-3–F7-4 rencana.*
