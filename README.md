@@ -9,6 +9,7 @@ Fondasi implementasi aplikasi Project Management modular dengan dukungan domain 
 - Pilot / undangan / modul per org: **`docs/PILOT.md`**
 - Migrasi DB production & cadangan: **`docs/MIGRASI-DAN-CADANGAN.md`**
 - Monitoring & runbook (F7-4): **`docs/MONITORING.md`**, **`docs/RUNBOOK-OPERASI.md`**, **`docs/KRITERIA-KELUAR-PILOT.md`**
+- Guideline migrasi UI bertahap ke shadcn/ui: **`docs/SHADCN-MIGRATION-GUIDELINE.md`**
 
 ## Struktur awal
 

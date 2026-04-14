@@ -120,7 +120,7 @@ export default async function Home({ searchParams }: HomeProps) {
       .schema("core_pm")
       .from("issues")
       .select(
-        "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at"
+        "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at, progress_target, progress_actual, issue_weight"
       )
       .is("deleted_at", null)
       .order("sort_order"),

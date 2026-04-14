@@ -9,6 +9,10 @@ import {
   signOut,
 } from "@/app/auth/actions";
 import { NotificationsBell } from "./notifications-bell";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { BerkasDetailPanel } from "./berkas-detail-panel";
 import {
   LaporanPanel,
@@ -21,6 +25,7 @@ import {
   createProjectTaskAction,
   reopenTaskAction,
   setTaskDoneAction,
+  updateTaskProgressAction,
 } from "./core-task-actions";
 import type {
   FinanceInvoiceItemRow,
@@ -118,6 +123,9 @@ export type IssueRow = {
   sort_order: number;
   starts_at: string | null;
   due_at: string | null;
+  progress_target: string | null;
+  progress_actual: string | null;
+  issue_weight: string;
 };
 
 type Props = {
@@ -161,6 +169,64 @@ function statusBadgeClass(category: string | null | undefined): string {
     return "bg-blue-100 text-blue-800";
   }
   return "bg-slate-100 text-slate-700";
+}
+
+function computeIssueProgressPercent(
+  issue: IssueRow,
+  statusCategory: string | null | undefined
+): number {
+  const target = issue.progress_target == null ? NaN : Number(issue.progress_target);
+  const actual = issue.progress_actual == null ? NaN : Number(issue.progress_actual);
+  if (Number.isFinite(target) && target > 0 && Number.isFinite(actual) && actual >= 0) {
+    return Math.max(0, Math.min(100, (actual / target) * 100));
+  }
+  if (statusCategory === "done") return 100;
+  return 0;
+}
+
+function computeWeightedProgressByIssue(
+  projectIssues: IssueRow[],
+  statusById: Map<string, StatusRow>
+): Map<string, number> {
+  const childrenByParent = new Map<string, IssueRow[]>();
+  for (const issue of projectIssues) {
+    if (!issue.parent_id) continue;
+    const arr = childrenByParent.get(issue.parent_id) ?? [];
+    arr.push(issue);
+    childrenByParent.set(issue.parent_id, arr);
+  }
+
+  const memo = new Map<string, number>();
+  const walk = (issue: IssueRow): number => {
+    const cached = memo.get(issue.id);
+    if (cached != null) return cached;
+
+    const children = childrenByParent.get(issue.id) ?? [];
+    if (children.length === 0) {
+      const st = issue.status_id ? statusById.get(issue.status_id) : null;
+      const leafPct = computeIssueProgressPercent(issue, st?.category);
+      memo.set(issue.id, leafPct);
+      return leafPct;
+    }
+
+    let weightedSum = 0;
+    let weightTotal = 0;
+    for (const child of children) {
+      const wRaw = Number(child.issue_weight);
+      const w = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : 1;
+      const pct = walk(child);
+      weightedSum += pct * w;
+      weightTotal += w;
+    }
+    const pct = weightTotal > 0 ? weightedSum / weightTotal : 0;
+    memo.set(issue.id, pct);
+    return pct;
+  };
+
+  for (const issue of projectIssues) {
+    walk(issue);
+  }
+  return memo;
 }
 
 function flattenIssuesForProject(
@@ -231,6 +297,9 @@ export function WorkspaceClient({
   const searchParams = useSearchParams();
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
   const [taskPending, startTaskTransition] = useTransition();
+  const [collapsedIssueIds, setCollapsedIssueIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const orgsWithProjects = useMemo(() => {
     const ids = new Set(projects.map((p) => p.organization_id));
@@ -573,12 +642,37 @@ export function WorkspaceClient({
       }
       return rows;
     }
-    return flattenIssuesWithDepth(selectedProjectId, issues);
+    return issues
+      .filter((i) => i.project_id === selectedProjectId && !i.parent_id)
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((issue) => ({ issue, depth: 0 }));
   }, [selectedProjectId, selectedTaskId, issues]);
   const statusById = useMemo(
     () => new Map(statusesForProject.map((s) => [s.id, s])),
     [statusesForProject]
   );
+  const issueProgressById = useMemo(() => {
+    if (!selectedProjectId) return new Map<string, number>();
+    const projectIssues = issues.filter((i) => i.project_id === selectedProjectId);
+    return computeWeightedProgressByIssue(projectIssues, statusById);
+  }, [issues, selectedProjectId, statusById]);
+  const projectProgressPercent = useMemo(() => {
+    if (!selectedProjectId) return 0;
+    const topLevel = issues.filter(
+      (i) => i.project_id === selectedProjectId && !i.parent_id
+    );
+    if (topLevel.length === 0) return 0;
+    let weightedSum = 0;
+    let weightTotal = 0;
+    for (const issue of topLevel) {
+      const pct = issueProgressById.get(issue.id) ?? 0;
+      const wRaw = Number(issue.issue_weight);
+      const w = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : 1;
+      weightedSum += pct * w;
+      weightTotal += w;
+    }
+    return weightTotal > 0 ? weightedSum / weightTotal : 0;
+  }, [issues, issueProgressById, selectedProjectId]);
 
   const replaceQuery = (mutate: (p: URLSearchParams) => void) => {
     const p = new URLSearchParams(searchParams.toString());
@@ -682,66 +776,64 @@ export function WorkspaceClient({
                 Buat organisasi + project pertama
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
-                <label className="text-xs text-slate-700">
-                  Nama organisasi *
-                  <input
+                <div className="space-y-1">
+                  <Label className="text-xs text-slate-700">Nama organisasi *</Label>
+                  <Input
                     name="organization_name"
                     required
                     placeholder="Contoh: KJSB Cirebon"
-                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                    className="h-8 bg-white text-sm text-slate-900"
                   />
-                </label>
-                <label className="text-xs text-slate-700">
-                  Slug organisasi (opsional)
-                  <input
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-slate-700">
+                    Slug organisasi (opsional)
+                  </Label>
+                  <Input
                     name="organization_slug"
                     placeholder="kjsb-cirebon"
-                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                    className="h-8 bg-white text-sm text-slate-900"
                   />
-                </label>
-                <label className="text-xs text-slate-700">
-                  Nama project *
-                  <input
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-slate-700">Nama project *</Label>
+                  <Input
                     name="project_name"
                     required
                     placeholder="Contoh: PLM Cirebon 2027"
-                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                    className="h-8 bg-white text-sm text-slate-900"
                   />
-                </label>
-                <label className="text-xs text-slate-700">
-                  Kode project (opsional)
-                  <input
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-slate-700">Kode project (opsional)</Label>
+                  <Input
                     name="project_key"
                     placeholder="PLM27"
-                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                    className="h-8 bg-white text-sm text-slate-900"
                   />
-                </label>
+                </div>
               </div>
-              <label className="block text-xs text-slate-700">
-                Deskripsi project (opsional)
-                <textarea
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-700">
+                  Deskripsi project (opsional)
+                </Label>
+                <Textarea
                   name="project_description"
                   rows={2}
                   placeholder="Catatan singkat project"
-                  className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                  className="min-h-14 bg-white text-sm text-slate-900"
                 />
-              </label>
-              <button
-                type="submit"
-                className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
-              >
+              </div>
+              <Button type="submit" className="bg-emerald-700 hover:bg-emerald-800">
                 Buat organisasi & project
-              </button>
+              </Button>
             </form>
           )}
           {userEmail && (
             <form action={joinDemoProjectsAction} className="mt-3">
-              <button
-                type="submit"
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
+              <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
                 Atau gabung ke project demo (KJSB)
-              </button>
+              </Button>
             </form>
           )}
           <p className="mt-4 text-xs text-slate-600">
@@ -752,12 +844,14 @@ export function WorkspaceClient({
           </p>
           {userEmail && (
             <form action={signOut} className="mt-6">
-              <button
+              <Button
                 type="submit"
-                className="text-xs text-slate-500 underline hover:text-slate-800"
+                variant="ghost"
+                size="sm"
+                className="h-auto px-1 text-xs text-slate-500 underline hover:text-slate-800"
               >
                 Keluar ({userEmail})
-              </button>
+              </Button>
             </form>
           )}
         </div>
@@ -826,6 +920,21 @@ export function WorkspaceClient({
           </p>
           {projectsInOrg.map((p) => {
             const treeRows = flattenIssuesWithDepth(p.id, issues);
+            const projectIssues = issues.filter((i) => i.project_id === p.id);
+            const parentByIssueId = new Map(
+              projectIssues.map((i) => [i.id, i.parent_id])
+            );
+            const issueIdsWithChildren = new Set(
+              projectIssues.filter((i) => i.parent_id).map((i) => i.parent_id as string)
+            );
+            const visibleTreeRows = treeRows.filter(({ issue }) => {
+              let parentId = issue.parent_id;
+              while (parentId) {
+                if (collapsedIssueIds.has(parentId)) return false;
+                parentId = parentByIssueId.get(parentId) ?? null;
+              }
+              return true;
+            });
             const isSelectedProject =
               selectedProjectId === p.id && !selectedTaskId;
 
@@ -850,28 +959,52 @@ export function WorkspaceClient({
                   {p.name}
                 </button>
                 <ul className="space-y-0.5 border-t border-slate-100 py-1 pl-2">
-                  {treeRows.map(({ issue: t, depth }) => {
+                  {visibleTreeRows.map(({ issue: t, depth }) => {
                     const isTask = selectedTaskId === t.id;
+                    const hasChildren = issueIdsWithChildren.has(t.id);
+                    const isCollapsed = collapsedIssueIds.has(t.id);
                     return (
                       <li key={t.id} style={{ paddingLeft: depth * 12 }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            replaceQuery((q) => {
-                              q.set("org", p.organization_id);
-                              q.set("project", p.id);
-                              q.set("task", t.id);
-                            });
-                          }}
-                          className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
-                            isTask
-                              ? "bg-blue-100 text-blue-900"
-                              : "text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          {t.key_display ? `${t.key_display} — ` : ""}
-                          {t.title}
-                        </button>
+                        <div className="flex items-center gap-1">
+                          {hasChildren ? (
+                            <button
+                              type="button"
+                              className="rounded px-1 text-xs text-slate-500 hover:bg-slate-100"
+                              title={isCollapsed ? "Expand" : "Collapse"}
+                              onClick={() => {
+                                setCollapsedIssueIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(t.id)) next.delete(t.id);
+                                  else next.add(t.id);
+                                  return next;
+                                });
+                              }}
+                            >
+                              {isCollapsed ? "▸" : "▾"}
+                            </button>
+                          ) : (
+                            <span className="inline-block w-4 text-center text-xs text-slate-300">
+                              ·
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              replaceQuery((q) => {
+                                q.set("org", p.organization_id);
+                                q.set("project", p.id);
+                                q.set("task", t.id);
+                              });
+                            }}
+                            className={`w-full rounded-md px-2 py-1.5 text-left text-sm ${
+                              isTask
+                                ? "bg-blue-100 text-blue-900"
+                                : "text-slate-600 hover:bg-slate-50"
+                            }`}
+                          >
+                            {t.title}
+                          </button>
+                        </div>
                       </li>
                     );
                   })}
@@ -898,7 +1031,7 @@ export function WorkspaceClient({
           </p>
           <h2 className="text-lg font-semibold">
             {selectedTask
-              ? `Task: ${selectedTask.key_display ? `${selectedTask.key_display} — ` : ""}${selectedTask.title}`
+              ? `Task: ${selectedTask.title}`
               : selectedProject
                 ? `Project: ${selectedProject.name}`
                 : "—"}
@@ -1000,14 +1133,20 @@ export function WorkspaceClient({
                     <span className="font-semibold">{issuesInScope.length}</span>
                   </div>
                   <div className="rounded-md bg-slate-50 p-3 text-sm">
-                    Project key:{" "}
+                    Nama project:{" "}
                     <span className="font-semibold">
-                      {selectedProject?.key ?? "—"}
+                      {selectedProject?.name ?? "—"}
                     </span>
                   </div>
                   <div className="rounded-md bg-slate-50 p-3 text-sm">
                     View aktif:{" "}
                     <span className="font-semibold">{activeView}</span>
+                  </div>
+                  <div className="rounded-md bg-slate-50 p-3 text-sm">
+                    Progress project:{" "}
+                    <span className="font-semibold">
+                      {projectProgressPercent.toFixed(1)}%
+                    </span>
                   </div>
                   <div className="rounded-md bg-slate-50 p-3 text-sm sm:col-span-2 lg:col-span-4">
                     Modul organisasi (Fase 2):{" "}
@@ -1035,38 +1174,71 @@ export function WorkspaceClient({
                         });
                       }}
                     >
-                      <label className="text-xs text-slate-700">
-                        Judul task *
-                        <input
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Judul task *</Label>
+                        <Input
                           name="title"
                           required
                           placeholder="Contoh: Susun jadwal kickoff"
-                          className="mt-0.5 block w-72 rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                          className="h-8 w-72 bg-white text-sm"
                         />
-                      </label>
-                      <label className="text-xs text-slate-700">
-                        Mulai
-                        <input
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Mulai</Label>
+                        <Input
                           name="starts_at"
                           type="date"
-                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                          className="h-8 bg-white text-sm"
                         />
-                      </label>
-                      <label className="text-xs text-slate-700">
-                        Tenggat
-                        <input
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Tenggat</Label>
+                        <Input
                           name="due_at"
                           type="date"
-                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                          className="h-8 bg-white text-sm"
                         />
-                      </label>
-                      <button
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Target (opsional)</Label>
+                        <Input
+                          name="progress_target"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0"
+                          className="h-8 w-28 bg-white text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Realisasi (opsional)</Label>
+                        <Input
+                          name="progress_actual"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0"
+                          className="h-8 w-28 bg-white text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Bobot</Label>
+                        <Input
+                          name="issue_weight"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          defaultValue="1"
+                          className="h-8 w-24 bg-white text-sm"
+                        />
+                      </div>
+                      <Button
                         type="submit"
                         disabled={taskPending}
-                        className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                        className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
                       >
                         Tambah task
-                      </button>
+                      </Button>
                     </form>
                     {taskMsg && (
                       <p className="mt-2 text-xs text-red-600" role="alert">
@@ -1083,7 +1255,6 @@ export function WorkspaceClient({
                     <p className="mt-1 text-xs text-amber-900/90">
                       Parent:{" "}
                       <span className="font-medium">
-                        {selectedTask.key_display ? `${selectedTask.key_display} — ` : ""}
                         {selectedTask.title}
                       </span>
                     </p>
@@ -1105,44 +1276,149 @@ export function WorkspaceClient({
                         });
                       }}
                     >
-                      <label className="text-xs text-slate-700">
-                        Judul subtask *
-                        <input
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Judul subtask *</Label>
+                        <Input
                           name="title"
                           required
                           placeholder="Contoh: Lengkapi dokumen pendukung"
-                          className="mt-0.5 block w-72 rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                          className="h-8 w-72 bg-white text-sm"
                         />
-                      </label>
-                      <label className="text-xs text-slate-700">
-                        Mulai
-                        <input
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Mulai</Label>
+                        <Input
                           name="starts_at"
                           type="date"
-                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                          className="h-8 bg-white text-sm"
                         />
-                      </label>
-                      <label className="text-xs text-slate-700">
-                        Tenggat
-                        <input
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Tenggat</Label>
+                        <Input
                           name="due_at"
                           type="date"
-                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                          className="h-8 bg-white text-sm"
                         />
-                      </label>
-                      <button
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Target (opsional)</Label>
+                        <Input
+                          name="progress_target"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0"
+                          className="h-8 w-28 bg-white text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Realisasi (opsional)</Label>
+                        <Input
+                          name="progress_actual"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0"
+                          className="h-8 w-28 bg-white text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Bobot</Label>
+                        <Input
+                          name="issue_weight"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          defaultValue="1"
+                          className="h-8 w-24 bg-white text-sm"
+                        />
+                      </div>
+                      <Button
                         type="submit"
                         disabled={taskPending}
-                        className="rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                        className="bg-amber-700 hover:bg-amber-800 disabled:opacity-50"
                       >
                         Tambah subtask
-                      </button>
+                      </Button>
                     </form>
                     {taskMsg && (
                       <p className="mt-2 text-xs text-red-600" role="alert">
                         {taskMsg}
                       </p>
                     )}
+                  </div>
+                )}
+                {selectedProjectId && selectedTask && (
+                  <div className="mt-3 rounded-md border border-sky-200 bg-sky-50/60 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-sky-900">
+                      Progress angka (opsional)
+                    </p>
+                    <p className="mt-1 text-xs text-sky-900/90">
+                      Task:{" "}
+                      <span className="font-medium">
+                        {selectedTask.title}
+                      </span>
+                    </p>
+                    <form
+                      className="mt-2 flex flex-wrap items-end gap-2"
+                      action={(fd) => {
+                        setTaskMsg(null);
+                        fd.set("project_id", selectedProjectId);
+                        fd.set("issue_id", selectedTask.id);
+                        startTaskTransition(async () => {
+                          const r = await updateTaskProgressAction(fd);
+                          if (r.error) {
+                            setTaskMsg(r.error);
+                            return;
+                          }
+                          router.refresh();
+                        });
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Target</Label>
+                        <Input
+                          name="progress_target"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          defaultValue={selectedTask.progress_target ?? ""}
+                          placeholder="mis. 120"
+                          className="h-8 w-32 bg-white text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Realisasi</Label>
+                        <Input
+                          name="progress_actual"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          defaultValue={selectedTask.progress_actual ?? ""}
+                          placeholder="mis. 48"
+                          className="h-8 w-32 bg-white text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-slate-700">Bobot</Label>
+                        <Input
+                          name="issue_weight"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          defaultValue={selectedTask.issue_weight ?? "1"}
+                          className="h-8 w-24 bg-white text-sm"
+                        />
+                      </div>
+                      <Button
+                        type="submit"
+                        disabled={taskPending}
+                        className="bg-sky-700 hover:bg-sky-800 disabled:opacity-50"
+                      >
+                        Simpan angka
+                      </Button>
+                    </form>
                   </div>
                 )}
                 {enabledModulesForOrg.has("plm") && selectedProjectId && (
@@ -1177,9 +1453,11 @@ export function WorkspaceClient({
                 <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-600">
-                      <th className="py-2 pr-4 font-medium">Key</th>
                       <th className="py-2 pr-4 font-medium">Judul</th>
                       <th className="py-2 pr-4 font-medium">Status</th>
+                      <th className="py-2 pr-4 font-medium">Bobot</th>
+                      <th className="py-2 pr-4 font-medium">Realisasi/Target</th>
+                      <th className="py-2 pr-4 font-medium">Progress %</th>
                       <th className="py-2 pr-4 font-medium">Mulai</th>
                       <th className="py-2 pr-4 font-medium">Tenggat</th>
                       <th className="py-2 pr-4 font-medium">Sub-task?</th>
@@ -1187,10 +1465,30 @@ export function WorkspaceClient({
                     </tr>
                   </thead>
                   <tbody>
+                    {!selectedTaskId && selectedProject && (
+                      <tr className="border-b border-blue-100 bg-blue-50/60">
+                        <td className="py-2 pr-4 font-semibold text-blue-900">
+                          {selectedProject.name}
+                        </td>
+                        <td className="py-2 pr-4 text-blue-900">Ringkasan</td>
+                        <td className="py-2 pr-4 text-blue-900">—</td>
+                        <td className="py-2 pr-4 text-blue-900">— / —</td>
+                        <td className="py-2 pr-4 font-semibold text-blue-900">
+                          {projectProgressPercent.toFixed(1)}%
+                        </td>
+                        <td className="py-2 pr-4 text-blue-900">—</td>
+                        <td className="py-2 pr-4 text-blue-900">—</td>
+                        <td className="py-2 pr-4 text-blue-900">—</td>
+                        <td className="py-2 pr-4 text-blue-900">—</td>
+                      </tr>
+                    )}
                     {tableRows.map(({ issue, depth }) => {
                       const isChild = Boolean(issue.parent_id);
                       const st = issue.status_id ? statusById.get(issue.status_id) : null;
                       const isDone = st?.category === "done";
+                      const progressPct = issueProgressById.get(issue.id) ?? 0;
+                      const isSelectedRootRow =
+                        selectedTaskId != null && issue.id === selectedTaskId;
                       return (
                         <tr
                           key={issue.id}
@@ -1207,12 +1505,15 @@ export function WorkspaceClient({
                             }
                           }}
                         >
-                          <td className="py-2 pr-4 font-mono text-xs text-slate-700">
+                          <td
+                            className={`py-2 pr-4 ${
+                              isSelectedRootRow ? "font-semibold text-blue-900" : ""
+                            }`}
+                          >
                             <span style={{ paddingLeft: depth * 12 }}>
-                              {issue.key_display ?? "—"}
+                              {issue.title}
                             </span>
                           </td>
-                          <td className="py-2 pr-4">{issue.title}</td>
                           <td className="py-2 pr-4">
                             <span
                               className={`rounded px-2 py-0.5 text-xs font-medium ${statusBadgeClass(
@@ -1221,6 +1522,15 @@ export function WorkspaceClient({
                             >
                               {st?.name ?? "Tanpa status"}
                             </span>
+                          </td>
+                          <td className="py-2 pr-4 text-slate-600">
+                            {issue.issue_weight ?? "1"}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-600">
+                            {issue.progress_actual ?? "—"} / {issue.progress_target ?? "—"}
+                          </td>
+                          <td className="py-2 pr-4 text-slate-600">
+                            {progressPct.toFixed(1)}%
                           </td>
                           <td className="py-2 pr-4 text-slate-600">
                             {formatShortDate(issue.starts_at)}
@@ -1234,6 +1544,8 @@ export function WorkspaceClient({
                           <td className="py-2 pr-4">
                             {selectedProjectId ? (
                               <form
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => e.stopPropagation()}
                                 action={(fd) => {
                                   fd.set("issue_id", issue.id);
                                   fd.set("project_id", selectedProjectId);
