@@ -35,12 +35,5 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { error: rpcError } = await supabase
-    .schema("core_pm")
-    .rpc("join_demo_org_projects");
-  if (rpcError) {
-    console.warn("join_demo_org_projects after callback:", rpcError.message);
-  }
-
   return response;
 }

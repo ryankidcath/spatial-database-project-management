@@ -2,8 +2,12 @@
 
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { joinDemoProjectsAction, signOut } from "@/app/auth/actions";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import {
+  createOrganizationProjectAction,
+  joinDemoProjectsAction,
+  signOut,
+} from "@/app/auth/actions";
 import { NotificationsBell } from "./notifications-bell";
 import { BerkasDetailPanel } from "./berkas-detail-panel";
 import {
@@ -13,6 +17,11 @@ import {
   type PlmPengukuranStatusSummaryRow,
 } from "./laporan-panel";
 import { FinancePanel } from "./finance-panel";
+import {
+  createProjectTaskAction,
+  reopenTaskAction,
+  setTaskDoneAction,
+} from "./core-task-actions";
 import type {
   FinanceInvoiceItemRow,
   FinanceInvoiceRow,
@@ -144,6 +153,16 @@ type Props = {
 
 type TableRow = { issue: IssueRow; depth: number };
 
+function statusBadgeClass(category: string | null | undefined): string {
+  if (category === "done") {
+    return "bg-emerald-100 text-emerald-800";
+  }
+  if (category === "in_progress") {
+    return "bg-blue-100 text-blue-800";
+  }
+  return "bg-slate-100 text-slate-700";
+}
+
 function flattenIssuesForProject(
   projectId: string,
   issues: IssueRow[]
@@ -210,6 +229,8 @@ export function WorkspaceClient({
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [taskMsg, setTaskMsg] = useState<string | null>(null);
+  const [taskPending, startTaskTransition] = useTransition();
 
   const orgsWithProjects = useMemo(() => {
     const ids = new Set(projects.map((p) => p.organization_id));
@@ -436,6 +457,7 @@ export function WorkspaceClient({
       .filter((s) => s.project_id === selectedProjectId)
       .sort((a, b) => a.position - b.position);
   }, [statuses, selectedProjectId]);
+  const defaultStatusId = statusesForProject[0]?.id ?? null;
 
   const issuesInScope = useMemo(() => {
     if (!selectedProjectId) return [];
@@ -553,6 +575,10 @@ export function WorkspaceClient({
     }
     return flattenIssuesWithDepth(selectedProjectId, issues);
   }, [selectedProjectId, selectedTaskId, issues]);
+  const statusById = useMemo(
+    () => new Map(statusesForProject.map((s) => [s.id, s])),
+    [statusesForProject]
+  );
 
   const replaceQuery = (mutate: (p: URLSearchParams) => void) => {
     const p = new URLSearchParams(searchParams.toString());
@@ -642,9 +668,8 @@ export function WorkspaceClient({
           <p className="mt-2 text-amber-800">
             Dengan RLS aktif, Anda hanya melihat project tempat akun menjadi{" "}
             <code className="rounded bg-slate-100 px-1">project_members</code>.
-            Seed demo memakai organisasi{" "}
-            <strong>KJSB Demo</strong> — setelah login, sistem biasanya sudah
-            memanggil <code className="rounded bg-slate-100 px-1">join_demo_org_projects</code>.
+            User baru sekarang mulai dari kosong; Anda bisa membuat organisasi
+            dan project pertama langsung dari form di bawah.
           </p>
           {joinError && (
             <p className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-red-900">
@@ -652,12 +677,70 @@ export function WorkspaceClient({
             </p>
           )}
           {userEmail && (
-            <form action={joinDemoProjectsAction} className="mt-4">
+            <form action={createOrganizationProjectAction} className="mt-4 space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                Buat organisasi + project pertama
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="text-xs text-slate-700">
+                  Nama organisasi *
+                  <input
+                    name="organization_name"
+                    required
+                    placeholder="Contoh: KJSB Cirebon"
+                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                  />
+                </label>
+                <label className="text-xs text-slate-700">
+                  Slug organisasi (opsional)
+                  <input
+                    name="organization_slug"
+                    placeholder="kjsb-cirebon"
+                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                  />
+                </label>
+                <label className="text-xs text-slate-700">
+                  Nama project *
+                  <input
+                    name="project_name"
+                    required
+                    placeholder="Contoh: PLM Cirebon 2027"
+                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                  />
+                </label>
+                <label className="text-xs text-slate-700">
+                  Kode project (opsional)
+                  <input
+                    name="project_key"
+                    placeholder="PLM27"
+                    className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                  />
+                </label>
+              </div>
+              <label className="block text-xs text-slate-700">
+                Deskripsi project (opsional)
+                <textarea
+                  name="project_description"
+                  rows={2}
+                  placeholder="Catatan singkat project"
+                  className="mt-0.5 block w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900"
+                />
+              </label>
+              <button
+                type="submit"
+                className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+              >
+                Buat organisasi & project
+              </button>
+            </form>
+          )}
+          {userEmail && (
+            <form action={joinDemoProjectsAction} className="mt-3">
               <button
                 type="submit"
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
               >
-                Gabung ke project demo (KJSB)
+                Atau gabung ke project demo (KJSB)
               </button>
             </form>
           )}
@@ -931,6 +1014,137 @@ export function WorkspaceClient({
                     <span className="font-semibold">{enabledModuleLabels}</span>
                   </div>
                 </div>
+                {selectedProjectId && (
+                  <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Tambah task cepat (core PM)
+                    </p>
+                    <form
+                      className="mt-2 flex flex-wrap items-end gap-2"
+                      action={(fd) => {
+                        setTaskMsg(null);
+                        fd.set("project_id", selectedProjectId);
+                        if (defaultStatusId) fd.set("status_id", defaultStatusId);
+                        startTaskTransition(async () => {
+                          const r = await createProjectTaskAction(fd);
+                          if (r.error) {
+                            setTaskMsg(r.error);
+                            return;
+                          }
+                          router.refresh();
+                        });
+                      }}
+                    >
+                      <label className="text-xs text-slate-700">
+                        Judul task *
+                        <input
+                          name="title"
+                          required
+                          placeholder="Contoh: Susun jadwal kickoff"
+                          className="mt-0.5 block w-72 rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-700">
+                        Mulai
+                        <input
+                          name="starts_at"
+                          type="date"
+                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-700">
+                        Tenggat
+                        <input
+                          name="due_at"
+                          type="date"
+                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                        />
+                      </label>
+                      <button
+                        type="submit"
+                        disabled={taskPending}
+                        className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        Tambah task
+                      </button>
+                    </form>
+                    {taskMsg && (
+                      <p className="mt-2 text-xs text-red-600" role="alert">
+                        {taskMsg}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {selectedProjectId && selectedTask && (
+                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                      Tambah subtask ke task terpilih
+                    </p>
+                    <p className="mt-1 text-xs text-amber-900/90">
+                      Parent:{" "}
+                      <span className="font-medium">
+                        {selectedTask.key_display ? `${selectedTask.key_display} — ` : ""}
+                        {selectedTask.title}
+                      </span>
+                    </p>
+                    <form
+                      className="mt-2 flex flex-wrap items-end gap-2"
+                      action={(fd) => {
+                        setTaskMsg(null);
+                        fd.set("project_id", selectedProjectId);
+                        fd.set("parent_id", selectedTask.id);
+                        const childStatusId = selectedTask.status_id ?? defaultStatusId;
+                        if (childStatusId) fd.set("status_id", childStatusId);
+                        startTaskTransition(async () => {
+                          const r = await createProjectTaskAction(fd);
+                          if (r.error) {
+                            setTaskMsg(r.error);
+                            return;
+                          }
+                          router.refresh();
+                        });
+                      }}
+                    >
+                      <label className="text-xs text-slate-700">
+                        Judul subtask *
+                        <input
+                          name="title"
+                          required
+                          placeholder="Contoh: Lengkapi dokumen pendukung"
+                          className="mt-0.5 block w-72 rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-700">
+                        Mulai
+                        <input
+                          name="starts_at"
+                          type="date"
+                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-700">
+                        Tenggat
+                        <input
+                          name="due_at"
+                          type="date"
+                          className="mt-0.5 block rounded border border-slate-200 bg-white px-2 py-1 text-sm"
+                        />
+                      </label>
+                      <button
+                        type="submit"
+                        disabled={taskPending}
+                        className="rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                      >
+                        Tambah subtask
+                      </button>
+                    </form>
+                    {taskMsg && (
+                      <p className="mt-2 text-xs text-red-600" role="alert">
+                        {taskMsg}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {enabledModulesForOrg.has("plm") && selectedProjectId && (
                   <div className="mt-6">
                     <BerkasListPanel
@@ -965,18 +1179,33 @@ export function WorkspaceClient({
                     <tr className="border-b border-slate-200 text-slate-600">
                       <th className="py-2 pr-4 font-medium">Key</th>
                       <th className="py-2 pr-4 font-medium">Judul</th>
+                      <th className="py-2 pr-4 font-medium">Status</th>
                       <th className="py-2 pr-4 font-medium">Mulai</th>
                       <th className="py-2 pr-4 font-medium">Tenggat</th>
                       <th className="py-2 pr-4 font-medium">Sub-task?</th>
+                      <th className="py-2 pr-4 font-medium">Aksi</th>
                     </tr>
                   </thead>
                   <tbody>
                     {tableRows.map(({ issue, depth }) => {
                       const isChild = Boolean(issue.parent_id);
+                      const st = issue.status_id ? statusById.get(issue.status_id) : null;
+                      const isDone = st?.category === "done";
                       return (
                         <tr
                           key={issue.id}
-                          className="border-b border-slate-100 hover:bg-slate-50"
+                          className={`border-b border-slate-100 hover:bg-slate-50 ${
+                            selectedTaskId === issue.id ? "bg-blue-50/60" : ""
+                          }`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => selectIssueInScope(issue.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              selectIssueInScope(issue.id);
+                            }
+                          }}
                         >
                           <td className="py-2 pr-4 font-mono text-xs text-slate-700">
                             <span style={{ paddingLeft: depth * 12 }}>
@@ -984,6 +1213,15 @@ export function WorkspaceClient({
                             </span>
                           </td>
                           <td className="py-2 pr-4">{issue.title}</td>
+                          <td className="py-2 pr-4">
+                            <span
+                              className={`rounded px-2 py-0.5 text-xs font-medium ${statusBadgeClass(
+                                st?.category
+                              )}`}
+                            >
+                              {st?.name ?? "Tanpa status"}
+                            </span>
+                          </td>
                           <td className="py-2 pr-4 text-slate-600">
                             {formatShortDate(issue.starts_at)}
                           </td>
@@ -992,6 +1230,51 @@ export function WorkspaceClient({
                           </td>
                           <td className="py-2 pr-4 text-slate-600">
                             {isChild ? "Ya" : "—"}
+                          </td>
+                          <td className="py-2 pr-4">
+                            {selectedProjectId ? (
+                              <form
+                                action={(fd) => {
+                                  fd.set("issue_id", issue.id);
+                                  fd.set("project_id", selectedProjectId);
+                                  startTaskTransition(async () => {
+                                    const r = await setTaskDoneAction(fd);
+                                    if (r.error) {
+                                      setTaskMsg(r.error);
+                                      return;
+                                    }
+                                    router.refresh();
+                                  });
+                                }}
+                              >
+                                <button
+                                  type="submit"
+                                  disabled={taskPending}
+                                  className={`rounded px-2 py-0.5 text-xs font-medium ${
+                                    isDone
+                                      ? "bg-amber-100 text-amber-800 hover:bg-amber-200"
+                                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                  } disabled:opacity-70`}
+                                  onClick={(e) => {
+                                    if (!isDone) return;
+                                    e.preventDefault();
+                                    const fd = new FormData();
+                                    fd.set("issue_id", issue.id);
+                                    fd.set("project_id", selectedProjectId);
+                                    startTaskTransition(async () => {
+                                      const r = await reopenTaskAction(fd);
+                                      if (r.error) {
+                                        setTaskMsg(r.error);
+                                        return;
+                                      }
+                                      router.refresh();
+                                    });
+                                  }}
+                                >
+                                  {isDone ? "Buka lagi" : "Selesaikan"}
+                                </button>
+                              </form>
+                            ) : null}
                           </td>
                         </tr>
                       );

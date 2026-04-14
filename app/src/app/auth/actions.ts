@@ -8,15 +8,6 @@ import {
   isEmailAllowedForSignup,
 } from "@/lib/pilot-config";
 
-async function bootstrapDemoProjects() {
-  const supabase = await createServerSupabaseClient();
-  if (!supabase) return;
-  const { error } = await supabase.schema("core_pm").rpc("join_demo_org_projects");
-  if (error) {
-    console.warn("join_demo_org_projects:", error.message);
-  }
-}
-
 export async function login(formData: FormData) {
   const supabase = await createServerSupabaseClient();
   if (!supabase) {
@@ -31,7 +22,6 @@ export async function login(formData: FormData) {
     redirect("/login?error=" + encodeURIComponent(error.message));
   }
 
-  await bootstrapDemoProjects();
   revalidatePath("/", "layout");
   redirect("/");
 }
@@ -77,7 +67,6 @@ export async function signup(formData: FormData) {
   }
 
   if (data.session) {
-    await bootstrapDemoProjects();
     revalidatePath("/", "layout");
     redirect("/");
   }
@@ -113,6 +102,51 @@ export async function joinDemoProjectsAction() {
   }
 
   const { error } = await supabase.schema("core_pm").rpc("join_demo_org_projects");
+  if (error) {
+    redirect("/?joinError=" + encodeURIComponent(error.message));
+  }
+
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+
+export async function createOrganizationProjectAction(formData: FormData) {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    redirect("/?joinError=" + encodeURIComponent("Supabase tidak dikonfigurasi"));
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/login");
+  }
+
+  const organizationName = String(formData.get("organization_name") ?? "").trim();
+  const organizationSlug = String(formData.get("organization_slug") ?? "").trim();
+  const projectName = String(formData.get("project_name") ?? "").trim();
+  const projectKey = String(formData.get("project_key") ?? "").trim();
+  const projectDescription = String(formData.get("project_description") ?? "").trim();
+
+  if (!organizationName || !projectName) {
+    redirect(
+      "/?joinError=" +
+        encodeURIComponent("Nama organisasi dan nama project wajib diisi")
+    );
+  }
+
+  const { error } = await supabase.schema("core_pm").rpc(
+    "create_organization_project_bootstrap",
+    {
+      p_org_name: organizationName,
+      p_org_slug: organizationSlug || null,
+      p_project_name: projectName,
+      p_project_key: projectKey || null,
+      p_project_description: projectDescription || null,
+    }
+  );
+
   if (error) {
     redirect("/?joinError=" + encodeURIComponent(error.message));
   }
