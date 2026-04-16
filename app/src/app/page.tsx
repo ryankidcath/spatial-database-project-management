@@ -42,7 +42,7 @@ import type {
 } from "./finance-types";
 
 type HomeProps = {
-  searchParams: Promise<{ joinError?: string; project?: string }>;
+  searchParams: Promise<{ joinError?: string; project?: string; view?: string }>;
 };
 
 export default async function Home({ searchParams }: HomeProps) {
@@ -51,6 +51,7 @@ export default async function Home({ searchParams }: HomeProps) {
     ? decodeURIComponent(qp.joinError)
     : null;
   const selectedProjectIdFromQuery = String(qp.project ?? "").trim();
+  const activeViewParam = String(qp.view ?? "").trim().toLowerCase();
 
   const supabase = await createServerSupabaseClient();
 
@@ -206,6 +207,8 @@ export default async function Home({ searchParams }: HomeProps) {
       m.module_code === "spatial" &&
       orgIds.includes(m.organization_id)
   );
+  const needsPlmData = ["berkas", "laporan", "map"].includes(activeViewParam);
+  const needsSpatialData = ["map", "tabel"].includes(activeViewParam);
 
   const [
     { data: bidangMapRaw, error: bidangMapError },
@@ -216,14 +219,14 @@ export default async function Home({ searchParams }: HomeProps) {
     { data: alatUkurRaw, error: alatUkurError },
     { data: issueGeomRaw, error: issueGeomError },
   ] = await Promise.all([
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
       ? supabase
           .schema("spatial")
           .from("v_bidang_hasil_ukur_map")
           .select("id, project_id, berkas_id, label, geojson")
           .in("project_id", scopedProjectIds)
       : Promise.resolve({ data: [] as BidangHasilUkurMapRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("berkas_permohonan")
@@ -235,7 +238,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .is("deleted_at", null)
           .order("tanggal_berkas", { ascending: false })
       : Promise.resolve({ data: [] as BerkasPermohonanRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_berkas_permohonan_summary_by_status")
@@ -244,7 +247,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmBerkasStatusSummaryRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_legalisasi_gu_summary_by_tahap")
@@ -253,7 +256,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("project_id")
           .order("status_tahap")
       : Promise.resolve({ data: [] as PlmLegalisasiTahapSummaryRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_pengukuran_lapangan_summary_by_status")
@@ -262,7 +265,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmPengukuranStatusSummaryRow[], error: null }),
-    orgIds.length > 0 && plmEnabledForAnyOrg
+    orgIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("alat_ukur")
@@ -273,7 +276,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .is("deleted_at", null)
           .order("kode_aset")
       : Promise.resolve({ data: [] as AlatUkurRow[], error: null }),
-    scopedProjectIds.length > 0 && spatialEnabledForAnyOrg
+    scopedProjectIds.length > 0 && spatialEnabledForAnyOrg && needsSpatialData
       ? supabase
           .schema("spatial")
           .from("v_issue_geometry_feature_map")
@@ -408,9 +411,10 @@ export default async function Home({ searchParams }: HomeProps) {
       m.module_code === "finance" &&
       orgIds.includes(m.organization_id)
   );
+  const needsFinanceData = activeViewParam === "keuangan";
 
   const { data: finInvRaw, error: finInvErr } =
-    scopedProjectIds.length > 0 && financeEnabledForAnyOrg
+    scopedProjectIds.length > 0 && financeEnabledForAnyOrg && needsFinanceData
       ? await supabase
           .schema("finance")
           .from("invoice")
