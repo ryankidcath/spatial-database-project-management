@@ -73,7 +73,7 @@ export function CalendarScheduleView({
     <div className="space-y-3">
       {taskId && (
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          Kalender memfilter <strong>task terpilih dan sub-task</strong> dalam
+          Kalender memfilter <strong>unit kerja terpilih dan unit turunan</strong> dalam
           project ini. Issue tanpa tanggal tidak ditampilkan di grid.
         </p>
       )}
@@ -228,8 +228,8 @@ export function GanttScheduleView({
     <div className="space-y-3">
       {taskId && (
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          Gantt menampilkan <strong>task terpilih + sub-task</strong> yang punya
-          jadwal. Scope project menampilkan hanya task level atas.
+          Gantt menampilkan <strong>unit kerja terpilih + unit turunan</strong> yang punya
+          jadwal. Scope project menampilkan hanya unit kerja level atas.
         </p>
       )}
       {!taskId && (

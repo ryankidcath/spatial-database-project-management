@@ -4,9 +4,11 @@ import { syncSpatialOverlapNotifications } from "./spatial-overlap-notifications
 import {
   WorkspaceClient,
   type BidangHasilUkurMapRow,
+  type IssueGeometryFeatureMapRow,
   type DemoFootprintRow,
   type IssueRow,
   type OrganizationRow,
+  type ProjectMemberRow,
   type ProjectRow,
   type StatusRow,
 } from "./workspace-client";
@@ -106,6 +108,7 @@ export default async function Home({ searchParams }: HomeProps) {
   const [
     { data: statuses, error: statusesError },
     { data: issues, error: issuesError },
+    { data: projectMembersRaw, error: projectMembersError },
     { data: footprintsRaw, error: footprintsError },
     { data: registryRaw, error: registryError },
     { data: orgModulesRaw, error: orgModulesError },
@@ -124,6 +127,13 @@ export default async function Home({ searchParams }: HomeProps) {
       )
       .is("deleted_at", null)
       .order("sort_order"),
+    projectIds.length > 0
+      ? supabase
+          .schema("core_pm")
+          .from("project_members")
+          .select("project_id, user_id, role, joined_at")
+          .in("project_id", projectIds)
+      : Promise.resolve({ data: [] as ProjectMemberRow[], error: null }),
     projectIds.length > 0
       ? supabase
           .schema("spatial")
@@ -146,6 +156,34 @@ export default async function Home({ searchParams }: HomeProps) {
   ]);
 
   const footprints = (footprintsRaw ?? []) as DemoFootprintRow[];
+  const projectMembersBase = (projectMembersRaw ?? []) as Array<{
+    project_id: string;
+    user_id: string;
+    role: string;
+    joined_at: string;
+  }>;
+  const memberUserIds = [...new Set(projectMembersBase.map((m) => m.user_id))];
+  const { data: profilesRaw, error: profilesError } =
+    memberUserIds.length > 0
+      ? await supabase
+          .schema("core_pm")
+          .from("profiles")
+          .select("id, display_name")
+          .in("id", memberUserIds)
+      : { data: [] as Array<{ id: string; display_name: string | null }>, error: null };
+  const displayNameByUserId = new Map(
+    ((profilesRaw ?? []) as Array<{ id: string; display_name: string | null }>).map((p) => [
+      p.id,
+      p.display_name,
+    ])
+  );
+  const projectMembers: ProjectMemberRow[] = projectMembersBase.map((m) => ({
+    project_id: m.project_id,
+    user_id: m.user_id,
+    role: m.role,
+    joined_at: m.joined_at,
+    display_name: displayNameByUserId.get(m.user_id) ?? null,
+  }));
 
   const moduleRegistry = (registryRaw ?? []) as ModuleRegistryRow[];
   const organizationModules = (orgModulesRaw ?? []) as OrganizationModuleRow[];
@@ -157,6 +195,13 @@ export default async function Home({ searchParams }: HomeProps) {
       orgIds.includes(m.organization_id)
   );
 
+  const spatialEnabledForAnyOrg = organizationModules.some(
+    (m) =>
+      m.is_enabled &&
+      m.module_code === "spatial" &&
+      orgIds.includes(m.organization_id)
+  );
+
   const [
     { data: bidangMapRaw, error: bidangMapError },
     { data: berkasRaw, error: berkasError },
@@ -164,6 +209,7 @@ export default async function Home({ searchParams }: HomeProps) {
     { data: lSumRaw, error: lSumErr },
     { data: pSumRaw, error: pSumErr },
     { data: alatUkurRaw, error: alatUkurError },
+    { data: issueGeomRaw, error: issueGeomError },
   ] = await Promise.all([
     projectIds.length > 0 && plmEnabledForAnyOrg
       ? supabase
@@ -222,6 +268,13 @@ export default async function Home({ searchParams }: HomeProps) {
           .is("deleted_at", null)
           .order("kode_aset")
       : Promise.resolve({ data: [] as AlatUkurRow[], error: null }),
+    projectIds.length > 0 && spatialEnabledForAnyOrg
+      ? supabase
+          .schema("spatial")
+          .from("v_issue_geometry_feature_map")
+          .select("id, project_id, issue_id, feature_key, label, properties, geojson")
+          .in("project_id", projectIds)
+      : Promise.resolve({ data: [] as IssueGeometryFeatureMapRow[], error: null }),
   ]);
 
   const bidangHasilUkurMap = (bidangMapRaw ?? []) as BidangHasilUkurMapRow[];
@@ -230,6 +283,7 @@ export default async function Home({ searchParams }: HomeProps) {
   const plmLegalisasiTahapSummary = (lSumRaw ?? []) as PlmLegalisasiTahapSummaryRow[];
   const plmPengukuranStatusSummary = (pSumRaw ?? []) as PlmPengukuranStatusSummaryRow[];
   const alatUkur = (alatUkurRaw ?? []) as AlatUkurRow[];
+  const issueGeometryFeatureMap = (issueGeomRaw ?? []) as IssueGeometryFeatureMapRow[];
 
   const berkasIds = berkasPermohonan.map((b) => b.id);
   const [
@@ -418,6 +472,7 @@ export default async function Home({ searchParams }: HomeProps) {
           organizationModules,
           footprints,
           bidangHasilUkurMap,
+          issueGeometryMap: issueGeometryFeatureMap,
         })
       : Promise.resolve(),
   ]);
@@ -431,8 +486,11 @@ export default async function Home({ searchParams }: HomeProps) {
     orgsError?.message ??
     statusesError?.message ??
     issuesError?.message ??
+    projectMembersError?.message ??
     footprintsError?.message ??
+    profilesError?.message ??
     bidangMapError?.message ??
+    issueGeomError?.message ??
     registryError?.message ??
     orgModulesError?.message ??
     berkasError?.message ??
@@ -467,8 +525,10 @@ export default async function Home({ searchParams }: HomeProps) {
         projects={projectList}
         statuses={(statuses ?? []) as StatusRow[]}
         issues={(issues ?? []) as IssueRow[]}
+        projectMembers={projectMembers}
         footprints={footprints}
         bidangHasilUkurMap={bidangHasilUkurMap}
+        issueGeometryFeatureMap={issueGeometryFeatureMap}
         moduleRegistry={moduleRegistry}
         organizationModules={organizationModules}
         berkasPermohonan={berkasPermohonan}

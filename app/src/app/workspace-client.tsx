@@ -2,8 +2,11 @@
 
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { ChevronDown, ChevronRight, PanelLeft, Trash2 } from "lucide-react";
 import {
+  addProjectMemberByEmailAction,
+  createProjectInOrganizationAction,
   createOrganizationProjectAction,
   joinDemoProjectsAction,
   signOut,
@@ -20,7 +23,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -34,10 +37,19 @@ import {
 import { FinancePanel } from "./finance-panel";
 import {
   createProjectTaskAction,
+  deleteProjectAction,
+  deleteTaskAction,
   reopenTaskAction,
   setTaskDoneAction,
   updateTaskProgressAction,
 } from "./core-task-actions";
+import {
+  deleteAllIssueGeometryFeaturesForIssueAction,
+  deleteIssueGeometryFeatureByIdAction,
+  updateIssueGeometryFeaturePropertiesAction,
+  upsertIssueGeometryFeatureAction,
+  upsertIssueGeometryFeatureBatchAction,
+} from "./issue-geometry-feature-actions";
 import type {
   FinanceInvoiceItemRow,
   FinanceInvoiceRow,
@@ -71,7 +83,7 @@ import {
   type OrganizationModuleRow,
 } from "./workspace-modules";
 import { parseViewParam, viewToParam } from "./workspace-url";
-import { findMapOverlapWarnings } from "./map-spatial-overlap";
+import { overlapDisplayLabelForIssueGeometryRow } from "./issue-geometry-overlap-label";
 import type { MapFootprint } from "./workspace-map";
 import { type ViewId } from "./workspace-views";
 import type { UserNotificationRow } from "./user-notification-types";
@@ -101,6 +113,17 @@ export type BidangHasilUkurMapRow = {
   project_id: string;
   berkas_id: string;
   label: string;
+  geojson: unknown;
+};
+
+/** Baris view `spatial.v_issue_geometry_feature_map` (fitur geometri 1:N per task). */
+export type IssueGeometryFeatureMapRow = {
+  id: string;
+  project_id: string;
+  issue_id: string;
+  feature_key: string;
+  label: string;
+  properties: unknown;
   geojson: unknown;
 };
 
@@ -140,13 +163,23 @@ export type IssueRow = {
   issue_weight: string;
 };
 
+export type ProjectMemberRow = {
+  project_id: string;
+  user_id: string;
+  role: string;
+  joined_at: string;
+  display_name: string | null;
+};
+
 type Props = {
   organizations: OrganizationRow[];
   projects: ProjectRow[];
   statuses: StatusRow[];
   issues: IssueRow[];
+  projectMembers: ProjectMemberRow[];
   footprints: DemoFootprintRow[];
   bidangHasilUkurMap: BidangHasilUkurMapRow[];
+  issueGeometryFeatureMap: IssueGeometryFeatureMapRow[];
   moduleRegistry: ModuleRegistryRow[];
   organizationModules: OrganizationModuleRow[];
   berkasPermohonan: BerkasPermohonanRow[];
@@ -173,6 +206,18 @@ type Props = {
 
 type TableRow = { issue: IssueRow; depth: number };
 type TaskConfirmState = { issueId: string; mode: "done" | "reopen"; title: string };
+type TaskDeleteConfirmState = { issueId: string; title: string };
+type ProjectDeleteConfirmState = { projectId: string; name: string };
+type MapGeometryInputMode = "single" | "batch" | "manage";
+type BatchGeojsonPreview = {
+  valid: boolean;
+  reason?: string;
+  featureCount: number;
+  propertyKeys: string[];
+  geometryTypeCounts: Record<string, number>;
+  withFeatureKey: number;
+  withIdFallback: number;
+};
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   done:
@@ -182,6 +227,7 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   todo:
     "border border-border bg-muted text-muted-foreground",
 };
+const SPATIAL_TABLE_PAGE_SIZE = 100;
 
 function statusBadgeClass(category: string | null | undefined): string {
   if (!category) return STATUS_BADGE_CLASS.todo;
@@ -253,6 +299,85 @@ function flattenIssuesForProject(
   return flattenIssuesWithDepth(projectId, issues).map((x) => x.issue);
 }
 
+function analyzeBatchGeojson(raw: string): BatchGeojsonPreview | null {
+  const text = raw.trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return {
+        valid: false,
+        reason: "JSON root bukan object.",
+        featureCount: 0,
+        propertyKeys: [],
+        geometryTypeCounts: {},
+        withFeatureKey: 0,
+        withIdFallback: 0,
+      };
+    }
+    const root = parsed as { type?: string; features?: unknown[] };
+    if (root.type !== "FeatureCollection" || !Array.isArray(root.features)) {
+      return {
+        valid: false,
+        reason: "Root harus FeatureCollection dan memiliki array features.",
+        featureCount: 0,
+        propertyKeys: [],
+        geometryTypeCounts: {},
+        withFeatureKey: 0,
+        withIdFallback: 0,
+      };
+    }
+
+    const keySet = new Set<string>();
+    const geometryTypeCounts: Record<string, number> = {};
+    let withFeatureKey = 0;
+    let withIdFallback = 0;
+    let validFeatureCount = 0;
+
+    for (const feat of root.features) {
+      if (!feat || typeof feat !== "object") continue;
+      const f = feat as {
+        type?: string;
+        properties?: unknown;
+        geometry?: { type?: string } | null;
+      };
+      if (f.type !== "Feature") continue;
+      validFeatureCount++;
+
+      const geomType = f.geometry?.type ?? "(tanpa geometry)";
+      geometryTypeCounts[geomType] = (geometryTypeCounts[geomType] ?? 0) + 1;
+
+      if (f.properties && typeof f.properties === "object" && !Array.isArray(f.properties)) {
+        const props = f.properties as Record<string, unknown>;
+        for (const k of Object.keys(props)) keySet.add(k);
+        const fk = props.feature_key;
+        const id = props.id ?? props.ID ?? props.Id;
+        if (fk != null && String(fk).trim() !== "") withFeatureKey++;
+        else if (id != null && String(id).trim() !== "") withIdFallback++;
+      }
+    }
+
+    return {
+      valid: true,
+      featureCount: validFeatureCount,
+      propertyKeys: [...keySet].sort((a, b) => a.localeCompare(b)),
+      geometryTypeCounts,
+      withFeatureKey,
+      withIdFallback,
+    };
+  } catch {
+    return {
+      valid: false,
+      reason: "JSON tidak valid.",
+      featureCount: 0,
+      propertyKeys: [],
+      geometryTypeCounts: {},
+      withFeatureKey: 0,
+      withIdFallback: 0,
+    };
+  }
+}
+
 function flattenIssuesWithDepth(
   projectId: string,
   issues: IssueRow[]
@@ -280,13 +405,92 @@ function flattenIssuesWithDepth(
   return out;
 }
 
+function issueGeometryPropertiesForDisplay(
+  row: IssueGeometryFeatureMapRow
+): Record<string, unknown> {
+  const props =
+    typeof row.properties === "object" && row.properties !== null
+      ? ({ ...row.properties } as Record<string, unknown>)
+      : {};
+  return {
+    ...props,
+    feature_key: row.feature_key,
+  };
+}
+
+function compactValuePreview(value: unknown, maxChars = 120): string {
+  if (value == null) return "—";
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+  try {
+    const text = JSON.stringify(value) ?? "";
+    return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+const NON_EDITABLE_SPATIAL_ATTR_KEYS = new Set(["_row_id", "feature_key"]);
+
+type SpatialAttributeEditEntry = { key: string; value: string };
+
+function cellValueForSpatialEditInput(raw: unknown): string {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return String(raw);
+  }
+}
+
+function parseSpatialAttributeValue(text: string): unknown {
+  const t = text.trim();
+  if (t === "") return "";
+  if (t === "true") return true;
+  if (t === "false") return false;
+  if (t === "null") return null;
+  if (
+    !/^["[{]/.test(t) &&
+    /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(t)
+  ) {
+    return Number(t);
+  }
+  try {
+    return JSON.parse(t) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function buildSpatialAttributeEditEntries(
+  row: IssueGeometryFeatureMapRow
+): SpatialAttributeEditEntry[] {
+  const merged = issueGeometryPropertiesForDisplay(row);
+  const entries: SpatialAttributeEditEntry[] = [];
+  for (const [k, v] of Object.entries(merged)) {
+    if (NON_EDITABLE_SPATIAL_ATTR_KEYS.has(k)) continue;
+    entries.push({ key: k, value: cellValueForSpatialEditInput(v) });
+  }
+  if (entries.length === 0) entries.push({ key: "", value: "" });
+  return entries;
+}
+
 export function WorkspaceClient({
   organizations,
   projects,
   statuses,
   issues,
+  projectMembers = [],
   footprints,
   bidangHasilUkurMap,
+  issueGeometryFeatureMap = [],
   moduleRegistry,
   organizationModules,
   berkasPermohonan,
@@ -315,12 +519,43 @@ export function WorkspaceClient({
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
   const [taskPending, startTaskTransition] = useTransition();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [memberDialogOpen, setMemberDialogOpen] = useState(false);
   const [subtaskDialogOpen, setSubtaskDialogOpen] = useState(false);
   const [progressDialogOpen, setProgressDialogOpen] = useState(false);
+  const [mapGeomDialogOpen, setMapGeomDialogOpen] = useState(false);
+  const [mapGeomInputMode, setMapGeomInputMode] =
+    useState<MapGeometryInputMode>("single");
+  const [mapGeomMsg, setMapGeomMsg] = useState<string | null>(null);
+  const [mapGeomBatchMsg, setMapGeomBatchMsg] = useState<string | null>(null);
+  const [mapGeomBatchText, setMapGeomBatchText] = useState("");
+  const [mapGeomDeleteMsg, setMapGeomDeleteMsg] = useState<string | null>(null);
+  const [mapGeomFormNonce, setMapGeomFormNonce] = useState(0);
+  const [mapGeomPending, startMapGeomTransition] = useTransition();
+  const openMapGeomDialog = useCallback(() => {
+    setMapGeomInputMode("single");
+    setMapGeomMsg(null);
+    setMapGeomBatchMsg(null);
+    setMapGeomDeleteMsg(null);
+    setMapGeomBatchText("");
+    setMapGeomFormNonce((n) => n + 1);
+    setMapGeomDialogOpen(true);
+  }, []);
+  const [memberPending, startMemberTransition] = useTransition();
   const [taskConfirm, setTaskConfirm] = useState<TaskConfirmState | null>(null);
+  const [taskDeleteConfirm, setTaskDeleteConfirm] =
+    useState<TaskDeleteConfirmState | null>(null);
+  const [projectDeleteConfirm, setProjectDeleteConfirm] =
+    useState<ProjectDeleteConfirmState | null>(null);
+  const [projectMsg, setProjectMsg] = useState<string | null>(null);
+  const [memberMsg, setMemberMsg] = useState<string | null>(null);
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [collapsedIssueIds, setCollapsedIssueIds] = useState<Set<string>>(
     () => new Set()
   );
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const orgsWithProjects = useMemo(() => {
     const ids = new Set(projects.map((p) => p.organization_id));
@@ -382,18 +617,18 @@ export function WorkspaceClient({
     );
   }, [berkasPermohonan, selectedBerkasId, selectedProjectId]);
 
-  const [mapShowDemo, setMapShowDemo] = useState(true);
-  const [mapShowHasilUkur, setMapShowHasilUkur] = useState(true);
-
-  const mapHighlightBerkasId = useMemo(() => {
-    if (parseViewParam(searchParams.get("view")) !== "Map") return null;
-    const q = searchParams.get("berkas");
-    if (!q || !selectedProjectId) return null;
-    const ok = berkasPermohonan.some(
-      (b) => b.id === q && b.project_id === selectedProjectId
-    );
-    return ok ? q : null;
-  }, [searchParams, berkasPermohonan, selectedProjectId]);
+  const [mapShowIssueGeometry, setMapShowIssueGeometry] = useState(true);
+  const [spatialSearchText, setSpatialSearchText] = useState("");
+  const [spatialTablePage, setSpatialTablePage] = useState(1);
+  const [spatialAttributeEditRow, setSpatialAttributeEditRow] =
+    useState<IssueGeometryFeatureMapRow | null>(null);
+  const [spatialAttributeEditEntries, setSpatialAttributeEditEntries] =
+    useState<SpatialAttributeEditEntry[]>([]);
+  const [spatialAttributeEditMsg, setSpatialAttributeEditMsg] = useState<
+    string | null
+  >(null);
+  const [spatialAttributeEditPending, startSpatialAttributeEditTransition] =
+    useTransition();
 
   const berkasIdsWithBidangInProject = useMemo(() => {
     const s = new Set<string>();
@@ -541,6 +776,29 @@ export function WorkspaceClient({
     [issues, selectedTaskId]
   );
 
+  const selectedScopePath = useMemo(() => {
+    if (!selectedProject) return "—";
+    if (!selectedTask) return selectedProject.name;
+
+    const byId = new Map(
+      issues
+        .filter((i) => i.project_id === selectedProject.id)
+        .map((i) => [i.id, i] as const)
+    );
+
+    const chain: string[] = [];
+    const visited = new Set<string>();
+    let cursor: IssueRow | null = selectedTask;
+    while (cursor && !visited.has(cursor.id)) {
+      chain.push(cursor.title);
+      visited.add(cursor.id);
+      cursor = cursor.parent_id ? (byId.get(cursor.parent_id) ?? null) : null;
+    }
+
+    chain.reverse();
+    return [selectedProject.name, ...chain].join(" > ");
+  }, [issues, selectedProject, selectedTask]);
+
   const statusesForProject = useMemo(() => {
     if (!selectedProjectId) return [];
     return statuses
@@ -574,53 +832,210 @@ export function WorkspaceClient({
     );
   }, [bidangHasilUkurMap, selectedProjectId]);
 
+  const issueGeometryForSelectedProject = useMemo(() => {
+    if (!selectedProjectId) return [];
+    return issueGeometryFeatureMap.filter(
+      (g) => g.project_id === selectedProjectId
+    );
+  }, [issueGeometryFeatureMap, selectedProjectId]);
+
+  const issueIdsInSelectedTaskSubtree = useMemo(() => {
+    if (!selectedProjectId || !selectedTaskId) return null;
+    const childByParent = new Map<string, string[]>();
+    for (const issue of issues) {
+      if (issue.project_id !== selectedProjectId || !issue.parent_id) continue;
+      const arr = childByParent.get(issue.parent_id) ?? [];
+      arr.push(issue.id);
+      childByParent.set(issue.parent_id, arr);
+    }
+    const out = new Set<string>();
+    const stack = [selectedTaskId];
+    while (stack.length > 0) {
+      const id = stack.pop() as string;
+      if (out.has(id)) continue;
+      out.add(id);
+      const children = childByParent.get(id) ?? [];
+      for (const c of children) stack.push(c);
+    }
+    return out;
+  }, [issues, selectedProjectId, selectedTaskId]);
+
+  const issueGeometriesForManageTask = useMemo(() => {
+    if (!selectedProjectId || !selectedTaskId) return [];
+    return issueGeometryFeatureMap
+      .filter(
+        (g) =>
+          g.project_id === selectedProjectId && g.issue_id === selectedTaskId
+      )
+      .sort((a, b) => a.feature_key.localeCompare(b.feature_key));
+  }, [issueGeometryFeatureMap, selectedProjectId, selectedTaskId]);
+
+  const issueGeometryVisibleForMap = useMemo(() => {
+    if (!issueIdsInSelectedTaskSubtree) return issueGeometryForSelectedProject;
+    return issueGeometryForSelectedProject.filter((g) =>
+      issueIdsInSelectedTaskSubtree.has(g.issue_id)
+    );
+  }, [issueGeometryForSelectedProject, issueIdsInSelectedTaskSubtree]);
+
+  const mapGeomBatchPreview = useMemo(
+    () => analyzeBatchGeojson(mapGeomBatchText),
+    [mapGeomBatchText]
+  );
+
+  const issueTitleById = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!selectedProjectId) return m;
+    for (const issue of issues) {
+      if (issue.project_id !== selectedProjectId) continue;
+      m.set(issue.id, issue.title);
+    }
+    return m;
+  }, [issues, selectedProjectId]);
+
+  const issueGeometryRowsForTableView = useMemo(
+    () => {
+      return issueGeometryForSelectedProject
+        .filter((g) =>
+          issueIdsInSelectedTaskSubtree
+            ? issueIdsInSelectedTaskSubtree.has(g.issue_id)
+            : true
+        )
+        .sort((a, b) => {
+          const at = issueTitleById.get(a.issue_id) ?? "";
+          const bt = issueTitleById.get(b.issue_id) ?? "";
+          return (
+            at.localeCompare(bt) ||
+            a.feature_key.localeCompare(b.feature_key) ||
+            a.id.localeCompare(b.id)
+          );
+        });
+    },
+    [
+      issueGeometryForSelectedProject,
+      issueIdsInSelectedTaskSubtree,
+      issueTitleById,
+    ]
+  );
+
+  const spatialSearchQuery = useMemo(
+    () => spatialSearchText.trim().toLowerCase(),
+    [spatialSearchText]
+  );
+
+  const issueGeometryRowsForTableViewFiltered = useMemo(() => {
+    if (!spatialSearchQuery) return issueGeometryRowsForTableView;
+    return issueGeometryRowsForTableView.filter((row) => {
+      const unitTitle = (issueTitleById.get(row.issue_id) ?? row.issue_id).toLowerCase();
+      if (unitTitle.includes(spatialSearchQuery)) return true;
+      const props = issueGeometryPropertiesForDisplay(row);
+      for (const [key, value] of Object.entries(props)) {
+        if (key.toLowerCase().includes(spatialSearchQuery)) return true;
+        if (compactValuePreview(value, 500).toLowerCase().includes(spatialSearchQuery)) {
+          return true;
+        }
+      }
+      return false;
+    });
+  }, [issueGeometryRowsForTableView, issueTitleById, spatialSearchQuery]);
+
+  const spatialTableTotalRows = issueGeometryRowsForTableViewFiltered.length;
+  const spatialTableTotalPages = Math.max(
+    1,
+    Math.ceil(spatialTableTotalRows / SPATIAL_TABLE_PAGE_SIZE)
+  );
+
+  useEffect(() => {
+    setSpatialTablePage(1);
+  }, [selectedProjectId, selectedTaskId, spatialSearchQuery]);
+
+  useEffect(() => {
+    if (spatialTablePage > spatialTableTotalPages) {
+      setSpatialTablePage(spatialTableTotalPages);
+    }
+  }, [spatialTablePage, spatialTableTotalPages]);
+
+  const issueGeometryRowsForTableViewPaged = useMemo(() => {
+    const start = (spatialTablePage - 1) * SPATIAL_TABLE_PAGE_SIZE;
+    return issueGeometryRowsForTableViewFiltered.slice(
+      start,
+      start + SPATIAL_TABLE_PAGE_SIZE
+    );
+  }, [issueGeometryRowsForTableViewFiltered, spatialTablePage]);
+
+  const issueGeometryAttributeKeysForTableView = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of issueGeometryRowsForTableViewFiltered) {
+      const props = issueGeometryPropertiesForDisplay(row);
+      for (const key of Object.keys(props)) {
+        if (key === "_row_id") continue;
+        set.add(key);
+      }
+    }
+    const keys = [...set].sort((a, b) => a.localeCompare(b));
+    return ["feature_key", ...keys.filter((k) => k !== "feature_key")];
+  }, [issueGeometryRowsForTableViewFiltered]);
+
   const mapLayersForSelectedProject = useMemo((): MapFootprint[] => {
-    const demo: MapFootprint[] = footprintsForSelectedProject.map((f) => ({
-      id: `demo:${f.id}`,
-      label: f.label,
-      geojson: f.geojson,
-      layerKind: "demo",
-    }));
-    const hasil: MapFootprint[] = bidangHasilUkurForSelectedProject.map(
-      (b) => ({
-        id: `hasil:${b.id}`,
-        label: b.label,
-        geojson: b.geojson,
-        layerKind: "bidang_hasil_ukur",
-        berkasId: b.berkas_id,
+    const issueGeom: MapFootprint[] = issueGeometryVisibleForMap.map(
+      (g) => ({
+        id: `issuegeom:${g.id}`,
+        label: overlapDisplayLabelForIssueGeometryRow(g),
+        geojson: g.geojson,
+        popupProperties: {
+          ...(typeof g.properties === "object" && g.properties !== null
+            ? (g.properties as Record<string, unknown>)
+            : {}),
+          feature_key: g.feature_key,
+          _row_id: g.id,
+        },
+        layerKind: "issue_geometry",
+        issueGeometryEdit: {
+          projectId: g.project_id,
+          issueId: g.issue_id,
+          featureId: g.id,
+        },
       })
     );
-    return [...demo, ...hasil];
-  }, [footprintsForSelectedProject, bidangHasilUkurForSelectedProject]);
-
-  const mapOverlapWarnings = useMemo(
-    () =>
-      findMapOverlapWarnings(
-        footprintsForSelectedProject.map((f) => ({
-          label: f.label,
-          geojson: f.geojson,
-        })),
-        bidangHasilUkurForSelectedProject.map((b) => ({
-          label: b.label,
-          geojson: b.geojson,
-        }))
-      ),
-    [footprintsForSelectedProject, bidangHasilUkurForSelectedProject]
-  );
+    return issueGeom;
+  }, [
+    issueGeometryVisibleForMap,
+  ]);
 
   const visibleMapLayers = useMemo(() => {
     return mapLayersForSelectedProject.filter((layer) => {
       const k = layer.layerKind ?? "demo";
-      if (k === "demo") return mapShowDemo;
-      if (k === "bidang_hasil_ukur") return mapShowHasilUkur;
+      if (k === "issue_geometry") return mapShowIssueGeometry;
       return true;
     });
-  }, [mapLayersForSelectedProject, mapShowDemo, mapShowHasilUkur]);
+  }, [
+    mapLayersForSelectedProject,
+    mapShowIssueGeometry,
+  ]);
 
   const berkasForSelectedProject = useMemo(() => {
     if (!selectedProjectId) return [];
     return berkasPermohonan.filter((b) => b.project_id === selectedProjectId);
   }, [berkasPermohonan, selectedProjectId]);
+
+  const projectMembersForSelectedProject = useMemo(() => {
+    if (!selectedProjectId) return [];
+    const roleRank = (role: string): number => {
+      if (role === "owner") return 0;
+      if (role === "admin") return 1;
+      if (role === "member") return 2;
+      return 3;
+    };
+    return projectMembers
+      .filter((m) => m.project_id === selectedProjectId)
+      .sort((a, b) => {
+        const roleDiff = roleRank(a.role) - roleRank(b.role);
+        if (roleDiff !== 0) return roleDiff;
+        const nameA = (a.display_name ?? "").toLowerCase();
+        const nameB = (b.display_name ?? "").toLowerCase();
+        if (nameA !== nameB) return nameA.localeCompare(nameB);
+        return a.user_id.localeCompare(b.user_id);
+      });
+  }, [projectMembers, selectedProjectId]);
 
   const financeInvoicesInProject = useMemo(
     () =>
@@ -897,16 +1312,24 @@ export function WorkspaceClient({
           {pilotBannerText}
         </div>
       ) : null}
-      <div className="flex min-h-0 flex-1">
-      <aside className="w-72 shrink-0 border-r border-sidebar-border/90 bg-sidebar/95 p-4 text-sidebar-foreground">
-        <h1 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Spatial PM
-        </h1>
-        <div className="mt-6 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/20 p-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex min-h-0 flex-1 p-3">
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded-2xl border border-border bg-background">
+      {!isSidebarCollapsed && (
+      <aside className="w-80 shrink-0 overflow-y-auto border-r border-sidebar-border/90 bg-sidebar/95 px-5 pt-0 pb-5 font-sans text-sidebar-foreground">
+        <div className="-mx-5 mb-4 flex h-[68px] items-center gap-3 px-5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-foreground text-background">
+            ◫
+          </div>
+          <div>
+            <p className="text-[1rem] font-semibold leading-tight tracking-normal">Spatial PM</p>
+            <p className="mt-1 text-xs text-muted-foreground">v1.0.0</p>
+          </div>
+        </div>
+        <div className="mt-4 space-y-2">
+          <p className="text-sm font-medium text-muted-foreground">
             Organisasi
           </p>
-          <div className="flex flex-col gap-1">
+          <div className="ml-2">
             {orgsWithProjects.map((o) => {
               const active = canonicalOrgId === o.id;
               return (
@@ -925,7 +1348,7 @@ export function WorkspaceClient({
                       q.delete("task");
                     });
                   }}
-                  className={`h-auto w-full justify-start px-3 py-2 text-left text-sm font-medium ${
+                  className={`mb-1 h-8 w-full justify-start rounded-md px-3 text-left text-[0.95rem] font-medium ${
                     active
                       ? "bg-sidebar-accent text-sidebar-accent-foreground"
                       : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
@@ -937,10 +1360,146 @@ export function WorkspaceClient({
             })}
           </div>
         </div>
-        <div className="mt-6 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/20 p-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Project
-          </p>
+        <div className="mt-6 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-muted-foreground">Project</p>
+            <div className="flex items-center gap-1">
+              {selectedProjectId && (
+                <Dialog
+                  open={memberDialogOpen}
+                  onOpenChange={(open) => {
+                    setMemberDialogOpen(open);
+                    if (open) setMemberMsg(null);
+                  }}
+                >
+                  <DialogTrigger render={<Button size="sm" variant="outline" />}>
+                    + Anggota
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Tambah anggota project</DialogTitle>
+                      <DialogDescription>
+                        Tambahkan user ke project{" "}
+                        <span className="font-medium text-foreground">
+                          {selectedProject?.name ?? "aktif"}
+                        </span>{" "}
+                        berdasarkan email. Hanya owner project yang bisa.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <form
+                      className="grid gap-3"
+                      action={(fd) => {
+                        if (!selectedProjectId) return;
+                        setMemberMsg(null);
+                        fd.set("project_id", selectedProjectId);
+                        startMemberTransition(async () => {
+                          const r = await addProjectMemberByEmailAction(fd);
+                          if (r.error) {
+                            setMemberMsg(r.error);
+                            return;
+                          }
+                          setMemberDialogOpen(false);
+                          router.refresh();
+                        });
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <Label>Email user *</Label>
+                        <Input
+                          name="email"
+                          type="email"
+                          required
+                          placeholder="contoh: user@domain.com"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Role</Label>
+                        <select
+                          name="role"
+                          defaultValue="member"
+                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                        >
+                          <option value="member">member</option>
+                          <option value="owner">owner</option>
+                        </select>
+                      </div>
+                      <Button type="submit" disabled={memberPending}>
+                        Tambahkan ke project
+                      </Button>
+                      {memberMsg && (
+                        <p className="text-xs text-red-600" role="alert">
+                          {memberMsg}
+                        </p>
+                      )}
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              )}
+              {canonicalOrgId && (
+                <Dialog
+                  open={projectDialogOpen}
+                  onOpenChange={(open) => {
+                    setProjectDialogOpen(open);
+                    if (open) setProjectMsg(null);
+                  }}
+                >
+                  <DialogTrigger render={<Button size="sm" variant="outline" />}>
+                    + Project
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Tambah project</DialogTitle>
+                      <DialogDescription>
+                        Buat project baru di organisasi aktif.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <form
+                      className="grid gap-3"
+                      action={(fd) => {
+                        if (!canonicalOrgId) return;
+                        setProjectMsg(null);
+                        fd.set("organization_id", canonicalOrgId);
+                        startTaskTransition(async () => {
+                          const r = await createProjectInOrganizationAction(fd);
+                          if (r.error) {
+                            setProjectMsg(r.error);
+                            return;
+                          }
+                          setProjectDialogOpen(false);
+                          router.refresh();
+                        });
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <Label>Nama project *</Label>
+                        <Input name="project_name" required placeholder="Contoh: PLM Cirebon 2028" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Kode project (opsional)</Label>
+                        <Input name="project_key" placeholder="PLM28" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Deskripsi (opsional)</Label>
+                        <Textarea
+                          name="project_description"
+                          rows={3}
+                          placeholder="Catatan singkat project"
+                        />
+                      </div>
+                      <Button type="submit" disabled={taskPending}>
+                        Buat project
+                      </Button>
+                      {projectMsg && (
+                        <p className="text-xs text-red-600" role="alert">
+                          {projectMsg}
+                        </p>
+                      )}
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              )}
+            </div>
+          </div>
           {projectsInOrg.map((p) => {
             const treeRows = flattenIssuesWithDepth(p.id, issues);
             const projectIssues = issues.filter((i) => i.project_id === p.id);
@@ -950,7 +1509,17 @@ export function WorkspaceClient({
             const issueIdsWithChildren = new Set(
               projectIssues.filter((i) => i.parent_id).map((i) => i.parent_id as string)
             );
-            const visibleTreeRows = treeRows.filter(({ issue }) => {
+            const treeRowsForSidebar = treeRows.filter(({ issue, depth }) => {
+              const hasChildren = issueIdsWithChildren.has(issue.id);
+              if (hasChildren) return true;
+              return depth < 2;
+            });
+            const sidebarParentIdsWithVisibleChildren = new Set(
+              treeRowsForSidebar
+                .map(({ issue }) => issue.parent_id)
+                .filter((id): id is string => Boolean(id))
+            );
+            const visibleTreeRows = treeRowsForSidebar.filter(({ issue }) => {
               let parentId = issue.parent_id;
               while (parentId) {
                 if (collapsedIssueIds.has(parentId)) return false;
@@ -962,58 +1531,76 @@ export function WorkspaceClient({
               selectedProjectId === p.id && !selectedTaskId;
 
             return (
-              <div key={p.id} className="rounded-xl border border-sidebar-border/80 bg-sidebar-accent/35 shadow-sm">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    replaceQuery((q) => {
-                      q.set("org", p.organization_id);
-                      q.set("project", p.id);
-                      q.delete("task");
-                    });
-                  }}
-                  className={`h-auto w-full justify-start gap-2 rounded-t-md px-3 py-2 text-left text-sm font-medium ${
-                    isSelectedProject
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
-                  }`}
-                >
-                  <span className="text-xs text-muted-foreground">▾</span>
-                  {p.name}
-                </Button>
-                <ul className="space-y-0.5 border-t border-sidebar-border/70 py-1 pl-2">
+              <div key={p.id} className="ml-2">
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      replaceQuery((q) => {
+                        q.set("org", p.organization_id);
+                        q.set("project", p.id);
+                        q.delete("task");
+                      });
+                    }}
+                    className={`h-8 flex-1 justify-start gap-2 rounded-md px-3 text-left text-[0.95rem] font-medium ${
+                      isSelectedProject
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
+                    }`}
+                  >
+                    <span className="truncate">{p.name}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="h-8 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setProjectMsg(null);
+                      setProjectDeleteConfirm({ projectId: p.id, name: p.name });
+                    }}
+                    aria-label={`Hapus project ${p.name}`}
+                    title="Hapus project"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="h-8 w-7 text-muted-foreground hover:bg-sidebar-accent"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setCollapsedProjectIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(p.id)) next.delete(p.id);
+                        else next.add(p.id);
+                        return next;
+                      });
+                    }}
+                    aria-label={collapsedProjectIds.has(p.id) ? "Expand project" : "Collapse project"}
+                  >
+                    {collapsedProjectIds.has(p.id) ? (
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </div>
+                {!collapsedProjectIds.has(p.id) && (
+                <ul className="ml-3 mt-1 space-y-0.5 border-l border-sidebar-border/70 pl-2">
                   {visibleTreeRows.map(({ issue: t, depth }) => {
                     const isTask = selectedTaskId === t.id;
-                    const hasChildren = issueIdsWithChildren.has(t.id);
+                    const showChevron = sidebarParentIdsWithVisibleChildren.has(t.id);
                     const isCollapsed = collapsedIssueIds.has(t.id);
                     return (
                       <li key={t.id} style={{ paddingLeft: depth * 12 }}>
                         <div className="flex items-center gap-1">
-                          {hasChildren ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-auto rounded px-1 text-xs text-muted-foreground hover:bg-sidebar-accent"
-                              title={isCollapsed ? "Expand" : "Collapse"}
-                              onClick={() => {
-                                setCollapsedIssueIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(t.id)) next.delete(t.id);
-                                  else next.add(t.id);
-                                  return next;
-                                });
-                              }}
-                            >
-                              {isCollapsed ? "▸" : "▾"}
-                            </Button>
-                          ) : (
-                            <span className="inline-block w-4 text-center text-xs text-muted-foreground/50">
-                              ·
-                            </span>
-                          )}
                           <Button
                             type="button"
                             variant="ghost"
@@ -1025,22 +1612,101 @@ export function WorkspaceClient({
                                 q.set("task", t.id);
                               });
                             }}
-                            className={`h-auto w-full justify-start rounded-md px-2 py-1.5 text-left text-sm ${
+                            className={`h-7 flex-1 justify-start rounded-md px-2 text-left text-[0.95rem] font-normal ${
                               isTask
-                                ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
                                 : "text-sidebar-foreground hover:bg-sidebar-accent/70"
                             }`}
                           >
-                            {t.title}
+                            <span className="truncate">{t.title}</span>
                           </Button>
+                          {showChevron ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              className="h-7 w-7 text-muted-foreground hover:bg-sidebar-accent"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setCollapsedIssueIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(t.id)) next.delete(t.id);
+                                  else next.add(t.id);
+                                  return next;
+                                });
+                              }}
+                              aria-label={isCollapsed ? "Expand" : "Collapse"}
+                            >
+                              {isCollapsed ? (
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          ) : null}
                         </div>
                       </li>
                     );
                   })}
                 </ul>
+                )}
               </div>
             );
           })}
+          <Dialog
+            open={projectDeleteConfirm !== null}
+            onOpenChange={(open) => {
+              if (!open) setProjectDeleteConfirm(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Hapus project</DialogTitle>
+                <DialogDescription>
+                  Project "{projectDeleteConfirm?.name ?? "ini"}" akan dihapus
+                  (soft delete) beserta unit kerja di dalamnya tidak lagi tampil.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setProjectDeleteConfirm(null)}
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={taskPending}
+                  onClick={() => {
+                    const current = projectDeleteConfirm;
+                    if (!current) return;
+                    setProjectMsg(null);
+                    const fd = new FormData();
+                    fd.set("project_id", current.projectId);
+                    startTaskTransition(async () => {
+                      const r = await deleteProjectAction(fd);
+                      if (r.error) {
+                        setProjectMsg(r.error);
+                        return;
+                      }
+                      setProjectDeleteConfirm(null);
+                      router.refresh();
+                    });
+                  }}
+                >
+                  Ya, hapus project
+                </Button>
+              </div>
+              {projectMsg && (
+                <p className="text-xs text-red-600" role="alert">
+                  {projectMsg}
+                </p>
+              )}
+            </DialogContent>
+          </Dialog>
         </div>
         {canonicalOrgId && userEmail && (
           <OrganizationModuleToggles
@@ -1050,45 +1716,62 @@ export function WorkspaceClient({
           />
         )}
       </aside>
+      )}
 
-      <main className="flex min-w-0 flex-1 flex-col bg-muted/40">
-        <header className="border-b border-border bg-card/90 px-6 py-4 backdrop-blur">
+      <main className="flex min-w-0 flex-1 flex-col bg-muted/30">
+        <Tabs
+          value={activeView}
+          onValueChange={(value) => {
+            const v = value as ViewId;
+            replaceQuery((q) => {
+              q.set("view", viewToParam(v));
+              if (v !== "Berkas" && v !== "Map") {
+                q.delete("berkas");
+              }
+            });
+          }}
+          className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
+        >
+        <header className="border-b border-border bg-card/90 px-6 py-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            Scope aktif
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="inline-flex h-5 w-5 items-center justify-center text-foreground transition-colors hover:opacity-80"
+                onClick={() => setIsSidebarCollapsed((v) => !v)}
+                title={isSidebarCollapsed ? "Buka sidebar" : "Tutup sidebar"}
+                aria-label={isSidebarCollapsed ? "Buka sidebar" : "Tutup sidebar"}
+              >
+                <PanelLeft className="h-4 w-4" />
+              </button>
+              <div className="h-6 w-px bg-border" aria-hidden="true" />
+              <div>
+          <p className="text-sm text-muted-foreground">
+            {selectedScopePath
+              .split(" > ")
+              .filter(Boolean)
+              .map((segment, idx, arr) => (
+                <span key={`${segment}-${idx}`}>
+                  <span className={idx === arr.length - 1 ? "text-foreground" : ""}>
+                    {segment}
+                  </span>
+                  {idx < arr.length - 1 ? <span className="mx-1">›</span> : null}
+                </span>
+              ))}
           </p>
-          <h2 className="text-lg font-semibold">
-            {selectedTask
-              ? `Task: ${selectedTask.title}`
-              : selectedProject
-                ? `Project: ${selectedProject.name}`
-                : "—"}
-          </h2>
-          {selectedOrganization && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Organisasi:{" "}
-              <span className="font-medium">{selectedOrganization.name}</span>
-            </p>
-          )}
-          <p className="mt-1 truncate text-xs text-muted-foreground">
-            URL:{" "}
-            <code className="rounded bg-muted px-1">
-              ?org=…&amp;project=…&amp;task=…&amp;view=…&amp;berkas=…
-            </code>
-          </p>
+              </div>
             </div>
             {userEmail && (
-              <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-start">
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                 <NotificationsBell notifications={userNotifications} />
                 <ThemeToggle />
-                <form action={signOut} className="shrink-0">
-                  <p className="text-right text-xs text-muted-foreground">{userEmail}</p>
+                <form action={signOut} className="flex shrink-0 items-center gap-2">
+                  <p className="text-xs text-muted-foreground">{userEmail}</p>
                   <Button
                     type="submit"
                     variant="outline"
                     size="sm"
-                    className="mt-1 h-auto px-2 py-1 text-xs"
+                    className="h-auto px-2 py-1 text-xs"
                   >
                     Keluar
                   </Button>
@@ -1101,68 +1784,28 @@ export function WorkspaceClient({
               {joinError}
             </p>
           )}
-          <div className="mt-5 flex flex-wrap gap-2">
-            {visibleViews.map((view) => (
-              <Button
-                key={view}
-                type="button"
-                variant={activeView === view ? "default" : "secondary"}
-                size="sm"
-                onClick={() =>
-                  replaceQuery((q) => {
-                    q.set("view", viewToParam(view));
-                    if (view !== "Berkas" && view !== "Map") {
-                      q.delete("berkas");
-                    }
-                  })
-                }
-                className="h-8 rounded-full px-3 text-sm font-medium"
-              >
-                {view}
-              </Button>
-            ))}
-          </div>
         </header>
 
-        <section className="flex-1 overflow-auto p-6">
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-            <h3 className="text-base font-semibold">
-              {activeView} —{" "}
-              {selectedTask ? "fokus task" : "cakupan project"}
-            </h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Data dari <code className="rounded bg-muted px-1">core_pm</code>
-              . Query:{" "}
-              <code className="rounded bg-muted px-1">
-                org={canonicalOrgId?.slice(0, 8)}…
-              </code>{" "}
-              <code className="rounded bg-muted px-1">
-                project={selectedProjectId?.slice(0, 8)}…
-              </code>
-              {selectedTaskId && (
-                <>
-                  {" "}
-                  <code className="rounded bg-muted px-1">
-                    task={selectedTaskId.slice(0, 8)}…
-                  </code>
-                </>
-              )}{" "}
-              <code className="rounded bg-muted px-1">
-                view={viewToParam(activeView)}
-              </code>
-            </p>
-            {activeView === "Dashboard" && (
+        <section className="min-h-0 flex-1 overflow-auto p-6">
+            <TabsList className="mb-4 h-auto min-h-9 w-full max-w-full flex-wrap justify-start gap-1 rounded-lg bg-muted p-1 text-muted-foreground sm:flex-nowrap">
+              {visibleViews.map((view) => (
+                <TabsTrigger key={view} value={view} className="px-2.5 sm:px-3">
+                  {view}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            <TabsContent value="Dashboard" className="block w-full min-w-0 outline-none">
               <>
                 <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <Card className="shadow-none">
                     <CardContent className="p-4 text-sm text-muted-foreground">
-                      Task level atas:{" "}
+                      Unit kerja level atas:{" "}
                       <span className="font-semibold text-foreground">{topLevelCount}</span>
                     </CardContent>
                   </Card>
                   <Card className="shadow-none">
                     <CardContent className="p-4 text-sm text-muted-foreground">
-                      Total baris terurut (dengan sub-task):{" "}
+                      Total baris terurut (dengan unit turunan):{" "}
                       <span className="font-semibold text-foreground">{issuesInScope.length}</span>
                     </CardContent>
                   </Card>
@@ -1199,17 +1842,17 @@ export function WorkspaceClient({
                   <div className="mt-5 rounded-xl border border-border bg-muted/40 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        Tambah task cepat (core PM)
+                        Tambah unit kerja cepat (core PM)
                       </p>
                       <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
                         <DialogTrigger render={<Button size="sm" />}>
-                          + Task
+                          + Unit Kerja
                         </DialogTrigger>
                         <DialogContent>
                           <DialogHeader>
-                            <DialogTitle>Tambah task</DialogTitle>
+                            <DialogTitle>Tambah unit kerja</DialogTitle>
                             <DialogDescription>
-                              Buat task level project dengan data jadwal dan progres opsional.
+                              Buat unit kerja level project dengan data jadwal dan progres opsional.
                             </DialogDescription>
                           </DialogHeader>
                           <form
@@ -1230,7 +1873,7 @@ export function WorkspaceClient({
                             }}
                           >
                             <div className="space-y-1">
-                              <Label>Judul task *</Label>
+                              <Label>Judul unit kerja *</Label>
                               <Input
                                 name="title"
                                 required
@@ -1268,7 +1911,7 @@ export function WorkspaceClient({
                               </div>
                             </div>
                             <Button type="submit" disabled={taskPending}>
-                              Simpan task
+                              Simpan unit kerja
                             </Button>
                           </form>
                         </DialogContent>
@@ -1285,7 +1928,7 @@ export function WorkspaceClient({
                   <div className="mt-3 rounded-md border border-primary/25 bg-primary/10 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-foreground">
-                        Tambah subtask ke task terpilih
+                        Tambah unit turunan ke unit kerja terpilih
                       </p>
                       <Dialog
                         open={subtaskDialogOpen}
@@ -1296,13 +1939,13 @@ export function WorkspaceClient({
                             <Button size="sm" variant="secondary" />
                           }
                         >
-                          + Subtask
+                          + Unit Turunan
                         </DialogTrigger>
                         <DialogContent>
                           <DialogHeader>
-                            <DialogTitle>Tambah subtask</DialogTitle>
+                            <DialogTitle>Tambah unit turunan</DialogTitle>
                             <DialogDescription>
-                              Subtask akan ditambahkan di bawah task terpilih.
+                              Unit turunan akan ditambahkan di bawah unit kerja terpilih.
                             </DialogDescription>
                           </DialogHeader>
                           <form
@@ -1326,7 +1969,7 @@ export function WorkspaceClient({
                             }}
                           >
                             <div className="space-y-1">
-                              <Label>Judul subtask *</Label>
+                              <Label>Judul unit turunan *</Label>
                               <Input
                                 name="title"
                                 required
@@ -1374,7 +2017,7 @@ export function WorkspaceClient({
                               </div>
                             </div>
                             <Button type="submit" disabled={taskPending}>
-                              Simpan subtask
+                              Simpan unit turunan
                             </Button>
                           </form>
                         </DialogContent>
@@ -1414,7 +2057,7 @@ export function WorkspaceClient({
                           <DialogHeader>
                             <DialogTitle>Update progress angka</DialogTitle>
                             <DialogDescription>
-                              Ubah target, realisasi, dan bobot task terpilih.
+                              Ubah target, realisasi, dan bobot unit kerja terpilih.
                             </DialogDescription>
                           </DialogHeader>
                           <form
@@ -1475,12 +2118,6 @@ export function WorkspaceClient({
                         </DialogContent>
                       </Dialog>
                     </div>
-                    <p className="mt-1 text-xs text-sky-900/90">
-                      Task:{" "}
-                      <span className="font-medium">
-                        {selectedTask.title}
-                      </span>
-                    </p>
                   </div>
                 )}
                 {enabledModulesForOrg.has("plm") && selectedProjectId && (
@@ -1509,39 +2146,42 @@ export function WorkspaceClient({
                   </div>
                 )}
               </>
-            )}
-            {activeView === "Tabel" && (
+            </TabsContent>
+            <TabsContent value="Tabel" className="block w-full min-w-0 outline-none">
               <div className="mt-5 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
+                <div className="border-b border-border px-4 py-2.5">
+                  <p className="text-sm font-semibold text-foreground">Unit Kerja</p>
+                </div>
                 <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
                   <thead>
                     <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                      <th className="px-4 py-3 pr-4 font-medium">Judul</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Status</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Bobot</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Realisasi/Target</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Progress %</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Mulai</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Tenggat</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Sub-task?</th>
-                      <th className="px-4 py-3 pr-4 font-medium">Aksi</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Judul</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Status</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Bobot</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Realisasi/Target</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Progress %</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Mulai</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Tenggat</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Unit Induk</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Aksi</th>
                     </tr>
                   </thead>
                   <tbody>
                     {!selectedTaskId && selectedProject && (
                       <tr className="border-b border-border bg-primary/10">
-                        <td className="px-4 py-3 pr-4 font-semibold text-primary">
+                        <td className="px-4 py-3 align-middle font-semibold text-primary">
                           {selectedProject.name}
                         </td>
-                        <td className="px-4 py-3 pr-4 text-primary">Ringkasan</td>
-                        <td className="px-4 py-3 pr-4 text-primary">—</td>
-                        <td className="px-4 py-3 pr-4 text-primary">— / —</td>
-                        <td className="px-4 py-3 pr-4 font-semibold text-primary">
+                        <td className="px-4 py-3 align-middle text-primary">Ringkasan</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary whitespace-nowrap">— / —</td>
+                        <td className="px-4 py-3 align-middle font-semibold text-primary whitespace-nowrap">
                           {projectProgressPercent.toFixed(1)}%
                         </td>
-                        <td className="px-4 py-3 pr-4 text-primary">—</td>
-                        <td className="px-4 py-3 pr-4 text-primary">—</td>
-                        <td className="px-4 py-3 pr-4 text-primary">—</td>
-                        <td className="px-4 py-3 pr-4 text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
                       </tr>
                     )}
                     {tableRows.map(({ issue, depth }) => {
@@ -1555,7 +2195,7 @@ export function WorkspaceClient({
                         <tr
                           key={issue.id}
                           className={`border-b border-border/70 hover:bg-muted/60 ${
-                            selectedTaskId === issue.id ? "bg-primary/10" : ""
+                            selectedTaskId === issue.id ? "bg-primary/10 font-semibold" : ""
                           }`}
                           role="button"
                           tabIndex={0}
@@ -1568,60 +2208,80 @@ export function WorkspaceClient({
                           }}
                         >
                           <td
-                            className={`py-2 pr-4 ${
+                            className={`px-4 py-3 align-middle ${
                               isSelectedRootRow ? "font-semibold text-primary" : ""
                             }`}
                           >
-                            <span className="pl-4" style={{ paddingLeft: depth * 12 }}>
+                            <span className="block" style={{ paddingLeft: depth * 12 }}>
                               {issue.title}
                             </span>
                           </td>
-                          <td className="py-2 pr-4">
+                          <td className="px-4 py-3 align-middle">
                             <Badge className={statusBadgeClass(st?.category)}>
                               {st?.name ?? "Tanpa status"}
                             </Badge>
                           </td>
-                          <td className="py-2 pr-4 text-muted-foreground">
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
                             {issue.issue_weight ?? "1"}
                           </td>
-                          <td className="py-2 pr-4 text-muted-foreground">
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
                             {issue.progress_actual ?? "—"} / {issue.progress_target ?? "—"}
                           </td>
-                          <td className="py-2 pr-4 text-muted-foreground">
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
                             {progressPct.toFixed(1)}%
                           </td>
-                          <td className="py-2 pr-4 text-muted-foreground">
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
                             {formatShortDate(issue.starts_at)}
                           </td>
-                          <td className="py-2 pr-4 text-muted-foreground">
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
                             {formatShortDate(issue.due_at)}
                           </td>
-                          <td className="py-2 pr-4 text-muted-foreground">
-                            {isChild ? "Ya" : "—"}
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
+                            {issue.parent_id
+                              ? (issueTitleById.get(issue.parent_id) ?? "—")
+                              : "—"}
                           </td>
-                          <td className="py-2 pr-4">
+                          <td className="px-4 py-3 align-middle whitespace-nowrap">
                             {selectedProjectId ? (
                               <div
                                 onClick={(e) => e.stopPropagation()}
                                 onKeyDown={(e) => e.stopPropagation()}
                               >
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant={isDone ? "outline" : "secondary"}
-                                  disabled={taskPending}
-                                  className="h-auto px-2 py-0.5 text-xs font-medium disabled:opacity-70"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    setTaskConfirm({
-                                      issueId: issue.id,
-                                      mode: isDone ? "reopen" : "done",
-                                      title: issue.title,
-                                    });
-                                  }}
-                                >
-                                  {isDone ? "Buka lagi" : "Selesaikan"}
-                                </Button>
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={isDone ? "outline" : "secondary"}
+                                    disabled={taskPending}
+                                    className="h-auto px-2 py-0.5 text-xs font-medium disabled:opacity-70"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      setTaskConfirm({
+                                        issueId: issue.id,
+                                        mode: isDone ? "reopen" : "done",
+                                        title: issue.title,
+                                      });
+                                    }}
+                                  >
+                                    {isDone ? "Buka lagi" : "Selesaikan"}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={taskPending}
+                                    className="h-auto px-2 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/10"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      setTaskDeleteConfirm({
+                                        issueId: issue.id,
+                                        title: issue.title,
+                                      });
+                                    }}
+                                  >
+                                    Hapus
+                                  </Button>
+                                </div>
                                 <Dialog
                                   open={taskConfirm?.issueId === issue.id}
                                   onOpenChange={(open) => {
@@ -1632,13 +2292,13 @@ export function WorkspaceClient({
                                     <DialogHeader>
                                       <DialogTitle>
                                         {taskConfirm?.mode === "reopen"
-                                          ? "Konfirmasi buka lagi task"
-                                          : "Konfirmasi selesaikan task"}
+                                          ? "Konfirmasi buka lagi unit kerja"
+                                          : "Konfirmasi selesaikan unit kerja"}
                                       </DialogTitle>
                                       <DialogDescription>
                                         {taskConfirm?.mode === "reopen"
-                                          ? `Task "${taskConfirm?.title ?? issue.title}" akan dibuka lagi.`
-                                          : `Task "${taskConfirm?.title ?? issue.title}" dan seluruh child-nya akan ditandai selesai.`}
+                                          ? `Unit kerja "${taskConfirm?.title ?? issue.title}" akan dibuka lagi.`
+                                          : `Unit kerja "${taskConfirm?.title ?? issue.title}" dan seluruh turunan-nya akan ditandai selesai.`}
                                       </DialogDescription>
                                     </DialogHeader>
                                     <div className="flex justify-end gap-2">
@@ -1680,6 +2340,60 @@ export function WorkspaceClient({
                                     </div>
                                   </DialogContent>
                                 </Dialog>
+                                <Dialog
+                                  open={taskDeleteConfirm?.issueId === issue.id}
+                                  onOpenChange={(open) => {
+                                    if (!open) setTaskDeleteConfirm(null);
+                                  }}
+                                >
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Hapus unit kerja</DialogTitle>
+                                      <DialogDescription>
+                                        Unit kerja "{taskDeleteConfirm?.title ?? issue.title}" akan
+                                        dihapus (soft delete), termasuk seluruh unit turunannya.
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="flex justify-end gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => setTaskDeleteConfirm(null)}
+                                      >
+                                        Batal
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="destructive"
+                                        disabled={taskPending}
+                                        onClick={() => {
+                                          const current = taskDeleteConfirm;
+                                          if (!current || !selectedProjectId) return;
+                                          setTaskMsg(null);
+                                          const fd = new FormData();
+                                          fd.set("issue_id", current.issueId);
+                                          fd.set("project_id", selectedProjectId);
+                                          startTaskTransition(async () => {
+                                            const r = await deleteTaskAction(fd);
+                                            if (r.error) {
+                                              setTaskMsg(r.error);
+                                              return;
+                                            }
+                                            setTaskDeleteConfirm(null);
+                                            router.refresh();
+                                          });
+                                        }}
+                                      >
+                                        Ya, hapus unit kerja
+                                      </Button>
+                                    </div>
+                                    {taskMsg && (
+                                      <p className="text-xs text-red-600" role="alert">
+                                        {taskMsg}
+                                      </p>
+                                    )}
+                                  </DialogContent>
+                                </Dialog>
                               </div>
                             ) : null}
                           </td>
@@ -1694,8 +2408,304 @@ export function WorkspaceClient({
                   </p>
                 )}
               </div>
-            )}
-            {activeView === "Berkas" && (
+              <div className="mt-4 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
+                <div className="border-b border-border px-4 py-2.5">
+                  <p className="text-sm font-semibold text-foreground">Project Members</p>
+                </div>
+                <table className="w-full min-w-[26rem] border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">Nama</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">Peran</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">User ID</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">Bergabung</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projectMembersForSelectedProject.map((member) => (
+                      <tr key={`${member.project_id}:${member.user_id}`} className="border-b border-border/70">
+                        <td className="px-4 py-3 align-middle">
+                          {member.display_name?.trim() || "Tanpa nama"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-muted-foreground">
+                          {member.role}
+                        </td>
+                        <td className="px-4 py-3 align-middle font-mono text-xs text-muted-foreground">
+                          {member.user_id}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-muted-foreground">
+                          {formatShortDate(member.joined_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {projectMembersForSelectedProject.length === 0 && (
+                  <p className="m-4 text-sm text-muted-foreground">
+                    Belum ada anggota pada project ini.
+                  </p>
+                )}
+              </div>
+              <div className="mt-4 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
+                <div className="flex min-w-0 flex-nowrap items-center gap-2 border-b border-border px-4 py-2.5">
+                  <p className="shrink-0 text-sm font-semibold text-foreground">
+                    Atribut Spasial
+                  </p>
+                  <Input
+                    value={spatialSearchText}
+                    onChange={(e) => setSpatialSearchText(e.target.value)}
+                    placeholder="Cari unit kerja / atribut / nilai..."
+                    className="h-8 min-w-[8rem] flex-1 text-xs sm:max-w-[14rem] md:max-w-xs"
+                  />
+                  <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                    {spatialTableTotalRows.toLocaleString("id-ID")} baris
+                  </span>
+                  <div className="ml-auto flex shrink-0 items-center gap-2 text-xs">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      disabled={spatialTablePage <= 1}
+                      onClick={() => setSpatialTablePage((p) => Math.max(1, p - 1))}
+                    >
+                      Sebelumnya
+                    </Button>
+                    <span className="whitespace-nowrap text-muted-foreground">
+                      Halaman {spatialTablePage} / {spatialTableTotalPages}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      disabled={spatialTablePage >= spatialTableTotalPages}
+                      onClick={() =>
+                        setSpatialTablePage((p) => Math.min(spatialTableTotalPages, p + 1))
+                      }
+                    >
+                      Berikutnya
+                    </Button>
+                  </div>
+                </div>
+                <table className="w-full min-w-[42rem] border-collapse text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <th className="px-3 py-2 font-medium">Unit Kerja</th>
+                      {issueGeometryAttributeKeysForTableView.map((key) => (
+                        <th key={key} className="px-3 py-2 font-medium">
+                          {key}
+                        </th>
+                      ))}
+                      <th className="w-24 px-3 py-2 text-right font-medium">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {issueGeometryRowsForTableViewPaged.map((row) => {
+                      const props = issueGeometryPropertiesForDisplay(row);
+                      return (
+                        <tr key={row.id} className="border-b border-border/70">
+                          <td className="px-3 py-2">
+                            {issueTitleById.get(row.issue_id) ?? row.issue_id}
+                          </td>
+                          {issueGeometryAttributeKeysForTableView.map((key) => (
+                            <td
+                              key={`${row.id}:${key}`}
+                              className="max-w-[260px] truncate px-3 py-2 font-mono"
+                              title={compactValuePreview(props[key], 500)}
+                            >
+                              {compactValuePreview(props[key])}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2 text-right align-middle">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => {
+                                setSpatialAttributeEditMsg(null);
+                                setSpatialAttributeEditEntries(
+                                  buildSpatialAttributeEditEntries(row)
+                                );
+                                setSpatialAttributeEditRow(row);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {issueGeometryRowsForTableViewFiltered.length === 0 && (
+                  <p className="m-4 text-xs text-muted-foreground">
+                    {spatialSearchQuery
+                      ? "Tidak ada data yang cocok dengan kata kunci pencarian."
+                      : selectedTaskId
+                        ? "Belum ada data GeoJSON geometri untuk unit kerja terpilih."
+                        : "Belum ada data GeoJSON geometri unit kerja pada project ini."}
+                  </p>
+                )}
+                <Dialog
+                  open={spatialAttributeEditRow !== null}
+                  onOpenChange={(open) => {
+                    if (!open) {
+                      setSpatialAttributeEditRow(null);
+                      setSpatialAttributeEditMsg(null);
+                    }
+                  }}
+                >
+                  <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>Edit atribut</DialogTitle>
+                    </DialogHeader>
+                    {spatialAttributeEditRow ? (
+                      <div className="space-y-3 text-sm">
+                        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+                          <div>
+                            <span className="text-muted-foreground">Unit kerja:</span>{" "}
+                            <span className="font-medium text-foreground">
+                              {issueTitleById.get(spatialAttributeEditRow.issue_id) ??
+                                spatialAttributeEditRow.issue_id}
+                            </span>
+                          </div>
+                          <div className="mt-1">
+                            <span className="text-muted-foreground">feature_key:</span>{" "}
+                            <span className="font-mono text-foreground">
+                              {spatialAttributeEditRow.feature_key}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {spatialAttributeEditEntries.map((entry, idx) => (
+                            <div
+                              key={idx}
+                              className="flex flex-wrap items-center gap-2"
+                            >
+                              <Input
+                                className="h-8 min-w-0 flex-1 font-mono text-xs"
+                                placeholder="key"
+                                value={entry.key}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setSpatialAttributeEditEntries((prev) =>
+                                    prev.map((p, i) =>
+                                      i === idx ? { ...p, key: v } : p
+                                    )
+                                  );
+                                }}
+                              />
+                              <Input
+                                className="h-8 min-w-0 flex-[2] font-mono text-xs"
+                                placeholder="value (JSON boleh)"
+                                value={entry.value}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setSpatialAttributeEditEntries((prev) =>
+                                    prev.map((p, i) =>
+                                      i === idx ? { ...p, value: v } : p
+                                    )
+                                  );
+                                }}
+                              />
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 shrink-0 px-2 text-muted-foreground hover:text-destructive"
+                                onClick={() =>
+                                  setSpatialAttributeEditEntries((prev) =>
+                                    prev.length > 1
+                                      ? prev.filter((_, i) => i !== idx)
+                                      : prev
+                                  )
+                                }
+                              >
+                                Hapus
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-8 text-xs"
+                          onClick={() =>
+                            setSpatialAttributeEditEntries((prev) => [
+                              ...prev,
+                              { key: "", value: "" },
+                            ])
+                          }
+                        >
+                          Tambah atribut
+                        </Button>
+                        {spatialAttributeEditMsg && (
+                          <p className="text-xs text-destructive" role="alert">
+                            {spatialAttributeEditMsg}
+                          </p>
+                        )}
+                        <div className="flex justify-end gap-2 pt-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSpatialAttributeEditRow(null);
+                              setSpatialAttributeEditMsg(null);
+                            }}
+                          >
+                            Batal
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={spatialAttributeEditPending}
+                            onClick={() => {
+                              if (!spatialAttributeEditRow) return;
+                              setSpatialAttributeEditMsg(null);
+                              const props: Record<string, unknown> = {};
+                              for (const e of spatialAttributeEditEntries) {
+                                const k = e.key.trim();
+                                if (!k || k.startsWith("_")) continue;
+                                if (NON_EDITABLE_SPATIAL_ATTR_KEYS.has(k)) continue;
+                                props[k] = parseSpatialAttributeValue(e.value);
+                              }
+                              const fd = new FormData();
+                              fd.set(
+                                "project_id",
+                                spatialAttributeEditRow.project_id
+                              );
+                              fd.set("issue_id", spatialAttributeEditRow.issue_id);
+                              fd.set("feature_id", spatialAttributeEditRow.id);
+                              fd.set("properties_json", JSON.stringify(props));
+                              startSpatialAttributeEditTransition(async () => {
+                                const r =
+                                  await updateIssueGeometryFeaturePropertiesAction(
+                                    fd
+                                  );
+                                if (r.error) {
+                                  setSpatialAttributeEditMsg(r.error);
+                                  return;
+                                }
+                                setSpatialAttributeEditRow(null);
+                                setSpatialAttributeEditMsg(null);
+                                router.refresh();
+                              });
+                            }}
+                          >
+                            Simpan
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </TabsContent>
+            <TabsContent value="Berkas" className="block w-full min-w-0 outline-none">
               <div className="mt-4 space-y-3">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
@@ -1705,7 +2715,7 @@ export function WorkspaceClient({
                   <>
                     {selectedTaskId && (
                       <p className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
-                        Scope <strong>task</strong> aktif — daftar berkas tetap
+                        Scope <strong>unit kerja</strong> aktif — daftar berkas tetap
                         untuk seluruh <strong>project</strong> ini.
                       </p>
                     )}
@@ -1754,8 +2764,8 @@ export function WorkspaceClient({
                   </>
                 )}
               </div>
-            )}
-            {activeView === "Laporan" && (
+            </TabsContent>
+            <TabsContent value="Laporan" className="block w-full min-w-0 outline-none">
               <div className="mt-4">
                 <p className="mb-3 text-sm text-muted-foreground">
                   Agregat dari view SQL schema{" "}
@@ -1769,8 +2779,8 @@ export function WorkspaceClient({
                   pengukuranByStatus={plmPengukuranStatusSummary}
                 />
               </div>
-            )}
-            {activeView === "Keuangan" && (
+            </TabsContent>
+            <TabsContent value="Keuangan" className="block w-full min-w-0 outline-none">
               <div className="mt-4">
                 <FinancePanel
                   projectId={selectedProjectId}
@@ -1785,8 +2795,8 @@ export function WorkspaceClient({
                   pembayaran={financePembayaranInProject}
                 />
               </div>
-            )}
-            {activeView === "Map" && (
+            </TabsContent>
+            <TabsContent value="Map" className="block w-full min-w-0 outline-none">
               <div className="mt-4 space-y-3">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
@@ -1795,177 +2805,545 @@ export function WorkspaceClient({
                 ) : (
                   <>
                     {selectedTaskId && (
-                      <p className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
-                        Scope <strong>task</strong> aktif — peta menampilkan
-                        footprint demo dan bidang hasil ukur untuk seluruh
-                        project ini (bukan geometri per task).
-                      </p>
+                        <Dialog
+                          open={mapGeomDialogOpen}
+                          onOpenChange={setMapGeomDialogOpen}
+                        >
+                          <DialogContent className="max-h-[85vh] max-w-[min(92vw,640px)] overflow-x-hidden overflow-y-auto">
+                            <DialogHeader>
+                              <DialogTitle>
+                                {mapGeomInputMode === "manage"
+                                  ? "Hapus geometri fitur unit kerja"
+                                  : "Simpan geometri fitur unit kerja"}
+                              </DialogTitle>
+                              <DialogDescription>
+                                {mapGeomInputMode === "manage" ? (
+                                  <>
+                                    Daftar fitur geometri untuk unit kerja aktif. Hapus per
+                                    baris atau sekaligus sebelum batch ulang.
+                                  </>
+                                ) : (
+                                  <>
+                                    Pilih mode input per bidang atau batch FeatureCollection.
+                                    Data tersimpan sebagai banyak fitur 1:N di unit kerja aktif.
+                                  </>
+                                )}
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={mapGeomInputMode === "single" ? "default" : "outline"}
+                                className="h-7 px-2 text-xs"
+                                onClick={() => {
+                                  setMapGeomDeleteMsg(null);
+                                  setMapGeomInputMode("single");
+                                }}
+                              >
+                                Per bidang
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={mapGeomInputMode === "batch" ? "default" : "outline"}
+                                className="h-7 px-2 text-xs"
+                                onClick={() => {
+                                  setMapGeomDeleteMsg(null);
+                                  setMapGeomInputMode("batch");
+                                }}
+                              >
+                                Batch
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={mapGeomInputMode === "manage" ? "default" : "outline"}
+                                className="h-7 px-2 text-xs"
+                                onClick={() => {
+                                  setMapGeomMsg(null);
+                                  setMapGeomBatchMsg(null);
+                                  setMapGeomDeleteMsg(null);
+                                  setMapGeomInputMode("manage");
+                                }}
+                              >
+                                Hapus
+                              </Button>
+                            </div>
+                            {mapGeomInputMode === "manage" ? (
+                              <div className="space-y-3">
+                                {issueGeometriesForManageTask.length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">
+                                    Belum ada geometri fitur untuk task ini.
+                                  </p>
+                                ) : (
+                                  <>
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <p className="text-xs text-muted-foreground">
+                                        Total{" "}
+                                        <span className="font-semibold text-foreground">
+                                          {issueGeometriesForManageTask.length}
+                                        </span>{" "}
+                                        fitur.
+                                      </p>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="destructive"
+                                        className="h-7 px-2 text-xs"
+                                        disabled={mapGeomPending}
+                                        onClick={() => {
+                                          if (
+                                            !selectedProjectId ||
+                                            !selectedTaskId
+                                          ) {
+                                            return;
+                                          }
+                                          if (
+                                            !window.confirm(
+                                              `Hapus semua ${issueGeometriesForManageTask.length} geometri fitur unit kerja ini?`
+                                            )
+                                          ) {
+                                            return;
+                                          }
+                                          setMapGeomDeleteMsg(null);
+                                          startMapGeomTransition(async () => {
+                                            const fd = new FormData();
+                                            fd.set(
+                                              "project_id",
+                                              selectedProjectId
+                                            );
+                                            fd.set("issue_id", selectedTaskId);
+                                            const r =
+                                              await deleteAllIssueGeometryFeaturesForIssueAction(
+                                                fd
+                                              );
+                                            if (r.error) {
+                                              setMapGeomDeleteMsg(r.error);
+                                              return;
+                                            }
+                                            setMapGeomDeleteMsg(
+                                              `Terhapus ${r.deleted} fitur.`
+                                            );
+                                            router.refresh();
+                                          });
+                                        }}
+                                      >
+                                        Hapus semua
+                                      </Button>
+                                    </div>
+                                    <div className="max-h-[36vh] overflow-y-auto rounded-md border border-border">
+                                      <table className="w-full border-collapse text-left text-xs">
+                                        <thead>
+                                          <tr className="border-b border-border bg-muted/50 text-muted-foreground">
+                                            <th className="px-2 py-1.5 font-medium">
+                                              feature_key
+                                            </th>
+                                            <th className="px-2 py-1.5 font-medium">
+                                              label
+                                            </th>
+                                            <th className="w-20 px-2 py-1.5 text-right font-medium">
+                                              Aksi
+                                            </th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {issueGeometriesForManageTask.map(
+                                            (row) => (
+                                              <tr
+                                                key={row.id}
+                                                className="border-b border-border/70"
+                                              >
+                                                <td className="px-2 py-1.5 font-mono text-[11px]">
+                                                  {row.feature_key}
+                                                </td>
+                                                <td className="max-w-[200px] truncate px-2 py-1.5">
+                                                  {row.label}
+                                                </td>
+                                                <td className="px-2 py-1.5 text-right">
+                                                  <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="h-6 px-2 text-[11px] text-destructive hover:bg-destructive/10"
+                                                    disabled={mapGeomPending}
+                                                    onClick={() => {
+                                                      if (
+                                                        !selectedProjectId ||
+                                                        !selectedTaskId
+                                                      ) {
+                                                        return;
+                                                      }
+                                                      setMapGeomDeleteMsg(null);
+                                                      startMapGeomTransition(
+                                                        async () => {
+                                                          const fd =
+                                                            new FormData();
+                                                          fd.set(
+                                                            "project_id",
+                                                            selectedProjectId
+                                                          );
+                                                          fd.set(
+                                                            "issue_id",
+                                                            selectedTaskId
+                                                          );
+                                                          fd.set(
+                                                            "feature_id",
+                                                            row.id
+                                                          );
+                                                          const r =
+                                                            await deleteIssueGeometryFeatureByIdAction(
+                                                              fd
+                                                            );
+                                                          if (r.error) {
+                                                            setMapGeomDeleteMsg(
+                                                              r.error
+                                                            );
+                                                            return;
+                                                          }
+                                                          setMapGeomDeleteMsg(
+                                                            "Satu fitur dihapus."
+                                                          );
+                                                          router.refresh();
+                                                        }
+                                                      );
+                                                    }}
+                                                  >
+                                                    Hapus
+                                                  </Button>
+                                                </td>
+                                              </tr>
+                                            )
+                                          )}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </>
+                                )}
+                                {mapGeomDeleteMsg && (
+                                  <p
+                                    className={`text-xs ${mapGeomDeleteMsg.includes("Terhapus") || mapGeomDeleteMsg.includes("Satu fitur") ? "text-emerald-700" : "text-red-600"}`}
+                                    role="alert"
+                                  >
+                                    {mapGeomDeleteMsg}
+                                  </p>
+                                )}
+                              </div>
+                            ) : mapGeomInputMode === "single" ? (
+                              <form
+                                key={`geom-single-${mapGeomFormNonce}`}
+                                className="grid gap-3"
+                                action={(fd) => {
+                                  if (!selectedProjectId || !selectedTaskId) return;
+                                  setMapGeomMsg(null);
+                                  fd.set("project_id", selectedProjectId);
+                                  fd.set("issue_id", selectedTaskId);
+                                  startMapGeomTransition(async () => {
+                                    const r = await upsertIssueGeometryFeatureAction(fd);
+                                    if (r.error) {
+                                      setMapGeomMsg(r.error);
+                                      return;
+                                    }
+                                    setMapGeomMsg("Berhasil simpan geometri per bidang.");
+                                    router.refresh();
+                                  });
+                                }}
+                              >
+                                <div className="space-y-1">
+                                  <Label>Feature key *</Label>
+                                  <Input
+                                    name="feature_key"
+                                    required
+                                    placeholder="contoh: sambeng-001 / bidang-12"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>Label (opsional)</Label>
+                                  <Input
+                                    name="label"
+                                    placeholder="contoh: Bidang Sambeng A1"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>Properties JSON (opsional)</Label>
+                                  <Textarea
+                                    name="properties_json"
+                                    rows={3}
+                                    defaultValue='{}'
+                                    placeholder='{"status":"ukur","luas_m2":1250}'
+                                    className="font-mono text-xs"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>GeoJSON *</Label>
+                                  <Textarea
+                                    name="geojson_json"
+                                    rows={9}
+                                    required
+                                    placeholder='{"type":"Polygon","coordinates":[[[108.53,-6.74],[108.54,-6.74],[108.54,-6.73],[108.53,-6.73],[108.53,-6.74]]]}'
+                                    className="font-mono text-xs"
+                                  />
+                                </div>
+                                <Button type="submit" disabled={mapGeomPending}>
+                                  Simpan geometri
+                                </Button>
+                                {mapGeomMsg && (
+                                  <p
+                                    className={`text-xs ${mapGeomMsg.includes("Berhasil") ? "text-emerald-700" : "text-red-600"}`}
+                                    role="alert"
+                                  >
+                                    {mapGeomMsg}
+                                  </p>
+                                )}
+                              </form>
+                            ) : (
+                              <form
+                                key={`geom-batch-${mapGeomFormNonce}`}
+                                className="grid gap-3"
+                                action={(fd) => {
+                                  if (!selectedProjectId || !selectedTaskId) return;
+                                  setMapGeomBatchMsg(null);
+                                  fd.set("project_id", selectedProjectId);
+                                  fd.set("issue_id", selectedTaskId);
+                                  startMapGeomTransition(async () => {
+                                    const r = await upsertIssueGeometryFeatureBatchAction(fd);
+                                    if (r.error) {
+                                      setMapGeomBatchMsg(r.error);
+                                      return;
+                                    }
+                                    const failText =
+                                      r.failed > 0
+                                        ? `, gagal ${r.failed}`
+                                        : "";
+                                    const sampleText =
+                                      r.failureSamples.length > 0
+                                        ? ` (${r.failureSamples.slice(0, 3).join(" | ")})`
+                                        : "";
+                                    setMapGeomBatchMsg(
+                                      `Batch selesai: berhasil ${r.insertedOrUpdated}${failText}.${sampleText}`
+                                    );
+                                    router.refresh();
+                                  });
+                                }}
+                              >
+                                <div className="space-y-1">
+                                  <Label>Prefix feature key (opsional)</Label>
+                                  <Input
+                                    name="feature_key_prefix"
+                                    placeholder="contoh: sambeng-"
+                                  />
+                                  <p className="text-[11px] text-muted-foreground">
+                                    Key akan diambil dari properties.feature_key (fallback
+                                    properties.id, lalu nomor urut feature).
+                                  </p>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>GeoJSON FeatureCollection *</Label>
+                                  <p className="text-[11px] text-muted-foreground">
+                                    Bisa upload file GeoJSON, atau tempel manual di textarea.
+                                  </p>
+                                  <Input
+                                    type="file"
+                                    accept=".geojson,.json,application/geo+json,application/json"
+                                    className="w-full overflow-hidden file:mr-3 file:rounded-md file:border-0 file:bg-foreground file:px-3 file:py-1 file:text-xs file:font-medium file:text-background hover:file:opacity-90"
+                                    onChange={(e) => {
+                                      const file = e.currentTarget.files?.[0];
+                                      if (!file) return;
+                                      const reader = new FileReader();
+                                      reader.onload = () => {
+                                        const raw =
+                                          typeof reader.result === "string"
+                                            ? reader.result
+                                            : "";
+                                        try {
+                                          const parsed = JSON.parse(raw);
+                                          setMapGeomBatchText(
+                                            JSON.stringify(parsed, null, 2)
+                                          );
+                                        } catch {
+                                          setMapGeomBatchText(raw);
+                                        }
+                                      };
+                                      reader.onerror = () => {
+                                        setMapGeomBatchMsg(
+                                          "Gagal membaca file. Coba file .geojson/.json lain."
+                                        );
+                                      };
+                                      reader.readAsText(file);
+                                    }}
+                                  />
+                                  <Textarea
+                                    name="batch_geojson_json"
+                                    rows={5}
+                                    required
+                                    value={mapGeomBatchText}
+                                    onChange={(e) =>
+                                      setMapGeomBatchText(e.target.value)
+                                    }
+                                    placeholder='{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":1,"Nama":"Bidang A"},"geometry":{"type":"MultiPolygon","coordinates":[...]}}]}'
+                                    className="h-28 min-h-0 max-h-[45vh] w-full resize-y overflow-x-hidden [field-sizing:fixed] [overflow-wrap:anywhere] whitespace-pre-wrap break-all font-mono text-xs"
+                                  />
+                                </div>
+                                {mapGeomBatchPreview && (
+                                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+                                    {!mapGeomBatchPreview.valid ? (
+                                      <p className="text-red-700">
+                                        Validasi awal: {mapGeomBatchPreview.reason}
+                                      </p>
+                                    ) : (
+                                      <div className="space-y-1 text-muted-foreground">
+                                        <p>
+                                          Feature terdeteksi:{" "}
+                                          <span className="font-semibold text-foreground">
+                                            {mapGeomBatchPreview.featureCount}
+                                          </span>
+                                        </p>
+                                        <p>
+                                          Key siap pakai:{" "}
+                                          <span className="font-semibold text-foreground">
+                                            {mapGeomBatchPreview.withFeatureKey}
+                                          </span>{" "}
+                                          via <code>feature_key</code>,{" "}
+                                          <span className="font-semibold text-foreground">
+                                            {mapGeomBatchPreview.withIdFallback}
+                                          </span>{" "}
+                                          via fallback <code>id</code>.
+                                        </p>
+                                        <p>
+                                          Tipe geometri:{" "}
+                                          <span className="text-foreground">
+                                            {Object.entries(
+                                              mapGeomBatchPreview.geometryTypeCounts
+                                            )
+                                              .map(([k, v]) => `${k}=${v}`)
+                                              .join(", ") || "—"}
+                                          </span>
+                                        </p>
+                                        <p>
+                                          Kolom/properti ({mapGeomBatchPreview.propertyKeys.length}):{" "}
+                                          <span className="text-foreground">
+                                            {mapGeomBatchPreview.propertyKeys.join(", ") || "—"}
+                                          </span>
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                <Button type="submit" disabled={mapGeomPending}>
+                                  Proses batch
+                                </Button>
+                                {mapGeomBatchMsg && (
+                                  <p
+                                    className={`text-xs ${mapGeomBatchMsg.includes("Batch selesai") ? "text-emerald-700" : "text-red-600"}`}
+                                    role="alert"
+                                  >
+                                    {mapGeomBatchMsg}
+                                  </p>
+                                )}
+                              </form>
+                            )}
+                          </DialogContent>
+                        </Dialog>
                     )}
-                    {mapLayersForSelectedProject.length > 0 &&
-                    visibleMapLayers.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        Semua lapisan peta dimatikan. Aktifkan minimal satu
-                        checkbox di bawah.
-                      </p>
-                    ) : mapLayersForSelectedProject.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        Belum ada geometri di peta untuk project ini. Footprint
-                        demo: migration{" "}
-                        <code className="rounded bg-muted px-1">
-                          0004_spatial_demo_footprints.sql
-                        </code>
-                        . Bidang hasil ukur (PLM):{" "}
-                        <code className="rounded bg-muted px-1">
-                          0010
-                        </code>{" "}
-                        + view{" "}
-                        <code className="rounded bg-muted px-1">
-                          0011
-                        </code>
-                        /{" "}
-                        <code className="rounded bg-muted px-1">
-                          0012
-                        </code>
-                        , modul <strong>plm</strong> aktif di organisasi, schema{" "}
-                        <code className="rounded bg-muted px-1">spatial</code>{" "}
-                        di Data API (
-                        <code className="rounded bg-muted px-1">
-                          docs/supabase-expose-schemas.md
-                        </code>
-                        ).
-                      </p>
-                    ) : (
+                    {mapLayersForSelectedProject.length === 0 ? (
                       <div className="space-y-3">
-                        {mapHighlightBerkasId && (
-                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
-                            <span>
-                              Sorotan peta: berkas{" "}
-                              <span className="font-mono font-semibold">
-                                {berkasPermohonan.find(
-                                  (b) => b.id === mapHighlightBerkasId
-                                )?.nomor_berkas ?? "—"}
-                              </span>
-                            </span>
+                        <p className="text-sm text-muted-foreground">
+                          Belum ada geometri unit kerja di peta untuk project ini.
+                          Geometri unit kerja:{" "}
+                          <code className="rounded bg-muted px-1">
+                            0023_spatial_issue_geometry_features.sql
+                          </code>{" "}
+                          + view{" "}
+                          <code className="rounded bg-muted px-1">
+                            v_issue_geometry_feature_map
+                          </code>
+                          . Schema{" "}
+                          <code className="rounded bg-muted px-1">spatial</code>{" "}
+                          di Data API (
+                          <code className="rounded bg-muted px-1">
+                            docs/supabase-expose-schemas.md
+                          </code>
+                          ).
+                        </p>
+                        {selectedTaskId && (
+                          <div className="flex justify-end">
                             <Button
                               type="button"
-                              variant="outline"
                               size="sm"
-                              className="h-auto px-2 py-1 text-xs"
-                              onClick={() =>
-                                replaceQuery((q) => {
-                                  q.delete("berkas");
-                                })
-                              }
+                              variant="secondary"
+                              onClick={openMapGeomDialog}
                             >
-                              Hapus sorotan
+                              Tambah/Ubah geometri unit kerja
                             </Button>
                           </div>
                         )}
-                        {mapOverlapWarnings.length > 0 && (
-                          <div className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
-                            <p className="font-medium">
-                              Peringatan tumpang tindih (periksa di peta)
-                            </p>
-                            <ul className="mt-1 list-inside list-disc text-xs leading-relaxed">
-                              {mapOverlapWarnings.map((w, i) => (
-                                <li key={i}>
-                                  {w.kind === "hasil_hasil" ? (
-                                    <>
-                                      &quot;{w.labelA}&quot; dan &quot;
-                                      {w.labelB}&quot; berpotong bertumpang.
-                                    </>
-                                  ) : (
-                                    <>
-                                      Footprint demo &quot;{w.demoLabel}
-                                      &quot; berpotong dengan hasil ukur &quot;
-                                      {w.hasilLabel}&quot;.
-                                    </>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                            <p className="mt-2 text-[11px] text-muted-foreground">
-                              Pemeriksaan di browser; aturan server/trigger
-                              dapat ditambahkan sesuai §10.3.
-                            </p>
-                          </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {visibleMapLayers.length === 0 && (
+                          <p
+                            className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-foreground"
+                            role="status"
+                          >
+                            Semua lapisan peta dimatikan. Buka tombol{" "}
+                            <span className="font-semibold">Atur lapisan</span>{" "}
+                            lalu centang minimal satu lapisan untuk
+                            menampilkannya kembali di peta.
+                          </p>
                         )}
                         {mapLayersForSelectedProject.length > 0 && (
                           <div className="flex items-center gap-2 text-sm">
                             <span className="font-medium text-muted-foreground">
                               Lapisan peta:
                             </span>
-                            <Popover>
-                              <PopoverTrigger
-                                render={<Button type="button" size="sm" variant="outline" />}
-                              >
-                                Atur lapisan
-                              </PopoverTrigger>
-                              <PopoverContent className="w-64 space-y-3">
-                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                  Tampilkan lapisan
-                                </p>
-                                <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
-                                  <input
-                                    type="checkbox"
-                                    className="rounded border-border"
-                                    checked={mapShowDemo}
-                                    disabled={footprintsForSelectedProject.length === 0}
-                                    onChange={(e) => setMapShowDemo(e.target.checked)}
-                                  />
-                                  Footprint demo
-                                </label>
-                                <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
-                                  <input
-                                    type="checkbox"
-                                    className="rounded border-border"
-                                    checked={mapShowHasilUkur}
-                                    disabled={
-                                      bidangHasilUkurForSelectedProject.length === 0
-                                    }
-                                    onChange={(e) => setMapShowHasilUkur(e.target.checked)}
-                                  />
-                                  Bidang hasil ukur
-                                </label>
-                              </PopoverContent>
-                            </Popover>
+                            <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                              <input
+                                type="checkbox"
+                                className="rounded border-border"
+                                checked={mapShowIssueGeometry}
+                                disabled={issueGeometryForSelectedProject.length === 0}
+                                onChange={(e) =>
+                                  setMapShowIssueGeometry(e.target.checked)
+                                }
+                              />
+                              Geometri
+                            </label>
                           </div>
                         )}
                         <WorkspaceMap
                           footprints={visibleMapLayers}
-                          highlightBerkasId={mapHighlightBerkasId}
+                          highlightBerkasId={null}
                         />
-                        <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                          <span>
-                            <span
-                              className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
-                              style={{ background: "#3b82f6" }}
-                            />{" "}
-                            Footprint demo
-                          </span>
-                          <span>
-                            <span
-                              className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
-                              style={{ background: "#10b981" }}
-                            />{" "}
-                            Bidang hasil ukur (berkas PLM)
-                          </span>
-                          <span>
-                            <span
-                              className="mr-1 inline-block h-2 w-2 rounded-sm border border-primary/60 align-middle"
-                              style={{ background: "#ea580c" }}
-                            />{" "}
-                            Sorotan berkas (URL{" "}
-                            <code className="text-[10px]">berkas=</code>)
-                          </span>
-                        </p>
+                        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                          <p className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            <span>
+                              <span
+                                className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
+                                style={{ background: "#a78bfa" }}
+                              />{" "}
+                              Geometri
+                            </span>
+                          </p>
+                          {selectedTaskId && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className="shrink-0"
+                              onClick={openMapGeomDialog}
+                            >
+                              Tambah/Ubah geometri unit kerja
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     )}
                   </>
                 )}
               </div>
-            )}
-            {activeView === "Kanban" && selectedProjectId && (
+            </TabsContent>
+            <TabsContent value="Kanban" className="block w-full min-w-0 outline-none">
+              {selectedProjectId ? (
               <div className="mt-4">
                 {selectedTaskId && (
                   <p className="mb-3 rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
@@ -1989,8 +3367,10 @@ export function WorkspaceClient({
                   />
                 )}
               </div>
-            )}
-            {activeView === "Kalender" && selectedProjectId && (
+              ) : null}
+            </TabsContent>
+            <TabsContent value="Kalender" className="block w-full min-w-0 outline-none">
+              {selectedProjectId ? (
               <div className="mt-4">
                 <CalendarScheduleView
                   key={`cal-${selectedProjectId}-${selectedTaskId ?? "p"}`}
@@ -2000,8 +3380,10 @@ export function WorkspaceClient({
                   onSelectIssue={selectIssueInScope}
                 />
               </div>
-            )}
-            {activeView === "Gantt" && selectedProjectId && (
+              ) : null}
+            </TabsContent>
+            <TabsContent value="Gantt" className="block w-full min-w-0 outline-none">
+              {selectedProjectId ? (
               <div className="mt-4">
                 <GanttScheduleView
                   key={`gantt-${selectedProjectId}-${selectedTaskId ?? "p"}`}
@@ -2011,10 +3393,12 @@ export function WorkspaceClient({
                   onSelectIssue={selectIssueInScope}
                 />
               </div>
-            )}
-          </div>
+              ) : null}
+            </TabsContent>
         </section>
+        </Tabs>
       </main>
+      </div>
       </div>
     </div>
   );

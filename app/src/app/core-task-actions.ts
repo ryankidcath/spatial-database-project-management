@@ -7,6 +7,8 @@ export type CreateProjectTaskResult = { error: string | null };
 export type SetTaskDoneResult = { error: string | null };
 export type ReopenTaskResult = { error: string | null };
 export type UpdateTaskProgressResult = { error: string | null };
+export type DeleteTaskResult = { error: string | null };
+export type DeleteProjectResult = { error: string | null };
 type ServerSupabase = NonNullable<
   Awaited<ReturnType<typeof createServerSupabaseClient>>
 >;
@@ -164,7 +166,7 @@ export async function createProjectTaskAction(
   const issueWeightRaw = String(formData.get("issue_weight") ?? "");
 
   if (!projectId || !title) {
-    return { error: "Project dan judul task wajib diisi" };
+    return { error: "Project dan judul unit kerja wajib diisi" };
   }
 
   const startsAt = startsAtRaw ? startsAtRaw : null;
@@ -383,6 +385,91 @@ export async function reopenTaskAction(
     .in("id", [...toUpdate])
     .is("deleted_at", null);
 
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function deleteTaskAction(
+  formData: FormData
+): Promise<DeleteTaskResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  if (!issueId || !projectId) {
+    return { error: "issue_id atau project_id kosong" };
+  }
+
+  const { data: deletedCount, error } = await supabase
+    .schema("core_pm")
+    .rpc("delete_issue_soft", {
+      p_project_id: projectId,
+      p_issue_id: issueId,
+    });
+  if (error) {
+    return { error: error.message };
+  }
+  if (!deletedCount || Number(deletedCount) <= 0) {
+    return {
+      error: "Unit kerja tidak ditemukan atau sudah terhapus sebelumnya.",
+    };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function deleteProjectAction(
+  formData: FormData
+): Promise<DeleteProjectResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  if (!projectId) {
+    return { error: "project_id kosong" };
+  }
+
+  const { data: myMembership, error: membershipErr } = await supabase
+    .schema("core_pm")
+    .from("project_members")
+    .select("role")
+    .eq("project_id", projectId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (membershipErr) {
+    return { error: membershipErr.message };
+  }
+  if (!myMembership || myMembership.role !== "owner") {
+    return { error: "Hanya owner project yang bisa menghapus project." };
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .rpc("delete_project_soft", { p_project_id: projectId });
   if (error) {
     return { error: error.message };
   }

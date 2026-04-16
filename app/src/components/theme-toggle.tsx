@@ -21,13 +21,18 @@ function applyTheme(theme: ThemeMode): void {
 }
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
+  const [theme, setTheme] = useState<ThemeMode>("light");
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
+    const initial = getInitialTheme();
+    setTheme(initial);
+    applyTheme(initial);
+    setMounted(true);
+  }, []);
 
   const toggleTheme = () => {
+    if (!mounted) return;
     const next: ThemeMode = theme === "dark" ? "light" : "dark";
     setTheme(next);
     applyTheme(next);
@@ -36,7 +41,12 @@ export function ThemeToggle() {
 
   return (
     <Button type="button" variant="outline" size="sm" onClick={toggleTheme}>
-      {theme === "dark" ? (
+      {!mounted ? (
+        <>
+          <Moon className="mr-1 h-4 w-4" />
+          Dark
+        </>
+      ) : theme === "dark" ? (
         <>
           <Sun className="mr-1 h-4 w-4" />
           Light
