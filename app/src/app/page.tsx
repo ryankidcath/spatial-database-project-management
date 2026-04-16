@@ -222,14 +222,23 @@ export default async function Home({ searchParams }: HomeProps) {
       m.organization_id === selectedOrgId
   );
 
-  const spatialEnabledForSelectedOrg = organizationModules.some(
-    (m) =>
-      m.is_enabled &&
-      m.module_code === "spatial" &&
-      m.organization_id === selectedOrgId
+  /** Modul spatial untuk salah satu org yang punya project di scope (aman jika `org` URL tidak pas). */
+  const orgIdsForScopedProjects = new Set(
+    projectList
+      .filter((p) => scopedProjectIds.includes(p.id))
+      .map((p) => p.organization_id)
+      .filter(Boolean)
   );
+  const spatialEnabledForScopedProjects =
+    orgIdsForScopedProjects.size > 0 &&
+    organizationModules.some(
+      (m) =>
+        m.is_enabled &&
+        m.module_code === "spatial" &&
+        m.organization_id != null &&
+        orgIdsForScopedProjects.has(m.organization_id)
+    );
   const needsPlmData = ["berkas", "laporan", "map"].includes(activeViewParam);
-  const needsSpatialData = ["map", "tabel"].includes(activeViewParam);
 
   const [
     { data: bidangMapRaw, error: bidangMapError },
@@ -297,7 +306,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .is("deleted_at", null)
           .order("kode_aset")
       : Promise.resolve({ data: [] as AlatUkurRow[], error: null }),
-    scopedProjectIds.length > 0 && spatialEnabledForSelectedOrg && needsSpatialData
+    scopedProjectIds.length > 0 && spatialEnabledForScopedProjects
       ? supabase
           .schema("spatial")
           .from("v_issue_geometry_feature_map")
