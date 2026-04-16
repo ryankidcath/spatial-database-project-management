@@ -42,7 +42,7 @@ import type {
 } from "./finance-types";
 
 type HomeProps = {
-  searchParams: Promise<{ joinError?: string; project?: string; view?: string }>;
+  searchParams: Promise<{ joinError?: string; org?: string; project?: string; view?: string }>;
 };
 
 export default async function Home({ searchParams }: HomeProps) {
@@ -50,8 +50,10 @@ export default async function Home({ searchParams }: HomeProps) {
   const joinError = qp.joinError
     ? decodeURIComponent(qp.joinError)
     : null;
+  const selectedOrgIdFromQuery = String(qp.org ?? "").trim();
   const selectedProjectIdFromQuery = String(qp.project ?? "").trim();
   const activeViewParam = String(qp.view ?? "").trim().toLowerCase();
+  const needsProjectMembersData = activeViewParam === "tabel";
 
   const supabase = await createServerSupabaseClient();
 
@@ -77,36 +79,49 @@ export default async function Home({ searchParams }: HomeProps) {
     );
   }
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data: projects, error: projectsError } = await supabase
+  let projectsQuery = supabase
     .schema("core_pm")
     .from("projects")
     .select("id, name, key, organization_id")
     .is("deleted_at", null)
     .eq("is_archived", false)
     .order("name");
+  if (selectedOrgIdFromQuery) {
+    projectsQuery = projectsQuery.eq("organization_id", selectedOrgIdFromQuery);
+  }
+  const [
+    {
+      data: { user },
+    },
+    { data: projects, error: projectsError },
+  ] = await Promise.all([supabase.auth.getUser(), projectsQuery]);
 
   const projectList = (projects ?? []) as ProjectRow[];
+  const selectedOrgId = projectList.some((p) => p.organization_id === selectedOrgIdFromQuery)
+    ? selectedOrgIdFromQuery
+    : projectList[0]?.organization_id ?? null;
   const selectedProjectId = projectList.some((p) => p.id === selectedProjectIdFromQuery)
     ? selectedProjectIdFromQuery
     : null;
   const scopedProjectIds = selectedProjectId
     ? [selectedProjectId]
-    : projectList.map((p) => p.id);
+    : selectedOrgId
+      ? projectList
+          .filter((p) => p.organization_id === selectedOrgId)
+          .map((p) => p.id)
+      : projectList.map((p) => p.id);
   const orgIds = [
     ...new Set(projectList.map((p) => p.organization_id).filter(Boolean)),
   ];
 
+  const organizationIdsForQuery = selectedOrgId ? [selectedOrgId] : orgIds;
   const { data: organizations, error: orgsError } =
-    orgIds.length > 0
+    organizationIdsForQuery.length > 0
       ? await supabase
           .schema("core_pm")
           .from("organizations")
           .select("id, name, slug")
-          .in("id", orgIds)
+          .in("id", organizationIdsForQuery)
           .is("deleted_at", null)
           .order("name")
       : { data: [] as OrganizationRow[], error: null };
@@ -119,26 +134,32 @@ export default async function Home({ searchParams }: HomeProps) {
     { data: registryRaw, error: registryError },
     { data: orgModulesRaw, error: orgModulesError },
   ] = await Promise.all([
-    supabase
-      .schema("core_pm")
-      .from("statuses")
-      .select("id, project_id, name, category, position")
-      .order("project_id")
-      .order("position", { ascending: true }),
-    supabase
-      .schema("core_pm")
-      .from("issues")
-      .select(
-        "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at, progress_target, progress_actual, issue_weight"
-      )
-      .is("deleted_at", null)
-      .order("sort_order"),
-    projectList.length > 0
+    scopedProjectIds.length > 0
+      ? supabase
+          .schema("core_pm")
+          .from("statuses")
+          .select("id, project_id, name, category, position")
+          .in("project_id", scopedProjectIds)
+          .order("project_id")
+          .order("position", { ascending: true })
+      : Promise.resolve({ data: [] as StatusRow[], error: null }),
+    scopedProjectIds.length > 0
+      ? supabase
+          .schema("core_pm")
+          .from("issues")
+          .select(
+            "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at, progress_target, progress_actual, issue_weight"
+          )
+          .in("project_id", scopedProjectIds)
+          .is("deleted_at", null)
+          .order("sort_order")
+      : Promise.resolve({ data: [] as IssueRow[], error: null }),
+    scopedProjectIds.length > 0 && needsProjectMembersData
       ? supabase
           .schema("core_pm")
           .from("project_members")
           .select("project_id, user_id, role, joined_at")
-          .in("project_id", projectList.map((p) => p.id))
+          .in("project_id", scopedProjectIds)
       : Promise.resolve({ data: [] as ProjectMemberRow[], error: null }),
     scopedProjectIds.length > 0
       ? supabase
@@ -170,7 +191,7 @@ export default async function Home({ searchParams }: HomeProps) {
   }>;
   const memberUserIds = [...new Set(projectMembersBase.map((m) => m.user_id))];
   const { data: profilesRaw, error: profilesError } =
-    memberUserIds.length > 0
+    memberUserIds.length > 0 && needsProjectMembersData
       ? await supabase
           .schema("core_pm")
           .from("profiles")
@@ -194,18 +215,18 @@ export default async function Home({ searchParams }: HomeProps) {
   const moduleRegistry = (registryRaw ?? []) as ModuleRegistryRow[];
   const organizationModules = (orgModulesRaw ?? []) as OrganizationModuleRow[];
 
-  const plmEnabledForAnyOrg = organizationModules.some(
+  const plmEnabledForSelectedOrg = organizationModules.some(
     (m) =>
       m.is_enabled &&
       m.module_code === "plm" &&
-      orgIds.includes(m.organization_id)
+      m.organization_id === selectedOrgId
   );
 
-  const spatialEnabledForAnyOrg = organizationModules.some(
+  const spatialEnabledForSelectedOrg = organizationModules.some(
     (m) =>
       m.is_enabled &&
       m.module_code === "spatial" &&
-      orgIds.includes(m.organization_id)
+      m.organization_id === selectedOrgId
   );
   const needsPlmData = ["berkas", "laporan", "map"].includes(activeViewParam);
   const needsSpatialData = ["map", "tabel"].includes(activeViewParam);
@@ -219,14 +240,14 @@ export default async function Home({ searchParams }: HomeProps) {
     { data: alatUkurRaw, error: alatUkurError },
     { data: issueGeomRaw, error: issueGeomError },
   ] = await Promise.all([
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
+    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("spatial")
           .from("v_bidang_hasil_ukur_map")
           .select("id, project_id, berkas_id, label, geojson")
           .in("project_id", scopedProjectIds)
       : Promise.resolve({ data: [] as BidangHasilUkurMapRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
+    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("berkas_permohonan")
@@ -238,7 +259,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .is("deleted_at", null)
           .order("tanggal_berkas", { ascending: false })
       : Promise.resolve({ data: [] as BerkasPermohonanRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
+    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_berkas_permohonan_summary_by_status")
@@ -247,7 +268,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmBerkasStatusSummaryRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
+    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_legalisasi_gu_summary_by_tahap")
@@ -256,7 +277,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("project_id")
           .order("status_tahap")
       : Promise.resolve({ data: [] as PlmLegalisasiTahapSummaryRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
+    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_pengukuran_lapangan_summary_by_status")
@@ -265,18 +286,18 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmPengukuranStatusSummaryRow[], error: null }),
-    orgIds.length > 0 && plmEnabledForAnyOrg && needsPlmData
+    selectedOrgId != null && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("alat_ukur")
           .select(
             "id, organization_id, kode_aset, jenis, merek_model, serial_number, is_active"
           )
-          .in("organization_id", orgIds)
+          .eq("organization_id", selectedOrgId)
           .is("deleted_at", null)
           .order("kode_aset")
       : Promise.resolve({ data: [] as AlatUkurRow[], error: null }),
-    scopedProjectIds.length > 0 && spatialEnabledForAnyOrg && needsSpatialData
+    scopedProjectIds.length > 0 && spatialEnabledForSelectedOrg && needsSpatialData
       ? supabase
           .schema("spatial")
           .from("v_issue_geometry_feature_map")
@@ -299,7 +320,7 @@ export default async function Home({ searchParams }: HomeProps) {
     { data: pisRaw, error: pisError },
     { data: pengLapRaw, error: pengLapError },
   ] = await Promise.all([
-    berkasIds.length > 0 && plmEnabledForAnyOrg
+    berkasIds.length > 0 && plmEnabledForSelectedOrg
       ? supabase
           .schema("plm")
           .from("legalisasi_gu")
@@ -314,7 +335,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .is("deleted_at", null)
           .order("created_at", { ascending: false })
       : Promise.resolve({ data: [] as LegalisasiGuRow[], error: null }),
-    berkasIds.length > 0 && plmEnabledForAnyOrg
+    berkasIds.length > 0 && plmEnabledForSelectedOrg
       ? supabase
           .schema("plm")
           .from("permohonan_informasi_spasial")
@@ -324,7 +345,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .in("berkas_id", berkasIds)
           .is("deleted_at", null)
       : Promise.resolve({ data: [] as PermohonanInfoSpasialRow[], error: null }),
-    berkasIds.length > 0 && plmEnabledForAnyOrg
+    berkasIds.length > 0 && plmEnabledForSelectedOrg
       ? supabase
           .schema("plm")
           .from("pengukuran_lapangan")
@@ -405,16 +426,16 @@ export default async function Home({ searchParams }: HomeProps) {
   const pengukuranAlat = (pengAlatRaw ?? []) as PengukuranAlatRow[];
   const pengukuranDokumen = (pengDokRaw ?? []) as PengukuranDokumenRow[];
 
-  const financeEnabledForAnyOrg = organizationModules.some(
+  const financeEnabledForSelectedOrg = organizationModules.some(
     (m) =>
       m.is_enabled &&
       m.module_code === "finance" &&
-      orgIds.includes(m.organization_id)
+      m.organization_id === selectedOrgId
   );
   const needsFinanceData = activeViewParam === "keuangan";
 
   const { data: finInvRaw, error: finInvErr } =
-    scopedProjectIds.length > 0 && financeEnabledForAnyOrg && needsFinanceData
+    scopedProjectIds.length > 0 && financeEnabledForSelectedOrg && needsFinanceData
       ? await supabase
           .schema("finance")
           .from("invoice")
@@ -469,7 +490,7 @@ export default async function Home({ searchParams }: HomeProps) {
           )
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
-          .limit(80)
+          .limit(20)
       : { data: [] as UserNotificationRow[], error: null };
 
   const { data: notifRaw, error: notifError } = notifRes;

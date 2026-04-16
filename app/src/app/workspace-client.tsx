@@ -639,7 +639,7 @@ export function WorkspaceClient({
     return s;
   }, [bidangHasilUkurMap, selectedProjectId]);
 
-  const activeView = useMemo((): ViewId => {
+  const activeViewFromUrl = useMemo((): ViewId => {
     const raw = parseViewParam(searchParams.get("view")) ?? "Dashboard";
     const enabled = effectiveEnabledModuleCodes(
       canonicalOrgId,
@@ -648,6 +648,10 @@ export function WorkspaceClient({
     if (!isViewAllowedForModules(raw, enabled)) return "Dashboard";
     return raw;
   }, [searchParams, canonicalOrgId, organizationModules]);
+  const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
+  useEffect(() => {
+    setActiveView(activeViewFromUrl);
+  }, [activeViewFromUrl]);
 
   const enabledModulesForOrg = useMemo(
     () => effectiveEnabledModuleCodes(canonicalOrgId, organizationModules),
@@ -1723,12 +1727,14 @@ export function WorkspaceClient({
           value={activeView}
           onValueChange={(value) => {
             const v = value as ViewId;
-            replaceQuery((q) => {
-              q.set("view", viewToParam(v));
-              if (v !== "Berkas" && v !== "Map") {
-                q.delete("berkas");
-              }
-            });
+            setActiveView(v);
+            const q = new URLSearchParams(searchParams.toString());
+            q.set("view", viewToParam(v));
+            if (v !== "Berkas" && v !== "Map") {
+              q.delete("berkas");
+            }
+            const next = `/?${q.toString()}`;
+            window.history.replaceState(window.history.state, "", next);
           }}
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
         >
