@@ -589,7 +589,7 @@ export function WorkspaceClient({
     return projectsInOrg[0]?.id ?? null;
   }, [searchParams, projectsInOrg]);
 
-  const selectedTaskId = useMemo(() => {
+  const taskIdFromSearchParams = useMemo(() => {
     const q = searchParams.get("task");
     if (!q || !selectedProjectId) return null;
     const ok = issues.some(
@@ -597,6 +597,13 @@ export function WorkspaceClient({
     );
     return ok ? q : null;
   }, [searchParams, issues, selectedProjectId]);
+
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
+    taskIdFromSearchParams
+  );
+  useEffect(() => {
+    setSelectedTaskId(taskIdFromSearchParams);
+  }, [taskIdFromSearchParams]);
 
   const selectedBerkasId = useMemo(() => {
     if (parseViewParam(searchParams.get("view")) !== "Berkas") return null;
@@ -683,7 +690,11 @@ export function WorkspaceClient({
 
   useEffect(() => {
     if (projects.length === 0 || !canonicalOrgId || !selectedProjectId) return;
-    const p = new URLSearchParams(searchParams.toString());
+    const p = new URLSearchParams(
+      typeof window !== "undefined"
+        ? window.location.search
+        : searchParams.toString()
+    );
     let dirty = false;
     if (p.get("org") !== canonicalOrgId) {
       p.set("org", canonicalOrgId);
@@ -1120,14 +1131,34 @@ export function WorkspaceClient({
     router.replace(`/?${p.toString()}`, { scroll: false });
   };
 
-  const selectIssueInScope = (issueId: string) => {
-    if (!selectedProjectId) return;
-    const proj = projects.find((p) => p.id === selectedProjectId);
-    replaceQuery((q) => {
+  /** Hanya mengubah `task` — tidak memicu RSC; data server tidak bergantung pada query `task`. */
+  const commitTaskSelection = useCallback(
+    (issueId: string | null) => {
+      if (!selectedProjectId) return;
+      const proj = projects.find((p) => p.id === selectedProjectId);
+      setSelectedTaskId(issueId);
+      const q = new URLSearchParams(
+        typeof window !== "undefined"
+          ? window.location.search
+          : searchParams.toString()
+      );
       if (proj) q.set("org", proj.organization_id);
       q.set("project", selectedProjectId);
-      q.set("task", issueId);
-    });
+      if (issueId) q.set("task", issueId);
+      else q.delete("task");
+      if (typeof window !== "undefined") {
+        window.history.replaceState(
+          window.history.state,
+          "",
+          `/?${q.toString()}`
+        );
+      }
+    },
+    [selectedProjectId, projects, searchParams]
+  );
+
+  const selectIssueInScope = (issueId: string) => {
+    commitTaskSelection(issueId);
   };
 
   const openBerkasDetail = (berkasId: string) => {
@@ -1542,6 +1573,10 @@ export function WorkspaceClient({
                     variant="ghost"
                     size="sm"
                     onClick={() => {
+                      if (p.id === selectedProjectId) {
+                        commitTaskSelection(null);
+                        return;
+                      }
                       replaceQuery((q) => {
                         q.set("org", p.organization_id);
                         q.set("project", p.id);
@@ -1610,11 +1645,15 @@ export function WorkspaceClient({
                             variant="ghost"
                             size="sm"
                             onClick={() => {
-                              replaceQuery((q) => {
-                                q.set("org", p.organization_id);
-                                q.set("project", p.id);
-                                q.set("task", t.id);
-                              });
+                              if (p.id !== selectedProjectId) {
+                                replaceQuery((q) => {
+                                  q.set("org", p.organization_id);
+                                  q.set("project", p.id);
+                                  q.set("task", t.id);
+                                });
+                              } else {
+                                commitTaskSelection(t.id);
+                              }
                             }}
                             className={`h-7 flex-1 justify-start rounded-md px-2 text-left text-[0.95rem] font-normal ${
                               isTask
