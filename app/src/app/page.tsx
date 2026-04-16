@@ -1,6 +1,5 @@
 import { Suspense } from "react";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { syncSpatialOverlapNotifications } from "./spatial-overlap-notifications-sync";
 import {
   WorkspaceClient,
   type BidangHasilUkurMapRow,
@@ -43,7 +42,7 @@ import type {
 } from "./finance-types";
 
 type HomeProps = {
-  searchParams: Promise<{ joinError?: string }>;
+  searchParams: Promise<{ joinError?: string; project?: string }>;
 };
 
 export default async function Home({ searchParams }: HomeProps) {
@@ -51,6 +50,7 @@ export default async function Home({ searchParams }: HomeProps) {
   const joinError = qp.joinError
     ? decodeURIComponent(qp.joinError)
     : null;
+  const selectedProjectIdFromQuery = String(qp.project ?? "").trim();
 
   const supabase = await createServerSupabaseClient();
 
@@ -89,6 +89,12 @@ export default async function Home({ searchParams }: HomeProps) {
     .order("name");
 
   const projectList = (projects ?? []) as ProjectRow[];
+  const selectedProjectId = projectList.some((p) => p.id === selectedProjectIdFromQuery)
+    ? selectedProjectIdFromQuery
+    : null;
+  const scopedProjectIds = selectedProjectId
+    ? [selectedProjectId]
+    : projectList.map((p) => p.id);
   const orgIds = [
     ...new Set(projectList.map((p) => p.organization_id).filter(Boolean)),
   ];
@@ -104,7 +110,6 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("name")
       : { data: [] as OrganizationRow[], error: null };
 
-  const projectIds = projectList.map((p) => p.id);
   const [
     { data: statuses, error: statusesError },
     { data: issues, error: issuesError },
@@ -127,19 +132,19 @@ export default async function Home({ searchParams }: HomeProps) {
       )
       .is("deleted_at", null)
       .order("sort_order"),
-    projectIds.length > 0
+    projectList.length > 0
       ? supabase
           .schema("core_pm")
           .from("project_members")
           .select("project_id, user_id, role, joined_at")
-          .in("project_id", projectIds)
+          .in("project_id", projectList.map((p) => p.id))
       : Promise.resolve({ data: [] as ProjectMemberRow[], error: null }),
-    projectIds.length > 0
+    scopedProjectIds.length > 0
       ? supabase
           .schema("spatial")
           .from("project_demo_footprints")
           .select("id, project_id, label, geojson")
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
       : Promise.resolve({ data: [] as DemoFootprintRow[], error: null }),
     supabase
       .schema("core_pm")
@@ -211,14 +216,14 @@ export default async function Home({ searchParams }: HomeProps) {
     { data: alatUkurRaw, error: alatUkurError },
     { data: issueGeomRaw, error: issueGeomError },
   ] = await Promise.all([
-    projectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
       ? supabase
           .schema("spatial")
           .from("v_bidang_hasil_ukur_map")
           .select("id, project_id, berkas_id, label, geojson")
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
       : Promise.resolve({ data: [] as BidangHasilUkurMapRow[], error: null }),
-    projectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
       ? supabase
           .schema("plm")
           .from("berkas_permohonan")
@@ -226,34 +231,34 @@ export default async function Home({ searchParams }: HomeProps) {
             `id, project_id, nomor_berkas, tanggal_berkas, status, catatan,
              berkas_pemilik ( urutan, pemilik_tanah ( id, nama_lengkap ) )`
           )
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
           .is("deleted_at", null)
           .order("tanggal_berkas", { ascending: false })
       : Promise.resolve({ data: [] as BerkasPermohonanRow[], error: null }),
-    projectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
       ? supabase
           .schema("plm")
           .from("v_berkas_permohonan_summary_by_status")
           .select("project_id, status, jumlah, tanggal_berkas_terbaru")
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmBerkasStatusSummaryRow[], error: null }),
-    projectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
       ? supabase
           .schema("plm")
           .from("v_legalisasi_gu_summary_by_tahap")
           .select("project_id, status_tahap, jumlah")
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
           .order("project_id")
           .order("status_tahap")
       : Promise.resolve({ data: [] as PlmLegalisasiTahapSummaryRow[], error: null }),
-    projectIds.length > 0 && plmEnabledForAnyOrg
+    scopedProjectIds.length > 0 && plmEnabledForAnyOrg
       ? supabase
           .schema("plm")
           .from("v_pengukuran_lapangan_summary_by_status")
           .select("project_id, status, jumlah")
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmPengukuranStatusSummaryRow[], error: null }),
@@ -268,12 +273,12 @@ export default async function Home({ searchParams }: HomeProps) {
           .is("deleted_at", null)
           .order("kode_aset")
       : Promise.resolve({ data: [] as AlatUkurRow[], error: null }),
-    projectIds.length > 0 && spatialEnabledForAnyOrg
+    scopedProjectIds.length > 0 && spatialEnabledForAnyOrg
       ? supabase
           .schema("spatial")
           .from("v_issue_geometry_feature_map")
           .select("id, project_id, issue_id, feature_key, label, properties, geojson")
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
       : Promise.resolve({ data: [] as IssueGeometryFeatureMapRow[], error: null }),
   ]);
 
@@ -405,14 +410,14 @@ export default async function Home({ searchParams }: HomeProps) {
   );
 
   const { data: finInvRaw, error: finInvErr } =
-    projectIds.length > 0 && financeEnabledForAnyOrg
+    scopedProjectIds.length > 0 && financeEnabledForAnyOrg
       ? await supabase
           .schema("finance")
           .from("invoice")
           .select(
             "id, organization_id, project_id, berkas_id, nomor_invoice, status, currency, total_amount, notes, issued_at, due_at, created_at, updated_at, deleted_at"
           )
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
           .is("deleted_at", null)
           .order("created_at", { ascending: false })
       : { data: [] as FinanceInvoiceRow[], error: null };
@@ -450,9 +455,9 @@ export default async function Home({ searchParams }: HomeProps) {
   const financeInvoiceItems = (finItemRaw ?? []) as FinanceInvoiceItemRow[];
   const financePembayaran = (finPayRaw ?? []) as FinancePembayaranRow[];
 
-  const [notifRes] = await Promise.all([
+  const notifRes =
     user?.id != null
-      ? supabase
+      ? await supabase
           .schema("core_pm")
           .from("user_notifications")
           .select(
@@ -461,21 +466,7 @@ export default async function Home({ searchParams }: HomeProps) {
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
           .limit(80)
-      : Promise.resolve({ data: [] as UserNotificationRow[], error: null }),
-    user?.id && projectList.length > 0
-      ? syncSpatialOverlapNotifications(supabase, {
-          userId: user.id,
-          projects: projectList.map((p) => ({
-            id: p.id,
-            organization_id: p.organization_id,
-          })),
-          organizationModules,
-          footprints,
-          bidangHasilUkurMap,
-          issueGeometryMap: issueGeometryFeatureMap,
-        })
-      : Promise.resolve(),
-  ]);
+      : { data: [] as UserNotificationRow[], error: null };
 
   const { data: notifRaw, error: notifError } = notifRes;
 
