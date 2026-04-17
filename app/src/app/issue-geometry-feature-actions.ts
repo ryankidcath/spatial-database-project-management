@@ -92,7 +92,7 @@ function extractMultiPolygonFromGeoJSON(input: unknown): MultiPolygonCoords | nu
   return null;
 }
 
-function multiPolygonToEWKT(coords: MultiPolygonCoords): string {
+function multiPolygonToWKT(coords: MultiPolygonCoords): string {
   const polyText = coords
     .map((poly) => {
       const rings = poly
@@ -101,12 +101,22 @@ function multiPolygonToEWKT(coords: MultiPolygonCoords): string {
       return `(${rings})`;
     })
     .join(", ");
-  return `SRID=4326;MULTIPOLYGON(${polyText})`;
+  return `MULTIPOLYGON(${polyText})`;
 }
 
 type ServerSupabase = NonNullable<
   Awaited<ReturnType<typeof createServerSupabaseClient>>
 >;
+
+function parseSourceSrid(raw: string): { ok: true; srid: number } | { ok: false; error: string } {
+  const val = raw.trim();
+  if (!val) return { ok: true, srid: 4326 };
+  const num = Number(val);
+  if (!Number.isInteger(num) || num <= 0) {
+    return { ok: false, error: "EPSG/SRID sumber harus bilangan bulat positif (contoh: 32748)" };
+  }
+  return { ok: true, srid: num };
+}
 
 async function ensureIssueInProject(
   supabase: ServerSupabase,
@@ -146,10 +156,13 @@ export async function upsertIssueGeometryFeatureAction(
   const labelRaw = String(formData.get("label") ?? "").trim();
   const propertiesRaw = String(formData.get("properties_json") ?? "").trim();
   const geojsonRaw = String(formData.get("geojson_json") ?? "").trim();
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
 
   if (!projectId || !issueId || !featureKey || !geojsonRaw) {
     return { error: "project/unit kerja, feature_key, dan geojson wajib diisi" };
   }
+  const sridParsed = parseSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) return { error: sridParsed.error };
 
   let properties: Record<string, unknown> = {};
   if (propertiesRaw) {
@@ -177,24 +190,22 @@ export async function upsertIssueGeometryFeatureAction(
         "GeoJSON harus Polygon/MultiPolygon (atau Feature/FeatureCollection yang memuat keduanya)",
     };
   }
-  const ewkt = multiPolygonToEWKT(multiPoly);
+  const wkt = multiPolygonToWKT(multiPoly);
 
   const issueCheck = await ensureIssueInProject(supabase, projectId, issueId);
   if (!issueCheck.ok) return { error: issueCheck.error };
 
-  const { error: upsertErr } = await supabase
-    .schema("spatial")
-    .from("issue_geometry_features")
-    .upsert(
-      {
-        issue_id: issueId,
-        feature_key: featureKey,
-        label: labelRaw || null,
-        properties,
-        geom: ewkt,
-      },
-      { onConflict: "issue_id,feature_key" }
-    );
+  const { error: upsertErr } = await supabase.schema("spatial").rpc(
+    "upsert_issue_geometry_feature_from_wkt",
+    {
+      p_issue_id: issueId,
+      p_feature_key: featureKey,
+      p_label: labelRaw || null,
+      p_properties: properties,
+      p_geom_wkt: wkt,
+      p_source_srid: sridParsed.srid,
+    }
+  );
   if (upsertErr) {
     return { error: upsertErr.message };
   }
@@ -231,9 +242,19 @@ export async function upsertIssueGeometryFeatureBatchAction(
   const issueId = String(formData.get("issue_id") ?? "").trim();
   const batchRaw = String(formData.get("batch_geojson_json") ?? "").trim();
   const keyPrefix = String(formData.get("feature_key_prefix") ?? "").trim();
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
   if (!projectId || !issueId || !batchRaw) {
     return {
       error: "project/unit kerja dan batch_geojson_json wajib diisi",
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+  const sridParsed = parseSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) {
+    return {
+      error: sridParsed.error,
       insertedOrUpdated: 0,
       failed: 0,
       failureSamples: [],
@@ -327,19 +348,17 @@ export async function upsertIssueGeometryFeatureBatchAction(
     const label = labelCandidate == null ? null : String(labelCandidate).trim() || null;
     if ("feature_key" in props) delete props.feature_key;
 
-    const { error: upsertErr } = await supabase
-      .schema("spatial")
-      .from("issue_geometry_features")
-      .upsert(
-        {
-          issue_id: issueId,
-          feature_key: featureKey,
-          label,
-          properties: props,
-          geom: multiPolygonToEWKT(mp),
-        },
-        { onConflict: "issue_id,feature_key" }
-      );
+    const { error: upsertErr } = await supabase.schema("spatial").rpc(
+      "upsert_issue_geometry_feature_from_wkt",
+      {
+        p_issue_id: issueId,
+        p_feature_key: featureKey,
+        p_label: label,
+        p_properties: props,
+        p_geom_wkt: multiPolygonToWKT(mp),
+        p_source_srid: sridParsed.srid,
+      }
+    );
     if (upsertErr) {
       failed++;
       if (failureSamples.length < 10) {

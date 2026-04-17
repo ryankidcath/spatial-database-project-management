@@ -45,6 +45,9 @@ type HomeProps = {
   searchParams: Promise<{ joinError?: string; org?: string; project?: string; view?: string }>;
 };
 
+/** Halaman workspace mengikuti cookie sesi; jangan cache statis antar-user. */
+export const dynamic = "force-dynamic";
+
 export default async function Home({ searchParams }: HomeProps) {
   const qp = await searchParams;
   const joinError = qp.joinError
@@ -53,7 +56,6 @@ export default async function Home({ searchParams }: HomeProps) {
   const selectedOrgIdFromQuery = String(qp.org ?? "").trim();
   const selectedProjectIdFromQuery = String(qp.project ?? "").trim();
   const activeViewParam = String(qp.view ?? "").trim().toLowerCase();
-  const needsProjectMembersData = activeViewParam === "tabel";
 
   const supabase = await createServerSupabaseClient();
 
@@ -61,40 +63,29 @@ export default async function Home({ searchParams }: HomeProps) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
         <div className="max-w-lg rounded-lg border border-amber-200 bg-white p-6 text-sm text-amber-900">
-          <p className="font-semibold">Variabel lingkungan belum lengkap</p>
+          <p className="font-semibold">Konfigurasi aplikasi belum siap</p>
           <p className="mt-2">
-            Set{" "}
-            <code className="rounded bg-slate-100 px-1">
-              NEXT_PUBLIC_SUPABASE_URL
-            </code>{" "}
-            dan{" "}
-            <code className="rounded bg-slate-100 px-1">
-              NEXT_PUBLIC_SUPABASE_ANON_KEY
-            </code>{" "}
-            (lokal: salin dari <code className="rounded bg-slate-100 px-1">.env.example</code> ke{" "}
-            <code className="rounded bg-slate-100 px-1">app/.env.local</code>).
+            Sistem belum bisa terhubung ke layanan data. Hubungi admin aplikasi
+            untuk melengkapi pengaturan koneksi.
           </p>
         </div>
       </div>
     );
   }
 
-  let projectsQuery = supabase
+  // Pastikan sesi/JWT ter-resolve dulu (refresh token), baru query RLS.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Jangan filter server by ?org=: anggota bisa tanpa project di org itu; RLS tetap membatasi baris.
+  const { data: projects, error: projectsError } = await supabase
     .schema("core_pm")
     .from("projects")
     .select("id, name, key, organization_id")
     .is("deleted_at", null)
     .eq("is_archived", false)
     .order("name");
-  if (selectedOrgIdFromQuery) {
-    projectsQuery = projectsQuery.eq("organization_id", selectedOrgIdFromQuery);
-  }
-  const [
-    {
-      data: { user },
-    },
-    { data: projects, error: projectsError },
-  ] = await Promise.all([supabase.auth.getUser(), projectsQuery]);
 
   const projectList = (projects ?? []) as ProjectRow[];
   const selectedOrgId = projectList.some((p) => p.organization_id === selectedOrgIdFromQuery)
@@ -114,14 +105,13 @@ export default async function Home({ searchParams }: HomeProps) {
     ...new Set(projectList.map((p) => p.organization_id).filter(Boolean)),
   ];
 
-  const organizationIdsForQuery = selectedOrgId ? [selectedOrgId] : orgIds;
   const { data: organizations, error: orgsError } =
-    organizationIdsForQuery.length > 0
+    orgIds.length > 0
       ? await supabase
           .schema("core_pm")
           .from("organizations")
           .select("id, name, slug")
-          .in("id", organizationIdsForQuery)
+          .in("id", orgIds)
           .is("deleted_at", null)
           .order("name")
       : { data: [] as OrganizationRow[], error: null };
@@ -148,13 +138,13 @@ export default async function Home({ searchParams }: HomeProps) {
           .schema("core_pm")
           .from("issues")
           .select(
-            "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at, progress_target, progress_actual, issue_weight"
+            "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at, progress_target, progress_actual, issue_weight, last_note, last_note_at, last_note_by"
           )
           .in("project_id", scopedProjectIds)
           .is("deleted_at", null)
           .order("sort_order")
       : Promise.resolve({ data: [] as IssueRow[], error: null }),
-    scopedProjectIds.length > 0 && needsProjectMembersData
+    scopedProjectIds.length > 0
       ? supabase
           .schema("core_pm")
           .from("project_members")
@@ -191,7 +181,7 @@ export default async function Home({ searchParams }: HomeProps) {
   }>;
   const memberUserIds = [...new Set(projectMembersBase.map((m) => m.user_id))];
   const { data: profilesRaw, error: profilesError } =
-    memberUserIds.length > 0 && needsProjectMembersData
+    memberUserIds.length > 0
       ? await supabase
           .schema("core_pm")
           .from("profiles")

@@ -97,28 +97,6 @@ export async function signOut() {
   redirect("/login");
 }
 
-export async function joinDemoProjectsAction() {
-  const supabase = await createServerSupabaseClient();
-  if (!supabase) {
-    redirect("/?joinError=" + encodeURIComponent("Supabase tidak dikonfigurasi"));
-  }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { error } = await supabase.schema("core_pm").rpc("join_demo_org_projects");
-  if (error) {
-    redirect("/?joinError=" + encodeURIComponent(error.message));
-  }
-
-  revalidatePath("/", "layout");
-  redirect("/");
-}
-
 export async function createOrganizationProjectAction(formData: FormData) {
   const supabase = await createServerSupabaseClient();
   if (!supabase) {
@@ -166,6 +144,11 @@ export async function createOrganizationProjectAction(formData: FormData) {
 
 export type CreateProjectInOrganizationResult = { error: string | null };
 export type AddProjectMemberResult = { error: string | null };
+export type CreateOrganizationProjectInlineResult = {
+  error: string | null;
+  organizationId?: string;
+  projectId?: string;
+};
 
 export async function createProjectInOrganizationAction(
   formData: FormData
@@ -204,7 +187,7 @@ export async function createProjectInOrganizationAction(
     ) {
       return {
         error:
-          "Fitur tambah project belum aktif di database (migration belum di-push / cache schema belum refresh). Jalankan: npx supabase db push",
+          "Fitur tambah project belum aktif di sistem. Hubungi admin untuk menyelesaikan setup database.",
       };
     }
     return { error: error.message };
@@ -212,6 +195,69 @@ export async function createProjectInOrganizationAction(
 
   revalidatePath("/", "layout");
   return { error: null };
+}
+
+export async function createOrganizationProjectInlineAction(
+  formData: FormData
+): Promise<CreateOrganizationProjectInlineResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const organizationName = String(formData.get("organization_name") ?? "").trim();
+  const organizationSlug = String(formData.get("organization_slug") ?? "").trim();
+  const projectName = String(formData.get("project_name") ?? "").trim();
+  const projectKey = String(formData.get("project_key") ?? "").trim();
+  const projectDescription = String(formData.get("project_description") ?? "").trim();
+
+  if (!organizationName || !projectName) {
+    return { error: "Nama organisasi dan nama project wajib diisi" };
+  }
+
+  const { data: projectId, error } = await supabase.schema("core_pm").rpc(
+    "create_organization_project_bootstrap",
+    {
+      p_org_name: organizationName,
+      p_org_slug: organizationSlug || null,
+      p_project_name: projectName,
+      p_project_key: projectKey || null,
+      p_project_description: projectDescription || null,
+    }
+  );
+  if (error) {
+    return { error: error.message };
+  }
+  if (!projectId) {
+    return { error: "Project baru tidak ditemukan setelah proses pembuatan." };
+  }
+
+  const { data: projectRow, error: projectErr } = await supabase
+    .schema("core_pm")
+    .from("projects")
+    .select("id, organization_id")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (projectErr) {
+    return { error: projectErr.message };
+  }
+  if (!projectRow) {
+    return { error: "Gagal membaca organisasi/project yang baru dibuat." };
+  }
+
+  revalidatePath("/", "layout");
+  return {
+    error: null,
+    organizationId: projectRow.organization_id,
+    projectId: projectRow.id,
+  };
 }
 
 export async function addProjectMemberByEmailAction(

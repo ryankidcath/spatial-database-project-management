@@ -2,13 +2,13 @@
 
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight, PanelLeft, Trash2 } from "lucide-react";
 import {
   addProjectMemberByEmailAction,
+  createOrganizationProjectInlineAction,
   createProjectInOrganizationAction,
   createOrganizationProjectAction,
-  joinDemoProjectsAction,
   signOut,
 } from "@/app/auth/actions";
 import { NotificationsBell } from "./notifications-bell";
@@ -41,6 +41,7 @@ import {
   deleteTaskAction,
   reopenTaskAction,
   setTaskDoneAction,
+  updateTaskLastNoteAction,
   updateTaskProgressAction,
 } from "./core-task-actions";
 import {
@@ -50,13 +51,13 @@ import {
   upsertIssueGeometryFeatureAction,
   upsertIssueGeometryFeatureBatchAction,
 } from "./issue-geometry-feature-actions";
+import { upsertIssueFeatureAttributesCsvAction } from "./issue-feature-attribute-actions";
 import type {
   FinanceInvoiceItemRow,
   FinanceInvoiceRow,
   FinancePembayaranRow,
 } from "./finance-types";
 import { BerkasListPanel } from "./berkas-list-panel";
-import { OrganizationModuleToggles } from "./organization-module-toggles";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { BerkasPermohonanRow } from "./plm-berkas-types";
 import type {
@@ -161,6 +162,9 @@ export type IssueRow = {
   progress_target: string | null;
   progress_actual: string | null;
   issue_weight: string;
+  last_note: string | null;
+  last_note_at: string | null;
+  last_note_by: string | null;
 };
 
 export type ProjectMemberRow = {
@@ -207,17 +211,13 @@ type Props = {
 type TableRow = { issue: IssueRow; depth: number };
 type TaskConfirmState = { issueId: string; mode: "done" | "reopen"; title: string };
 type TaskDeleteConfirmState = { issueId: string; title: string };
-type ProjectDeleteConfirmState = { projectId: string; name: string };
-type MapGeometryInputMode = "single" | "batch" | "manage";
-type BatchGeojsonPreview = {
-  valid: boolean;
-  reason?: string;
-  featureCount: number;
-  propertyKeys: string[];
-  geometryTypeCounts: Record<string, number>;
-  withFeatureKey: number;
-  withIdFallback: number;
+type TaskNoteEditorState = {
+  issueId: string;
+  title: string;
+  initialNote: string;
 };
+type ProjectDeleteConfirmState = { projectId: string; name: string };
+type MapGeometryInputMode = "single" | "manage";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   done:
@@ -228,6 +228,15 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
     "border border-border bg-muted text-muted-foreground",
 };
 const SPATIAL_TABLE_PAGE_SIZE = 100;
+const SOURCE_SRID_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "4326", label: "EPSG:4326 - WGS84 (Lat/Lon)" },
+  { value: "32748", label: "EPSG:32748 - UTM Zone 48S" },
+  { value: "32749", label: "EPSG:32749 - UTM Zone 49S" },
+  { value: "23833", label: "EPSG:23833 - TM-3 48.1" },
+  { value: "23834", label: "EPSG:23834 - TM-3 48.2" },
+  { value: "23835", label: "EPSG:23835 - TM-3 49.1" },
+  { value: "23836", label: "EPSG:23836 - TM-3 49.2" },
+];
 
 function statusBadgeClass(category: string | null | undefined): string {
   if (!category) return STATUS_BADGE_CLASS.todo;
@@ -245,6 +254,36 @@ function computeIssueProgressPercent(
   }
   if (statusCategory === "done") return 100;
   return 0;
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("id-ID", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function formatRelativeAge(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const diffMs = Date.now() - date.getTime();
+  const minuteMs = 60_000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  if (diffMs < hourMs) {
+    const mins = Math.max(1, Math.floor(diffMs / minuteMs));
+    return `${mins} menit lalu`;
+  }
+  if (diffMs < dayMs) {
+    const hours = Math.floor(diffMs / hourMs);
+    return `${hours} jam lalu`;
+  }
+  const days = Math.floor(diffMs / dayMs);
+  return `${days} hari lalu`;
 }
 
 function computeWeightedProgressByIssue(
@@ -297,85 +336,6 @@ function flattenIssuesForProject(
   issues: IssueRow[]
 ): IssueRow[] {
   return flattenIssuesWithDepth(projectId, issues).map((x) => x.issue);
-}
-
-function analyzeBatchGeojson(raw: string): BatchGeojsonPreview | null {
-  const text = raw.trim();
-  if (!text) return null;
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return {
-        valid: false,
-        reason: "JSON root bukan object.",
-        featureCount: 0,
-        propertyKeys: [],
-        geometryTypeCounts: {},
-        withFeatureKey: 0,
-        withIdFallback: 0,
-      };
-    }
-    const root = parsed as { type?: string; features?: unknown[] };
-    if (root.type !== "FeatureCollection" || !Array.isArray(root.features)) {
-      return {
-        valid: false,
-        reason: "Root harus FeatureCollection dan memiliki array features.",
-        featureCount: 0,
-        propertyKeys: [],
-        geometryTypeCounts: {},
-        withFeatureKey: 0,
-        withIdFallback: 0,
-      };
-    }
-
-    const keySet = new Set<string>();
-    const geometryTypeCounts: Record<string, number> = {};
-    let withFeatureKey = 0;
-    let withIdFallback = 0;
-    let validFeatureCount = 0;
-
-    for (const feat of root.features) {
-      if (!feat || typeof feat !== "object") continue;
-      const f = feat as {
-        type?: string;
-        properties?: unknown;
-        geometry?: { type?: string } | null;
-      };
-      if (f.type !== "Feature") continue;
-      validFeatureCount++;
-
-      const geomType = f.geometry?.type ?? "(tanpa geometry)";
-      geometryTypeCounts[geomType] = (geometryTypeCounts[geomType] ?? 0) + 1;
-
-      if (f.properties && typeof f.properties === "object" && !Array.isArray(f.properties)) {
-        const props = f.properties as Record<string, unknown>;
-        for (const k of Object.keys(props)) keySet.add(k);
-        const fk = props.feature_key;
-        const id = props.id ?? props.ID ?? props.Id;
-        if (fk != null && String(fk).trim() !== "") withFeatureKey++;
-        else if (id != null && String(id).trim() !== "") withIdFallback++;
-      }
-    }
-
-    return {
-      valid: true,
-      featureCount: validFeatureCount,
-      propertyKeys: [...keySet].sort((a, b) => a.localeCompare(b)),
-      geometryTypeCounts,
-      withFeatureKey,
-      withIdFallback,
-    };
-  } catch {
-    return {
-      valid: false,
-      reason: "JSON tidak valid.",
-      featureCount: 0,
-      propertyKeys: [],
-      geometryTypeCounts: {},
-      withFeatureKey: 0,
-      withIdFallback: 0,
-    };
-  }
 }
 
 function flattenIssuesWithDepth(
@@ -519,7 +479,9 @@ export function WorkspaceClient({
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
   const [taskPending, startTaskTransition] = useTransition();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [tableTaskDialogOpen, setTableTaskDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [organizationDialogOpen, setOrganizationDialogOpen] = useState(false);
   const [memberDialogOpen, setMemberDialogOpen] = useState(false);
   const [subtaskDialogOpen, setSubtaskDialogOpen] = useState(false);
   const [progressDialogOpen, setProgressDialogOpen] = useState(false);
@@ -527,17 +489,49 @@ export function WorkspaceClient({
   const [mapGeomInputMode, setMapGeomInputMode] =
     useState<MapGeometryInputMode>("single");
   const [mapGeomMsg, setMapGeomMsg] = useState<string | null>(null);
-  const [mapGeomBatchMsg, setMapGeomBatchMsg] = useState<string | null>(null);
   const [mapGeomBatchText, setMapGeomBatchText] = useState("");
+  const [mapAttrCsvText, setMapAttrCsvText] = useState("");
   const [mapGeomDeleteMsg, setMapGeomDeleteMsg] = useState<string | null>(null);
+  const [mapAttrMsg, setMapAttrMsg] = useState<string | null>(null);
+  const [spatialAttrImportDialogOpen, setSpatialAttrImportDialogOpen] =
+    useState(false);
   const [mapGeomFormNonce, setMapGeomFormNonce] = useState(0);
   const [mapGeomPending, startMapGeomTransition] = useTransition();
+  const mapGeomDetectedKind = useMemo<
+    "none" | "single" | "batch" | "invalid" | "unsupported"
+  >(() => {
+    const text = mapGeomBatchText.trim();
+    if (!text) return "none";
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== "object") return "invalid";
+      const kind = String((parsed as { type?: unknown }).type ?? "");
+      if (kind === "FeatureCollection") return "batch";
+      if (kind === "Feature" || kind === "Polygon" || kind === "MultiPolygon") {
+        return "single";
+      }
+      return "unsupported";
+    } catch {
+      return "invalid";
+    }
+  }, [mapGeomBatchText]);
   const openMapGeomDialog = useCallback(() => {
     setMapGeomInputMode("single");
     setMapGeomMsg(null);
-    setMapGeomBatchMsg(null);
     setMapGeomDeleteMsg(null);
     setMapGeomBatchText("");
+    setMapAttrCsvText("");
+    setMapAttrMsg(null);
+    setMapGeomFormNonce((n) => n + 1);
+    setMapGeomDialogOpen(true);
+  }, []);
+  const openMapGeomManageDialog = useCallback(() => {
+    setMapGeomInputMode("manage");
+    setMapGeomMsg(null);
+    setMapGeomDeleteMsg(null);
+    setMapGeomBatchText("");
+    setMapAttrCsvText("");
+    setMapAttrMsg(null);
     setMapGeomFormNonce((n) => n + 1);
     setMapGeomDialogOpen(true);
   }, []);
@@ -545,9 +539,12 @@ export function WorkspaceClient({
   const [taskConfirm, setTaskConfirm] = useState<TaskConfirmState | null>(null);
   const [taskDeleteConfirm, setTaskDeleteConfirm] =
     useState<TaskDeleteConfirmState | null>(null);
+  const [taskNoteEditor, setTaskNoteEditor] = useState<TaskNoteEditorState | null>(null);
+  const taskNoteInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [projectDeleteConfirm, setProjectDeleteConfirm] =
     useState<ProjectDeleteConfirmState | null>(null);
   const [projectMsg, setProjectMsg] = useState<string | null>(null);
+  const [organizationMsg, setOrganizationMsg] = useState<string | null>(null);
   const [memberMsg, setMemberMsg] = useState<string | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set()
@@ -892,11 +889,6 @@ export function WorkspaceClient({
     );
   }, [issueGeometryForSelectedProject, issueIdsInSelectedTaskSubtree]);
 
-  const mapGeomBatchPreview = useMemo(
-    () => analyzeBatchGeojson(mapGeomBatchText),
-    [mapGeomBatchText]
-  );
-
   const issueTitleById = useMemo(() => {
     const m = new Map<string, string>();
     if (!selectedProjectId) return m;
@@ -1052,6 +1044,14 @@ export function WorkspaceClient({
       });
   }, [projectMembers, selectedProjectId]);
 
+  const memberNameByUserId = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const member of projectMembersForSelectedProject) {
+      out.set(member.user_id, member.display_name?.trim() || member.user_id);
+    }
+    return out;
+  }, [projectMembersForSelectedProject]);
+
   const financeInvoicesInProject = useMemo(
     () =>
       financeInvoices.filter((i) => i.project_id === (selectedProjectId ?? "")),
@@ -1124,6 +1124,21 @@ export function WorkspaceClient({
     }
     return weightTotal > 0 ? weightedSum / weightTotal : 0;
   }, [issues, issueProgressById, selectedProjectId]);
+  const projectStartsAt = useMemo(() => {
+    if (!selectedProjectId) return null;
+    let minMs: number | null = null;
+    let minIso: string | null = null;
+    for (const issue of issues) {
+      if (issue.project_id !== selectedProjectId || !issue.starts_at) continue;
+      const ms = Date.parse(issue.starts_at);
+      if (!Number.isFinite(ms)) continue;
+      if (minMs == null || ms < minMs) {
+        minMs = ms;
+        minIso = issue.starts_at;
+      }
+    }
+    return minIso;
+  }, [issues, selectedProjectId]);
 
   const replaceQuery = (mutate: (p: URLSearchParams) => void) => {
     const p = new URLSearchParams(searchParams.toString());
@@ -1186,40 +1201,18 @@ export function WorkspaceClient({
   };
 
   if (fetchError) {
-    const isSchemaError =
-      /invalid schema|core_pm|spatial|plm/i.test(fetchError) ||
-      fetchError.includes("PGRST106");
 
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
         <div className="max-w-lg rounded-lg border border-destructive/30 bg-card p-6 text-sm text-destructive">
-          <p className="font-semibold">Gagal memuat data dari Supabase</p>
-          <p className="mt-2 text-red-700">{fetchError}</p>
-          {isSchemaError ? (
-            <div className="mt-4 rounded-md border border-primary/25 bg-primary/10 p-3 text-foreground">
-              <p className="font-medium">Schema API belum di-expose</p>
-              <p className="mt-2 text-sm">
-                Di Supabase Dashboard:{" "}
-                <strong>Project Settings → Data API / API → Exposed schemas</strong>
-                , tambahkan{" "}
-                <code className="rounded bg-card px-1">core_pm</code>,{" "}
-                <code className="rounded bg-card px-1">plm</code> (Fase 3),{" "}
-                <code className="rounded bg-card px-1">spatial</code>,{" "}
-                <code className="rounded bg-card px-1">finance</code> sesuai kebutuhan.
-              </p>
-              <p className="mt-2 text-sm">
-                Panduan di repo:{" "}
-                <code className="rounded bg-card px-1">docs/supabase-expose-schemas.md</code>
-              </p>
-            </div>
-          ) : (
-            <p className="mt-4 text-muted-foreground">
-              Pastikan migration{" "}
-              <code className="rounded bg-muted px-1">0002_core_pm_initial.sql</code>{" "}
-              sudah di-push:{" "}
-              <code className="rounded bg-muted px-1">npx supabase db push</code>
-            </p>
-          )}
+          <p className="font-semibold">Gagal memuat data workspace</p>
+          <p className="mt-2 text-red-700">
+            Aplikasi belum dapat mengambil data. Coba muat ulang halaman.
+          </p>
+          <p className="mt-4 text-muted-foreground">
+            Jika masalah berlanjut, hubungi admin sistem untuk memeriksa
+            konfigurasi layanan data dan akses akun.
+          </p>
         </div>
       </div>
     );
@@ -1231,11 +1224,31 @@ export function WorkspaceClient({
         <div className="max-w-lg rounded-lg border border-border bg-card p-6 text-sm text-foreground">
           <p className="font-semibold">Tidak ada project yang dapat diakses</p>
           <p className="mt-2 text-muted-foreground">
-            Dengan RLS aktif, Anda hanya melihat project tempat akun menjadi{" "}
-            <code className="rounded bg-muted px-1">project_members</code>.
-            User baru sekarang mulai dari kosong; Anda bisa membuat organisasi
-            dan project pertama langsung dari form di bawah.
+            Anda belum memiliki akses ke project mana pun. Buat organisasi dan
+            project pertama lewat form di bawah, atau minta pemilik project
+            menambahkan email Anda sebagai anggota.
           </p>
+          {userEmail && (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+              <p className="font-medium text-foreground dark:text-amber-50">
+                Sudah punya akun tapi daftar project kosong?
+              </p>
+              <p className="mt-2">
+                Anda masuk sebagai <span className="font-mono">{userEmail}</span>.
+                Owner harus mengetik email <strong>yang sama</strong> di tombol +{" "}
+                Anggota (setelah Anda punya akun). Setelah mereka menambahkan,
+                tekan{" "}
+                <a
+                  className="font-medium text-primary underline underline-offset-2"
+                  href="/"
+                >
+                  muat ulang halaman
+                </a>{" "}
+                atau keluar lalu masuk lagi. Minta owner memastikan tidak ada
+                pesan error merah setelah klik &quot;Tambahkan ke project&quot;.
+              </p>
+            </div>
+          )}
           {joinError && (
             <p className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-red-900">
               {joinError}
@@ -1300,18 +1313,9 @@ export function WorkspaceClient({
               </Button>
             </form>
           )}
-          {userEmail && (
-            <form action={joinDemoProjectsAction} className="mt-3">
-              <Button type="submit" variant="secondary">
-                Atau gabung ke project demo (KJSB)
-              </Button>
-            </form>
-          )}
           <p className="mt-4 text-xs text-muted-foreground">
-            Jika tetap kosong, tambahkan baris di{" "}
-            <code className="rounded bg-muted px-1">core_pm.project_members</code>{" "}
-            untuk <code className="rounded bg-muted px-1">auth.users.id</code> Anda,
-            atau minta admin menambahkan ke project.
+            Jika akun tetap belum mendapat akses, minta admin memeriksa data
+            keanggotaan project Anda di sistem.
           </p>
           {userEmail && (
             <form action={signOut} className="mt-6">
@@ -1361,9 +1365,94 @@ export function WorkspaceClient({
           </div>
         </div>
         <div className="mt-4 space-y-2">
-          <p className="text-sm font-medium text-muted-foreground">
-            Organisasi
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-muted-foreground">
+              Organisasi
+            </p>
+            <Dialog
+              open={organizationDialogOpen}
+              onOpenChange={(open) => {
+                setOrganizationDialogOpen(open);
+                if (open) setOrganizationMsg(null);
+              }}
+            >
+              <DialogTrigger render={<Button size="sm" variant="outline" />}>
+                + Organisasi
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Tambah organisasi baru</DialogTitle>
+                  <DialogDescription>
+                    Buat organisasi baru beserta project pertamanya. Anda akan
+                    otomatis menjadi owner di project tersebut.
+                  </DialogDescription>
+                </DialogHeader>
+                <form
+                  className="grid gap-3"
+                  action={(fd) => {
+                    setOrganizationMsg(null);
+                    startTaskTransition(async () => {
+                      const r = await createOrganizationProjectInlineAction(fd);
+                      if (r.error) {
+                        setOrganizationMsg(r.error);
+                        return;
+                      }
+                      if (r.organizationId && r.projectId) {
+                        replaceQuery((q) => {
+                          q.set("org", r.organizationId as string);
+                          q.set("project", r.projectId as string);
+                          q.delete("task");
+                        });
+                      }
+                      setOrganizationDialogOpen(false);
+                      router.refresh();
+                    });
+                  }}
+                >
+                  <div className="space-y-1">
+                    <Label>Nama organisasi *</Label>
+                    <Input
+                      name="organization_name"
+                      required
+                      placeholder="Contoh: KJSB Cirebon"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Slug organisasi (opsional)</Label>
+                    <Input name="organization_slug" placeholder="kjsb-cirebon" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Nama project pertama *</Label>
+                    <Input
+                      name="project_name"
+                      required
+                      placeholder="Contoh: PLM Cirebon 2028"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Kode project (opsional)</Label>
+                    <Input name="project_key" placeholder="PLM28" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Deskripsi project (opsional)</Label>
+                    <Textarea
+                      name="project_description"
+                      rows={3}
+                      placeholder="Catatan singkat project"
+                    />
+                  </div>
+                  <Button type="submit" disabled={taskPending}>
+                    Buat organisasi & project
+                  </Button>
+                  {organizationMsg && (
+                    <p className="text-xs text-red-600" role="alert">
+                      {organizationMsg}
+                    </p>
+                  )}
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
           <div className="ml-2">
             {orgsWithProjects.map((o) => {
               const active = canonicalOrgId === o.id;
@@ -1418,7 +1507,10 @@ export function WorkspaceClient({
                         <span className="font-medium text-foreground">
                           {selectedProject?.name ?? "aktif"}
                         </span>{" "}
-                        berdasarkan email. Hanya owner project yang bisa.
+                        berdasarkan email. Hanya owner project yang bisa. Email
+                        harus sudah punya akun di aplikasi (sudah daftar /
+                        login minimal sekali); undangan ke email yang belum
+                        terdaftar akan ditolak sampai user itu mendaftar.
                       </DialogDescription>
                     </DialogHeader>
                     <form
@@ -1485,7 +1577,10 @@ export function WorkspaceClient({
                     <DialogHeader>
                       <DialogTitle>Tambah project</DialogTitle>
                       <DialogDescription>
-                        Buat project baru di organisasi aktif.
+                        Buat project baru di organisasi aktif (Anda jadi owner).
+                        Ini bukan mengundang user: orang lain tidak otomatis
+                        masuk. Untuk menambahkan rekan ke project yang sudah ada,
+                        pilih project di sidebar lalu gunakan tombol + Anggota.
                       </DialogDescription>
                     </DialogHeader>
                     <form
@@ -1751,13 +1846,7 @@ export function WorkspaceClient({
             </DialogContent>
           </Dialog>
         </div>
-        {canonicalOrgId && userEmail && (
-          <OrganizationModuleToggles
-            organizationId={canonicalOrgId}
-            moduleRegistry={moduleRegistry}
-            organizationModules={organizationModules}
-          />
-        )}
+        {/* Panel pengaturan modul organisasi disembunyikan sementara saat fase pilot. */}
       </aside>
       )}
 
@@ -1925,15 +2014,9 @@ export function WorkspaceClient({
                                 placeholder="Contoh: Susun jadwal kickoff"
                               />
                             </div>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div className="space-y-1">
-                                <Label>Mulai</Label>
-                                <Input name="starts_at" type="date" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label>Tenggat</Label>
-                                <Input name="due_at" type="date" />
-                              </div>
+                            <div className="space-y-1">
+                              <Label>Mulai</Label>
+                              <Input name="starts_at" type="date" />
                             </div>
                             <div className="grid grid-cols-3 gap-3">
                               <div className="space-y-1">
@@ -2021,15 +2104,9 @@ export function WorkspaceClient({
                                 placeholder="Contoh: Lengkapi dokumen pendukung"
                               />
                             </div>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div className="space-y-1">
-                                <Label>Mulai</Label>
-                                <Input name="starts_at" type="date" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label>Tenggat</Label>
-                                <Input name="due_at" type="date" />
-                              </div>
+                            <div className="space-y-1">
+                              <Label>Mulai</Label>
+                              <Input name="starts_at" type="date" />
                             </div>
                             <div className="grid grid-cols-3 gap-3">
                               <div className="space-y-1">
@@ -2194,20 +2271,106 @@ export function WorkspaceClient({
             </TabsContent>
             <TabsContent value="Tabel" className="block w-full min-w-0 outline-none">
               <div className="mt-5 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
-                <div className="border-b border-border px-4 py-2.5">
+                <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
                   <p className="text-sm font-semibold text-foreground">Unit Kerja</p>
+                  {selectedProjectId && (
+                    <div className="flex items-center gap-2">
+                      <Dialog open={tableTaskDialogOpen} onOpenChange={setTableTaskDialogOpen}>
+                        <DialogTrigger render={<Button size="sm" variant="outline" />}>
+                          + Unit Kerja
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Tambah unit kerja</DialogTitle>
+                            <DialogDescription>
+                              Tambahkan unit kerja baru dari view tabel. Jika saat ini Anda
+                              sedang memilih unit kerja tertentu, data baru akan masuk sebagai
+                              turunan dari unit kerja tersebut.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <form
+                            className="grid gap-3"
+                            action={(fd) => {
+                              setTaskMsg(null);
+                              fd.set("project_id", selectedProjectId);
+                              if (selectedTaskId) fd.set("parent_id", selectedTaskId);
+                              if (defaultStatusId) fd.set("status_id", defaultStatusId);
+                              startTaskTransition(async () => {
+                                const r = await createProjectTaskAction(fd);
+                                if (r.error) {
+                                  setTaskMsg(r.error);
+                                  return;
+                                }
+                                setTableTaskDialogOpen(false);
+                                router.refresh();
+                              });
+                            }}
+                          >
+                            <div className="space-y-1">
+                              <Label>Induk</Label>
+                              <Input
+                                value={selectedTask?.title ?? "Project (tanpa induk)"}
+                                disabled
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label>Judul unit kerja *</Label>
+                              <Input
+                                name="title"
+                                required
+                                placeholder="Contoh: Susun jadwal kickoff"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label>Mulai</Label>
+                              <Input name="starts_at" type="date" />
+                            </div>
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="space-y-1">
+                                <Label>Target</Label>
+                                <Input name="progress_target" type="number" min="0" step="0.01" />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Realisasi</Label>
+                                <Input name="progress_actual" type="number" min="0" step="0.01" />
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Bobot</Label>
+                                <Input
+                                  name="issue_weight"
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  defaultValue="1"
+                                />
+                              </div>
+                            </div>
+                            <Button type="submit" disabled={taskPending}>
+                              Simpan unit kerja
+                            </Button>
+                            {taskMsg && (
+                              <p className="text-xs text-red-600" role="alert">
+                                {taskMsg}
+                              </p>
+                            )}
+                          </form>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  )}
                 </div>
                 <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
                   <thead>
                     <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
                       <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Judul</th>
                       <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Status</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Bobot</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Realisasi/Target</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Progress %</th>
                       <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Mulai</th>
                       <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Tenggat</th>
                       <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Unit Induk</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Catatan Terakhir</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Oleh</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Kapan</th>
+                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Umur</th>
                       <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Aksi</th>
                     </tr>
                   </thead>
@@ -2218,11 +2381,13 @@ export function WorkspaceClient({
                           {selectedProject.name}
                         </td>
                         <td className="px-4 py-3 align-middle text-primary">Ringkasan</td>
-                        <td className="px-4 py-3 align-middle text-primary">—</td>
-                        <td className="px-4 py-3 align-middle text-primary whitespace-nowrap">— / —</td>
-                        <td className="px-4 py-3 align-middle font-semibold text-primary whitespace-nowrap">
-                          {projectProgressPercent.toFixed(1)}%
+                        <td className="px-4 py-3 align-middle text-primary">
+                          {formatShortDate(projectStartsAt)}
                         </td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
+                        <td className="px-4 py-3 align-middle text-primary">—</td>
                         <td className="px-4 py-3 align-middle text-primary">—</td>
                         <td className="px-4 py-3 align-middle text-primary">—</td>
                         <td className="px-4 py-3 align-middle text-primary">—</td>
@@ -2233,7 +2398,6 @@ export function WorkspaceClient({
                       const isChild = Boolean(issue.parent_id);
                       const st = issue.status_id ? statusById.get(issue.status_id) : null;
                       const isDone = st?.category === "done";
-                      const progressPct = issueProgressById.get(issue.id) ?? 0;
                       const isSelectedRootRow =
                         selectedTaskId != null && issue.id === selectedTaskId;
                       return (
@@ -2267,15 +2431,6 @@ export function WorkspaceClient({
                             </Badge>
                           </td>
                           <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {issue.issue_weight ?? "1"}
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {issue.progress_actual ?? "—"} / {issue.progress_target ?? "—"}
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {progressPct.toFixed(1)}%
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
                             {formatShortDate(issue.starts_at)}
                           </td>
                           <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
@@ -2286,6 +2441,20 @@ export function WorkspaceClient({
                               ? (issueTitleById.get(issue.parent_id) ?? "—")
                               : "—"}
                           </td>
+                          <td className="max-w-[20rem] px-4 py-3 align-middle text-muted-foreground">
+                            <span className="line-clamp-2">{issue.last_note?.trim() || "—"}</span>
+                          </td>
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
+                            {issue.last_note_by
+                              ? (memberNameByUserId.get(issue.last_note_by) ?? issue.last_note_by)
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
+                            {formatDateTime(issue.last_note_at)}
+                          </td>
+                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
+                            {formatRelativeAge(issue.last_note_at)}
+                          </td>
                           <td className="px-4 py-3 align-middle whitespace-nowrap">
                             {selectedProjectId ? (
                               <div
@@ -2293,6 +2462,23 @@ export function WorkspaceClient({
                                 onKeyDown={(e) => e.stopPropagation()}
                               >
                                 <div className="flex items-center gap-1">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={taskPending}
+                                    className="h-auto px-2 py-0.5 text-xs font-medium"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      setTaskNoteEditor({
+                                        issueId: issue.id,
+                                        title: issue.title,
+                                        initialNote: issue.last_note ?? "",
+                                      });
+                                    }}
+                                  >
+                                    Catatan
+                                  </Button>
                                   <Button
                                     type="button"
                                     size="sm"
@@ -2452,6 +2638,74 @@ export function WorkspaceClient({
                     Tidak ada baris untuk scope ini.
                   </p>
                 )}
+                <Dialog
+                  open={Boolean(taskNoteEditor)}
+                  onOpenChange={(open) => {
+                    if (!open) setTaskNoteEditor(null);
+                  }}
+                >
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Update catatan terakhir</DialogTitle>
+                      <DialogDescription>
+                        Isi ringkas aktivitas terakhir, hambatan, atau pihak yang sedang
+                        ditunggu untuk unit kerja "{taskNoteEditor?.title ?? "-"}".
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                      <Label htmlFor="last-note-editor">Catatan</Label>
+                      <Textarea
+                        id="last-note-editor"
+                        key={taskNoteEditor?.issueId ?? "none"}
+                        defaultValue={taskNoteEditor?.initialNote ?? ""}
+                        ref={taskNoteInputRef}
+                        placeholder="Contoh: 14 Apr sudah chat perangkat desa, menunggu konfirmasi jadwal ukur."
+                        rows={4}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Kosongkan lalu simpan jika ingin menghapus catatan.
+                      </p>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setTaskNoteEditor(null)}
+                      >
+                        Batal
+                      </Button>
+                      <Button
+                        type="button"
+                        disabled={taskPending}
+                        onClick={() => {
+                          const current = taskNoteEditor;
+                          if (!current || !selectedProjectId) return;
+                          setTaskMsg(null);
+                          const fd = new FormData();
+                          fd.set("issue_id", current.issueId);
+                          fd.set("project_id", selectedProjectId);
+                          fd.set("last_note", taskNoteInputRef.current?.value ?? "");
+                          startTaskTransition(async () => {
+                            const r = await updateTaskLastNoteAction(fd);
+                            if (r.error) {
+                              setTaskMsg(r.error);
+                              return;
+                            }
+                            setTaskNoteEditor(null);
+                            router.refresh();
+                          });
+                        }}
+                      >
+                        Simpan catatan
+                      </Button>
+                    </div>
+                    {taskMsg && (
+                      <p className="text-xs text-red-600" role="alert">
+                        {taskMsg}
+                      </p>
+                    )}
+                  </DialogContent>
+                </Dialog>
               </div>
               <div className="mt-4 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
                 <div className="border-b border-border px-4 py-2.5">
@@ -2506,6 +2760,113 @@ export function WorkspaceClient({
                     {spatialTableTotalRows.toLocaleString("id-ID")} baris
                   </span>
                   <div className="ml-auto flex shrink-0 items-center gap-2 text-xs">
+                    <Dialog
+                      open={spatialAttrImportDialogOpen}
+                      onOpenChange={(open) => {
+                        setSpatialAttrImportDialogOpen(open);
+                        if (open) {
+                          setMapAttrMsg(null);
+                          setMapAttrCsvText("");
+                        }
+                      }}
+                    >
+                      <DialogTrigger
+                        render={<Button type="button" size="sm" variant="outline" />}
+                        disabled={!selectedTaskId}
+                      >
+                        Import atribut CSV
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Import atribut CSV</DialogTitle>
+                          <DialogDescription>
+                            Upload atribut untuk unit kerja terpilih. Linking menggunakan
+                            `feature_key` (atau kolom key yang Anda tentukan).
+                          </DialogDescription>
+                        </DialogHeader>
+                        <form
+                          className="grid gap-3"
+                          action={(fd) => {
+                            if (!selectedProjectId || !selectedTaskId) return;
+                            setMapAttrMsg(null);
+                            fd.set("project_id", selectedProjectId);
+                            fd.set("issue_id", selectedTaskId);
+                            fd.set("attributes_csv", mapAttrCsvText);
+                            startMapGeomTransition(async () => {
+                              const r = await upsertIssueFeatureAttributesCsvAction(fd);
+                              if (r.error) {
+                                setMapAttrMsg(r.error);
+                                return;
+                              }
+                              const failText = r.failed > 0 ? `, gagal ${r.failed}` : "";
+                              const sampleText =
+                                r.failureSamples.length > 0
+                                  ? ` (${r.failureSamples.slice(0, 3).join(" | ")})`
+                                  : "";
+                              setMapAttrMsg(
+                                `Import atribut selesai: berhasil ${r.insertedOrUpdated}${failText}.${sampleText}`
+                              );
+                              router.refresh();
+                            });
+                          }}
+                        >
+                          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+                            <span className="text-muted-foreground">Unit kerja:</span>{" "}
+                            <span className="font-medium text-foreground">
+                              {selectedTask?.title ?? "Pilih unit kerja dulu"}
+                            </span>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>File CSV atribut</Label>
+                            <Input
+                              type="file"
+                              accept=".csv,text/csv"
+                              onChange={(e) => {
+                                const file = e.currentTarget.files?.[0];
+                                if (!file) {
+                                  setMapAttrCsvText("");
+                                  return;
+                                }
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  const raw =
+                                    typeof reader.result === "string" ? reader.result : "";
+                                  setMapAttrCsvText(raw);
+                                };
+                                reader.onerror = () => {
+                                  setMapAttrMsg("Gagal membaca file CSV.");
+                                };
+                                reader.readAsText(file);
+                              }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Nama kolom key</Label>
+                            <Input
+                              name="key_column"
+                              defaultValue="feature_key"
+                              placeholder="contoh: feature_key / nib / no_bidang"
+                            />
+                          </div>
+                          <Button
+                            type="submit"
+                            disabled={
+                              mapGeomPending || !selectedTaskId || !mapAttrCsvText.trim()
+                            }
+                          >
+                            Import atribut
+                          </Button>
+                          {mapAttrMsg && (
+                            <p
+                              className={`text-xs ${mapAttrMsg.includes("selesai") ? "text-emerald-700" : "text-red-600"}`}
+                              role="alert"
+                            >
+                              {mapAttrMsg}
+                            </p>
+                          )}
+                        </form>
+                      </DialogContent>
+                    </Dialog>
                     <Button
                       type="button"
                       size="sm"
@@ -2854,7 +3215,7 @@ export function WorkspaceClient({
                           open={mapGeomDialogOpen}
                           onOpenChange={setMapGeomDialogOpen}
                         >
-                          <DialogContent className="max-h-[85vh] max-w-[min(92vw,640px)] overflow-x-hidden overflow-y-auto">
+                          <DialogContent className="max-w-[min(96vw,760px)] overflow-x-hidden">
                             <DialogHeader>
                               <DialogTitle>
                                 {mapGeomInputMode === "manage"
@@ -2868,58 +3229,15 @@ export function WorkspaceClient({
                                     baris atau sekaligus sebelum batch ulang.
                                   </>
                                 ) : (
-                                  <>
-                                    Pilih mode input per bidang atau batch FeatureCollection.
-                                    Data tersimpan sebagai banyak fitur 1:N di unit kerja aktif.
-                                  </>
+                                  <>Simpan geometri unit kerja dari GeoJSON.</>
                                 )}
                               </DialogDescription>
                             </DialogHeader>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant={mapGeomInputMode === "single" ? "default" : "outline"}
-                                className="h-7 px-2 text-xs"
-                                onClick={() => {
-                                  setMapGeomDeleteMsg(null);
-                                  setMapGeomInputMode("single");
-                                }}
-                              >
-                                Per bidang
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant={mapGeomInputMode === "batch" ? "default" : "outline"}
-                                className="h-7 px-2 text-xs"
-                                onClick={() => {
-                                  setMapGeomDeleteMsg(null);
-                                  setMapGeomInputMode("batch");
-                                }}
-                              >
-                                Batch
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant={mapGeomInputMode === "manage" ? "default" : "outline"}
-                                className="h-7 px-2 text-xs"
-                                onClick={() => {
-                                  setMapGeomMsg(null);
-                                  setMapGeomBatchMsg(null);
-                                  setMapGeomDeleteMsg(null);
-                                  setMapGeomInputMode("manage");
-                                }}
-                              >
-                                Hapus
-                              </Button>
-                            </div>
                             {mapGeomInputMode === "manage" ? (
                               <div className="space-y-3">
                                 {issueGeometriesForManageTask.length === 0 ? (
                                   <p className="text-sm text-muted-foreground">
-                                    Belum ada geometri fitur untuk task ini.
+                                    Belum ada geometri fitur untuk unit kerja ini.
                                   </p>
                                 ) : (
                                   <>
@@ -3074,126 +3392,108 @@ export function WorkspaceClient({
                                   </p>
                                 )}
                               </div>
-                            ) : mapGeomInputMode === "single" ? (
-                              <form
-                                key={`geom-single-${mapGeomFormNonce}`}
-                                className="grid gap-3"
-                                action={(fd) => {
-                                  if (!selectedProjectId || !selectedTaskId) return;
-                                  setMapGeomMsg(null);
-                                  fd.set("project_id", selectedProjectId);
-                                  fd.set("issue_id", selectedTaskId);
-                                  startMapGeomTransition(async () => {
-                                    const r = await upsertIssueGeometryFeatureAction(fd);
-                                    if (r.error) {
-                                      setMapGeomMsg(r.error);
-                                      return;
-                                    }
-                                    setMapGeomMsg("Berhasil simpan geometri per bidang.");
-                                    router.refresh();
-                                  });
-                                }}
-                              >
-                                <div className="space-y-1">
-                                  <Label>Feature key *</Label>
-                                  <Input
-                                    name="feature_key"
-                                    required
-                                    placeholder="contoh: sambeng-001 / bidang-12"
-                                  />
-                                </div>
-                                <div className="space-y-1">
-                                  <Label>Label (opsional)</Label>
-                                  <Input
-                                    name="label"
-                                    placeholder="contoh: Bidang Sambeng A1"
-                                  />
-                                </div>
-                                <div className="space-y-1">
-                                  <Label>Properties JSON (opsional)</Label>
-                                  <Textarea
-                                    name="properties_json"
-                                    rows={3}
-                                    defaultValue='{}'
-                                    placeholder='{"status":"ukur","luas_m2":1250}'
-                                    className="font-mono text-xs"
-                                  />
-                                </div>
+                            ) : (
+                              <div className="space-y-4">
+                                <form
+                                  key={`geom-single-${mapGeomFormNonce}`}
+                                  className="grid gap-3"
+                                  action={(fd) => {
+                                    if (!selectedProjectId || !selectedTaskId) return;
+                                    setMapGeomMsg(null);
+                                    fd.set("project_id", selectedProjectId);
+                                    fd.set("issue_id", selectedTaskId);
+                                    startMapGeomTransition(async () => {
+                                      const rawGeojson = String(
+                                        fd.get("geojson_json") ?? ""
+                                      ).trim();
+                                      if (!rawGeojson) {
+                                        setMapGeomMsg("GeoJSON wajib diisi.");
+                                        return;
+                                      }
+                                      let parsed: unknown;
+                                      try {
+                                        parsed = JSON.parse(rawGeojson);
+                                      } catch {
+                                        setMapGeomMsg("GeoJSON tidak valid.");
+                                        return;
+                                      }
+
+                                      const geoType =
+                                        parsed && typeof parsed === "object"
+                                          ? String((parsed as { type?: unknown }).type ?? "")
+                                          : "";
+
+                                      if (geoType === "FeatureCollection") {
+                                        const batchFd = new FormData();
+                                        batchFd.set("project_id", selectedProjectId);
+                                        batchFd.set("issue_id", selectedTaskId);
+                                        batchFd.set("batch_geojson_json", rawGeojson);
+                                        batchFd.set(
+                                          "feature_key_prefix",
+                                          String(fd.get("feature_key_prefix") ?? "")
+                                        );
+                                        batchFd.set(
+                                          "source_srid",
+                                          String(fd.get("source_srid") ?? "4326")
+                                        );
+                                        const r =
+                                          await upsertIssueGeometryFeatureBatchAction(
+                                            batchFd
+                                          );
+                                        if (r.error) {
+                                          setMapGeomMsg(r.error);
+                                          return;
+                                        }
+                                        const failText =
+                                          r.failed > 0 ? `, gagal ${r.failed}` : "";
+                                        const sampleText =
+                                          r.failureSamples.length > 0
+                                            ? ` (${r.failureSamples
+                                                .slice(0, 3)
+                                                .join(" | ")})`
+                                            : "";
+                                        setMapGeomMsg(
+                                          `Batch selesai: berhasil ${r.insertedOrUpdated}${failText}.${sampleText}`
+                                        );
+                                        setMapGeomDialogOpen(false);
+                                        router.refresh();
+                                        return;
+                                      }
+
+                                      const featureKey = String(
+                                        fd.get("feature_key") ?? ""
+                                      ).trim();
+                                      if (!featureKey) {
+                                        setMapGeomMsg(
+                                          "Feature key wajib diisi jika GeoJSON bukan FeatureCollection."
+                                        );
+                                        return;
+                                      }
+
+                                      const r = await upsertIssueGeometryFeatureAction(fd);
+                                      if (r.error) {
+                                        setMapGeomMsg(r.error);
+                                        return;
+                                      }
+                                      setMapGeomMsg("Berhasil simpan geometri.");
+                                      setMapGeomDialogOpen(false);
+                                      router.refresh();
+                                    });
+                                  }}
+                                >
                                 <div className="space-y-1">
                                   <Label>GeoJSON *</Label>
-                                  <Textarea
-                                    name="geojson_json"
-                                    rows={9}
-                                    required
-                                    placeholder='{"type":"Polygon","coordinates":[[[108.53,-6.74],[108.54,-6.74],[108.54,-6.73],[108.53,-6.73],[108.53,-6.74]]]}'
-                                    className="font-mono text-xs"
-                                  />
-                                </div>
-                                <Button type="submit" disabled={mapGeomPending}>
-                                  Simpan geometri
-                                </Button>
-                                {mapGeomMsg && (
-                                  <p
-                                    className={`text-xs ${mapGeomMsg.includes("Berhasil") ? "text-emerald-700" : "text-red-600"}`}
-                                    role="alert"
-                                  >
-                                    {mapGeomMsg}
-                                  </p>
-                                )}
-                              </form>
-                            ) : (
-                              <form
-                                key={`geom-batch-${mapGeomFormNonce}`}
-                                className="grid gap-3"
-                                action={(fd) => {
-                                  if (!selectedProjectId || !selectedTaskId) return;
-                                  setMapGeomBatchMsg(null);
-                                  fd.set("project_id", selectedProjectId);
-                                  fd.set("issue_id", selectedTaskId);
-                                  startMapGeomTransition(async () => {
-                                    const r = await upsertIssueGeometryFeatureBatchAction(fd);
-                                    if (r.error) {
-                                      setMapGeomBatchMsg(r.error);
-                                      return;
-                                    }
-                                    const failText =
-                                      r.failed > 0
-                                        ? `, gagal ${r.failed}`
-                                        : "";
-                                    const sampleText =
-                                      r.failureSamples.length > 0
-                                        ? ` (${r.failureSamples.slice(0, 3).join(" | ")})`
-                                        : "";
-                                    setMapGeomBatchMsg(
-                                      `Batch selesai: berhasil ${r.insertedOrUpdated}${failText}.${sampleText}`
-                                    );
-                                    router.refresh();
-                                  });
-                                }}
-                              >
-                                <div className="space-y-1">
-                                  <Label>Prefix feature key (opsional)</Label>
-                                  <Input
-                                    name="feature_key_prefix"
-                                    placeholder="contoh: sambeng-"
-                                  />
-                                  <p className="text-[11px] text-muted-foreground">
-                                    Key akan diambil dari properties.feature_key (fallback
-                                    properties.id, lalu nomor urut feature).
-                                  </p>
-                                </div>
-                                <div className="space-y-1">
-                                  <Label>GeoJSON FeatureCollection *</Label>
-                                  <p className="text-[11px] text-muted-foreground">
-                                    Bisa upload file GeoJSON, atau tempel manual di textarea.
-                                  </p>
                                   <Input
                                     type="file"
                                     accept=".geojson,.json,application/geo+json,application/json"
                                     className="w-full overflow-hidden file:mr-3 file:rounded-md file:border-0 file:bg-foreground file:px-3 file:py-1 file:text-xs file:font-medium file:text-background hover:file:opacity-90"
                                     onChange={(e) => {
                                       const file = e.currentTarget.files?.[0];
-                                      if (!file) return;
+                                      if (!file) {
+                                        setMapGeomBatchText("");
+                                        return;
+                                      }
+                                      setMapGeomMsg(null);
                                       const reader = new FileReader();
                                       reader.onload = () => {
                                         const raw =
@@ -3210,122 +3510,114 @@ export function WorkspaceClient({
                                         }
                                       };
                                       reader.onerror = () => {
-                                        setMapGeomBatchMsg(
+                                        setMapGeomMsg(
                                           "Gagal membaca file. Coba file .geojson/.json lain."
                                         );
                                       };
                                       reader.readAsText(file);
                                     }}
                                   />
-                                  <Textarea
-                                    name="batch_geojson_json"
-                                    rows={5}
-                                    required
+                                  <input
+                                    type="hidden"
+                                    name="geojson_json"
                                     value={mapGeomBatchText}
-                                    onChange={(e) =>
-                                      setMapGeomBatchText(e.target.value)
-                                    }
-                                    placeholder='{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":1,"Nama":"Bidang A"},"geometry":{"type":"MultiPolygon","coordinates":[...]}}]}'
-                                    className="h-28 min-h-0 max-h-[45vh] w-full resize-y overflow-x-hidden [field-sizing:fixed] [overflow-wrap:anywhere] whitespace-pre-wrap break-all font-mono text-xs"
                                   />
                                 </div>
-                                {mapGeomBatchPreview && (
-                                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
-                                    {!mapGeomBatchPreview.valid ? (
-                                      <p className="text-red-700">
-                                        Validasi awal: {mapGeomBatchPreview.reason}
-                                      </p>
-                                    ) : (
-                                      <div className="space-y-1 text-muted-foreground">
-                                        <p>
-                                          Feature terdeteksi:{" "}
-                                          <span className="font-semibold text-foreground">
-                                            {mapGeomBatchPreview.featureCount}
-                                          </span>
-                                        </p>
-                                        <p>
-                                          Key siap pakai:{" "}
-                                          <span className="font-semibold text-foreground">
-                                            {mapGeomBatchPreview.withFeatureKey}
-                                          </span>{" "}
-                                          via <code>feature_key</code>,{" "}
-                                          <span className="font-semibold text-foreground">
-                                            {mapGeomBatchPreview.withIdFallback}
-                                          </span>{" "}
-                                          via fallback <code>id</code>.
-                                        </p>
-                                        <p>
-                                          Tipe geometri:{" "}
-                                          <span className="text-foreground">
-                                            {Object.entries(
-                                              mapGeomBatchPreview.geometryTypeCounts
-                                            )
-                                              .map(([k, v]) => `${k}=${v}`)
-                                              .join(", ") || "—"}
-                                          </span>
-                                        </p>
-                                        <p>
-                                          Kolom/properti ({mapGeomBatchPreview.propertyKeys.length}):{" "}
-                                          <span className="text-foreground">
-                                            {mapGeomBatchPreview.propertyKeys.join(", ") || "—"}
-                                          </span>
-                                        </p>
-                                      </div>
-                                    )}
+                                {mapGeomDetectedKind === "single" && (
+                                  <>
+                                    <div className="space-y-1">
+                                      <Label>Feature key *</Label>
+                                      <Input
+                                        name="feature_key"
+                                        placeholder="contoh: sambeng-001 / bidang-12"
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <Label>Label (opsional)</Label>
+                                      <Input
+                                        name="label"
+                                        placeholder="contoh: Bidang Sambeng A1"
+                                      />
+                                    </div>
+                                  </>
+                                )}
+                                {mapGeomDetectedKind === "batch" && (
+                                  <div className="space-y-1">
+                                    <Label>Prefix key (opsional)</Label>
+                                    <Input
+                                      name="feature_key_prefix"
+                                      placeholder="contoh: sambeng-"
+                                    />
                                   </div>
                                 )}
-                                <Button type="submit" disabled={mapGeomPending}>
-                                  Proses batch
-                                </Button>
-                                {mapGeomBatchMsg && (
-                                  <p
-                                    className={`text-xs ${mapGeomBatchMsg.includes("Batch selesai") ? "text-emerald-700" : "text-red-600"}`}
-                                    role="alert"
+                                <div className="space-y-1">
+                                  <Label>EPSG/SRID sumber</Label>
+                                  <select
+                                    name="source_srid"
+                                    defaultValue="4326"
+                                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                                   >
-                                    {mapGeomBatchMsg}
+                                    {SOURCE_SRID_OPTIONS.map((opt) => (
+                                      <option key={opt.value} value={opt.value}>
+                                        {opt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <p className="text-[11px] text-muted-foreground">
+                                    Koordinat dari CRS ini otomatis ditransform ke
+                                    WGS84 (EPSG:4326) saat disimpan.
+                                  </p>
+                                </div>
+                                {mapGeomDetectedKind === "none" && (
+                                  <p className="text-xs text-muted-foreground">
+                                    Pilih file GeoJSON dulu untuk menampilkan form sesuai tipe
+                                    data (single atau batch).
                                   </p>
                                 )}
-                              </form>
+                                {mapGeomDetectedKind === "invalid" && (
+                                  <p className="text-xs text-red-600" role="alert">
+                                    File/isi GeoJSON tidak valid.
+                                  </p>
+                                )}
+                                {mapGeomDetectedKind === "unsupported" && (
+                                  <p className="text-xs text-red-600" role="alert">
+                                    Tipe GeoJSON belum didukung. Gunakan Polygon,
+                                    MultiPolygon, Feature, atau FeatureCollection.
+                                  </p>
+                                )}
+                                  <Button
+                                    type="submit"
+                                    disabled={
+                                      mapGeomPending ||
+                                      mapGeomDetectedKind === "none" ||
+                                      mapGeomDetectedKind === "invalid" ||
+                                      mapGeomDetectedKind === "unsupported"
+                                    }
+                                  >
+                                    Simpan geometri
+                                  </Button>
+                                  {mapGeomMsg && (
+                                    <p
+                                      className={`text-xs ${mapGeomMsg.includes("Berhasil") || mapGeomMsg.includes("Batch selesai") ? "text-emerald-700" : "text-red-600"}`}
+                                      role="alert"
+                                    >
+                                      {mapGeomMsg}
+                                    </p>
+                                  )}
+                                </form>
+                              </div>
                             )}
                           </DialogContent>
                         </Dialog>
                     )}
-                    {mapLayersForSelectedProject.length === 0 ? (
-                      <div className="space-y-3">
+                    <div className="space-y-3">
+                      {mapLayersForSelectedProject.length === 0 && (
                         <p className="text-sm text-muted-foreground">
                           Belum ada geometri unit kerja di peta untuk project ini.
-                          Geometri unit kerja:{" "}
-                          <code className="rounded bg-muted px-1">
-                            0023_spatial_issue_geometry_features.sql
-                          </code>{" "}
-                          + view{" "}
-                          <code className="rounded bg-muted px-1">
-                            v_issue_geometry_feature_map
-                          </code>
-                          . Schema{" "}
-                          <code className="rounded bg-muted px-1">spatial</code>{" "}
-                          di Data API (
-                          <code className="rounded bg-muted px-1">
-                            docs/supabase-expose-schemas.md
-                          </code>
-                          ).
                         </p>
-                        {selectedTaskId && (
-                          <div className="flex justify-end">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              onClick={openMapGeomDialog}
-                            >
-                              Tambah/Ubah geometri unit kerja
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {visibleMapLayers.length === 0 && (
+                      )}
+                      {mapLayersForSelectedProject.length > 0 &&
+                        visibleMapLayers.length === 0 && (
                           <p
                             className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-foreground"
                             role="status"
@@ -3336,53 +3628,66 @@ export function WorkspaceClient({
                             menampilkannya kembali di peta.
                           </p>
                         )}
-                        {mapLayersForSelectedProject.length > 0 && (
-                          <div className="flex items-center gap-2 text-sm">
-                            <span className="font-medium text-muted-foreground">
-                              Lapisan peta:
-                            </span>
-                            <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
-                              <input
-                                type="checkbox"
-                                className="rounded border-border"
-                                checked={mapShowIssueGeometry}
-                                disabled={issueGeometryForSelectedProject.length === 0}
-                                onChange={(e) =>
-                                  setMapShowIssueGeometry(e.target.checked)
-                                }
-                              />
-                              Geometri
-                            </label>
-                          </div>
-                        )}
-                        <WorkspaceMap
-                          footprints={visibleMapLayers}
-                          highlightBerkasId={null}
-                        />
-                        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                          <p className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                            <span>
-                              <span
-                                className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
-                                style={{ background: "#a78bfa" }}
-                              />{" "}
-                              Geometri
-                            </span>
-                          </p>
-                          {selectedTaskId && (
+                      {mapLayersForSelectedProject.length > 0 && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="font-medium text-muted-foreground">
+                            Lapisan peta:
+                          </span>
+                          <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                            <input
+                              type="checkbox"
+                              className="rounded border-border"
+                              checked={mapShowIssueGeometry}
+                              disabled={issueGeometryForSelectedProject.length === 0}
+                              onChange={(e) =>
+                                setMapShowIssueGeometry(e.target.checked)
+                              }
+                            />
+                            Geometri
+                          </label>
+                        </div>
+                      )}
+                      <WorkspaceMap
+                        footprints={visibleMapLayers}
+                        highlightBerkasId={null}
+                      />
+                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                        <p className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                          <span>
+                            <span
+                              className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
+                              style={{ background: "#a78bfa" }}
+                            />{" "}
+                            Geometri
+                          </span>
+                        </p>
+                        {selectedTaskId ? (
+                          <div className="flex shrink-0 items-center gap-2">
                             <Button
                               type="button"
                               size="sm"
                               variant="secondary"
-                              className="shrink-0"
                               onClick={openMapGeomDialog}
                             >
                               Tambah/Ubah geometri unit kerja
                             </Button>
-                          )}
-                        </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                              onClick={openMapGeomManageDialog}
+                            >
+                              Hapus geometri
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Pilih unit kerja di sidebar/tabel untuk menambah geometri.
+                          </p>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </>
                 )}
               </div>
@@ -3392,8 +3697,8 @@ export function WorkspaceClient({
               <div className="mt-4">
                 {selectedTaskId && (
                   <p className="mb-3 rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
-                    Scope <strong>task</strong> aktif — board tetap menampilkan
-                    semua task level atas project ini. Klik nama project di kiri
+                    Scope <strong>unit kerja</strong> aktif — board tetap menampilkan
+                    semua unit kerja level atas project ini. Klik nama project di kiri
                     untuk fokus project saja.
                   </p>
                 )}

@@ -5,7 +5,10 @@ import { useRouter } from "next/navigation";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-import { updateIssueGeometryFeaturePropertiesAction } from "./issue-geometry-feature-actions";
+import {
+  deleteIssueGeometryFeatureByIdAction,
+  updateIssueGeometryFeaturePropertiesAction,
+} from "./issue-geometry-feature-actions";
 
 export type MapFootprintLayerKind =
   | "demo"
@@ -162,7 +165,17 @@ function issueGeometryEditorSectionHtml(
 ): string {
   const rowsHtml = issueGeometryEditorRowsHtml(editableEntries);
   return `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+<div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
 <button type="button" data-igm-toggle style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--popover);cursor:pointer;color:var(--foreground)">Edit atribut</button>
+<button type="button" data-igm-delete-feature style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));background:var(--popover);cursor:pointer;color:var(--destructive)">Hapus bidang</button>
+</div>
+<div data-igm-delete-confirm style="display:none;margin-top:8px;padding:8px;border:1px solid color-mix(in srgb, var(--destructive) 35%, var(--border));border-radius:8px;background:color-mix(in srgb, var(--destructive) 8%, var(--background))">
+<div style="font-size:12px;color:var(--foreground);margin-bottom:8px">Hapus bidang terpilih ini?</div>
+<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+<button type="button" data-igm-delete-cancel style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--popover);cursor:pointer;color:var(--foreground)">Batal</button>
+<button type="button" data-igm-delete-confirm-yes style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--destructive);background:var(--destructive);cursor:pointer;color:var(--destructive-foreground)">Ya, hapus</button>
+</div>
+</div>
 <div data-igm-editor data-igm-open="0" style="display:none;margin-top:10px">
 <div style="font-size:12px;font-weight:600;color:var(--foreground);margin-bottom:8px">Edit / tambah / hapus atribut</div>
 <div data-igm-rows>${rowsHtml}</div>
@@ -257,6 +270,9 @@ function wireIssueGeometryPopupEditing(
       ) as HTMLButtonElement | null;
       const rowsRoot = el.querySelector("[data-igm-rows]") as HTMLElement | null;
       const msg = el.querySelector("[data-igm-msg]") as HTMLElement | null;
+      const deleteConfirm = el.querySelector(
+        "[data-igm-delete-confirm]"
+      ) as HTMLElement | null;
       if (actionButton.hasAttribute("data-igm-toggle")) {
         e.preventDefault();
         if (!editor) return;
@@ -269,6 +285,7 @@ function wireIssueGeometryPopupEditing(
         if (toggleBtn) {
           toggleBtn.textContent = isHidden ? "Lihat atribut" : "Edit atribut";
         }
+        if (deleteConfirm) deleteConfirm.style.display = "none";
         return;
       }
 
@@ -336,6 +353,64 @@ function wireIssueGeometryPopupEditing(
           }
           if (viewPanel) viewPanel.style.display = "block";
           if (toggleBtn) toggleBtn.textContent = "Edit atribut";
+          if (deleteConfirm) deleteConfirm.style.display = "none";
+          onSaved();
+        })();
+        return;
+      }
+
+      if (actionButton.hasAttribute("data-igm-delete-feature")) {
+        e.preventDefault();
+        if (deleteConfirm) deleteConfirm.style.display = "block";
+        return;
+      }
+
+      if (actionButton.hasAttribute("data-igm-delete-cancel")) {
+        e.preventDefault();
+        if (deleteConfirm) deleteConfirm.style.display = "none";
+        return;
+      }
+
+      if (actionButton.hasAttribute("data-igm-delete-confirm-yes")) {
+        e.preventDefault();
+        if (deleteConfirm) {
+          const yesBtn = deleteConfirm.querySelector(
+            "[data-igm-delete-confirm-yes]"
+          ) as HTMLButtonElement | null;
+          const cancelBtn = deleteConfirm.querySelector(
+            "[data-igm-delete-cancel]"
+          ) as HTMLButtonElement | null;
+          if (yesBtn) yesBtn.disabled = true;
+          if (cancelBtn) cancelBtn.disabled = true;
+        }
+        void (async () => {
+          if (msg) {
+            msg.textContent = "Menghapus…";
+            msg.style.color = "var(--muted-foreground)";
+          }
+          const fd = new FormData();
+          fd.set("project_id", meta.projectId);
+          fd.set("issue_id", meta.issueId);
+          fd.set("feature_id", meta.featureId);
+          const res = await deleteIssueGeometryFeatureByIdAction(fd);
+          if (res.error) {
+            if (msg) {
+              msg.textContent = res.error;
+              msg.style.color = "var(--destructive)";
+            }
+            if (deleteConfirm) {
+              const yesBtn = deleteConfirm.querySelector(
+                "[data-igm-delete-confirm-yes]"
+              ) as HTMLButtonElement | null;
+              const cancelBtn = deleteConfirm.querySelector(
+                "[data-igm-delete-cancel]"
+              ) as HTMLButtonElement | null;
+              if (yesBtn) yesBtn.disabled = false;
+              if (cancelBtn) cancelBtn.disabled = false;
+            }
+            return;
+          }
+          popup?.remove();
           onSaved();
         })();
       }

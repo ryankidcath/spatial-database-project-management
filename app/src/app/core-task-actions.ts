@@ -9,6 +9,7 @@ export type ReopenTaskResult = { error: string | null };
 export type UpdateTaskProgressResult = { error: string | null };
 export type DeleteTaskResult = { error: string | null };
 export type DeleteProjectResult = { error: string | null };
+export type UpdateTaskLastNoteResult = { error: string | null };
 type ServerSupabase = NonNullable<
   Awaited<ReturnType<typeof createServerSupabaseClient>>
 >;
@@ -19,6 +20,104 @@ function parseOptionalNumber(raw: string): number | null {
   const n = Number(t.replace(",", "."));
   if (!Number.isFinite(n) || n < 0) return NaN;
   return n;
+}
+
+function toMillis(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function minIso(values: Array<string | null | undefined>): string | null {
+  let best: { iso: string; ms: number } | null = null;
+  for (const v of values) {
+    if (!v) continue;
+    const ms = toMillis(v);
+    if (ms == null) continue;
+    if (!best || ms < best.ms) best = { iso: v, ms };
+  }
+  return best?.iso ?? null;
+}
+
+async function syncIssueAndProjectStartsAt(
+  supabase: ServerSupabase,
+  projectId: string,
+  seedIssueId: string
+): Promise<string | null> {
+  const { data: rows, error: rowsErr } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .select("id, parent_id, starts_at")
+    .eq("project_id", projectId)
+    .is("deleted_at", null);
+  if (rowsErr) return rowsErr.message;
+
+  const byId = new Map(
+    (rows ?? []).map((r) => [r.id, { parentId: r.parent_id as string | null, startsAt: r.starts_at as string | null }])
+  );
+  const childrenByParent = new Map<string, string[]>();
+  for (const r of rows ?? []) {
+    if (!r.parent_id) continue;
+    const arr = childrenByParent.get(r.parent_id) ?? [];
+    arr.push(r.id);
+    childrenByParent.set(r.parent_id, arr);
+  }
+
+  const memo = new Map<string, string | null>();
+  const walkMinStart = (issueId: string): string | null => {
+    if (memo.has(issueId)) return memo.get(issueId) ?? null;
+    const own = byId.get(issueId)?.startsAt ?? null;
+    const childIds = childrenByParent.get(issueId) ?? [];
+    const childStarts = childIds.map((cid) => walkMinStart(cid));
+    const min = minIso([own, ...childStarts]);
+    memo.set(issueId, min);
+    return min;
+  };
+
+  const ancestorIds: string[] = [];
+  let cursor = byId.get(seedIssueId)?.parentId ?? null;
+  while (cursor) {
+    ancestorIds.push(cursor);
+    cursor = byId.get(cursor)?.parentId ?? null;
+  }
+
+  for (const ancestorId of ancestorIds) {
+    const nextStart = walkMinStart(ancestorId);
+    const currentStart = byId.get(ancestorId)?.startsAt ?? null;
+    if (nextStart === currentStart) continue;
+    const { error: upErr } = await supabase
+      .schema("core_pm")
+      .from("issues")
+      .update({ starts_at: nextStart })
+      .eq("id", ancestorId)
+      .eq("project_id", projectId)
+      .is("deleted_at", null);
+    if (upErr) return upErr.message;
+    const node = byId.get(ancestorId);
+    if (node) node.startsAt = nextStart;
+  }
+
+  const projectStart = minIso([...byId.values()].map((v) => v.startsAt));
+  const { error: projErr } = await supabase
+    .schema("core_pm")
+    .from("projects")
+    .update({ starts_at: projectStart })
+    .eq("id", projectId)
+    .is("deleted_at", null);
+  if (projErr) {
+    const msg = (projErr.message ?? "").toLowerCase();
+    // Backward-compatible: if migration for core_pm.projects.starts_at is not applied yet,
+    // keep issue/ancestor sync working and skip project-level sync temporarily.
+    if (
+      msg.includes("starts_at") &&
+      (msg.includes("schema cache") || msg.includes("column"))
+    ) {
+      return null;
+    }
+    return projErr.message;
+  }
+
+  return null;
 }
 
 async function markIssueDoneWithHierarchy(
@@ -203,21 +302,37 @@ export async function createProjectTaskAction(
 
   const sortOrder = Number(topRows?.[0]?.sort_order ?? 0) + 10;
 
-  const { error } = await supabase.schema("core_pm").from("issues").insert({
-    project_id: projectId,
-    status_id: statusId,
-    parent_id: parentId,
-    title,
-    sort_order: sortOrder,
-    starts_at: startsAt,
-    due_at: dueAt,
-    progress_target: progressTarget,
-    progress_actual: progressActual,
-    issue_weight: issueWeight,
-  });
+  const { data: insertedIssue, error } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .insert({
+      project_id: projectId,
+      status_id: statusId,
+      parent_id: parentId,
+      title,
+      sort_order: sortOrder,
+      starts_at: startsAt,
+      due_at: dueAt,
+      progress_target: progressTarget,
+      progress_actual: progressActual,
+      issue_weight: issueWeight,
+    })
+    .select("id")
+    .single();
 
   if (error) {
     return { error: error.message };
+  }
+
+  if (startsAt && insertedIssue?.id) {
+    const syncErr = await syncIssueAndProjectStartsAt(
+      supabase,
+      projectId,
+      insertedIssue.id
+    );
+    if (syncErr) {
+      return { error: syncErr };
+    }
   }
 
   revalidatePath("/", "layout");
@@ -470,6 +585,61 @@ export async function deleteProjectAction(
   const { error } = await supabase
     .schema("core_pm")
     .rpc("delete_project_soft", { p_project_id: projectId });
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function updateTaskLastNoteAction(
+  formData: FormData
+): Promise<UpdateTaskLastNoteResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  if (!issueId || !projectId) {
+    return { error: "issue_id atau project_id kosong" };
+  }
+
+  const rawNote = String(formData.get("last_note") ?? "");
+  const lastNote = rawNote.trim();
+  const maxLen = 500;
+  if (lastNote.length > maxLen) {
+    return { error: `Catatan maksimal ${maxLen} karakter` };
+  }
+
+  const payload = lastNote
+    ? {
+        last_note: lastNote,
+        last_note_at: new Date().toISOString(),
+        last_note_by: user.id,
+      }
+    : {
+        last_note: null,
+        last_note_at: null,
+        last_note_by: null,
+      };
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .update(payload)
+    .eq("id", issueId)
+    .eq("project_id", projectId)
+    .is("deleted_at", null);
   if (error) {
     return { error: error.message };
   }

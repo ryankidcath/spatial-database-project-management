@@ -160,12 +160,8 @@ export function CalendarScheduleView({
       </div>
       {withSchedule.length === 0 && (
         <p className="text-sm text-slate-500">
-          Belum ada issue dengan{" "}
-          <code className="rounded bg-slate-100 px-1">starts_at</code> /{" "}
-          <code className="rounded bg-slate-100 px-1">due_at</code> untuk scope
-          ini. Jalankan migration{" "}
-          <code className="rounded bg-slate-100 px-1">0003_issues_schedule</code>
-          .
+          Belum ada unit kerja dengan jadwal mulai dan jatuh tempo pada scope
+          ini.
         </p>
       )}
     </div>
