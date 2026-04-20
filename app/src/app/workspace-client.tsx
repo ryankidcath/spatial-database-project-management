@@ -1071,6 +1071,23 @@ function MonitoringMatrixCard({
   rootClassName?: string;
   taskMsg: string | null;
 }) {
+  const [optimisticMilestoneCategoryByIssueId, setOptimisticMilestoneCategoryByIssueId] =
+    useState<Record<string, string>>({});
+  const [pendingMilestoneIssueIds, setPendingMilestoneIssueIds] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  useEffect(() => {
+    setOptimisticMilestoneCategoryByIssueId({});
+    setPendingMilestoneIssueIds(new Set());
+  }, [rows, milestoneTitles]);
+
+  const cycleCategory = useCallback((current: string): string => {
+    const order = ["todo", "in_progress", "done"] as const;
+    const idx = order.indexOf(current as (typeof order)[number]);
+    return order[(idx >= 0 ? idx + 1 : 0) % order.length];
+  }, []);
+
   return (
     <div
       className={cn(
@@ -1114,6 +1131,12 @@ function MonitoringMatrixCard({
                 <td className="px-2 py-2 font-medium text-foreground">{row.villageIssue.title}</td>
                 {milestoneTitles.map((title) => {
                   const meta = row.milestoneMetaByTitle.get(title);
+                  const effectiveCategory =
+                    meta == null
+                      ? "todo"
+                      : (optimisticMilestoneCategoryByIssueId[meta.issueId] ?? meta.category);
+                  const isCellPending =
+                    meta != null && pendingMilestoneIssueIds.has(meta.issueId);
                   return (
                     <td key={`${row.villageIssue.id}:${title}`} className="px-2 py-2">
                       {meta == null ? (
@@ -1123,29 +1146,54 @@ function MonitoringMatrixCard({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          disabled={taskPending || !selectedProjectId}
+                          disabled={!selectedProjectId || isCellPending}
                           className="h-auto p-0 hover:bg-transparent"
                           onClick={(e) => {
                             e.preventDefault();
                             if (!selectedProjectId) return;
                             setTaskMsg(null);
+                            const nextCategory = cycleCategory(effectiveCategory);
+                            setOptimisticMilestoneCategoryByIssueId((prev) => ({
+                              ...prev,
+                              [meta.issueId]: nextCategory,
+                            }));
+                            setPendingMilestoneIssueIds((prev) => {
+                              const next = new Set(prev);
+                              next.add(meta.issueId);
+                              return next;
+                            });
                             const fd = new FormData();
                             fd.set("issue_id", meta.issueId);
                             fd.set("project_id", selectedProjectId);
-                            fd.set("current_category", meta.category);
+                            fd.set("current_category", effectiveCategory);
                             startTaskTransition(async () => {
                               const r = await cycleTaskStatusAction(fd);
                               if (r.error) {
+                                setOptimisticMilestoneCategoryByIssueId((prev) => {
+                                  const next = { ...prev };
+                                  delete next[meta.issueId];
+                                  return next;
+                                });
+                                setPendingMilestoneIssueIds((prev) => {
+                                  const next = new Set(prev);
+                                  next.delete(meta.issueId);
+                                  return next;
+                                });
                                 setTaskMsg(r.error);
                                 return;
                               }
+                              setPendingMilestoneIssueIds((prev) => {
+                                const next = new Set(prev);
+                                next.delete(meta.issueId);
+                                return next;
+                              });
                               onAfterMutation();
                             });
                           }}
                           title="Klik untuk ganti status"
                         >
-                          <Badge className={statusBadgeClass(meta.category)}>
-                            {statusLabelEn(meta.category)}
+                          <Badge className={statusBadgeClass(effectiveCategory)}>
+                            {statusLabelEn(effectiveCategory)}
                           </Badge>
                         </Button>
                       )}
