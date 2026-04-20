@@ -1109,26 +1109,27 @@ function MonitoringMatrixCard({
         </Button>
       </div>
       <div className="overflow-x-auto px-4 py-3">
-        <table className="w-full min-w-[42rem] border-collapse text-left text-xs">
+        <table className="w-full min-w-[min(64rem,100%)] table-auto border-collapse text-left text-xs">
           <thead>
             <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
               <th className="px-2 py-2 font-medium">{rowHeader}</th>
               {milestoneTitles.map((title) => (
-                <th key={title} className="px-2 py-2 font-medium whitespace-nowrap">
+                <th key={title} className="px-2 py-2 font-medium">
                   {title}
                 </th>
               ))}
-              <th className="px-2 py-2 font-medium whitespace-nowrap">Catatan terakhir</th>
-              <th className="px-2 py-2 font-medium whitespace-nowrap">Oleh</th>
+              <th className="px-2 py-2 font-medium">Catatan terakhir</th>
+              <th className="px-2 py-2 font-medium">Oleh</th>
               <th className="px-2 py-2 font-medium whitespace-nowrap">Kapan</th>
-              <th className="px-2 py-2 font-medium whitespace-nowrap">Progres</th>
               <th className="px-2 py-2 font-medium whitespace-nowrap">Aksi</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.villageIssue.id} className="border-b border-border/70">
-                <td className="px-2 py-2 font-medium text-foreground">{row.villageIssue.title}</td>
+                <td className="px-2 py-2 font-medium break-words text-foreground">
+                  {row.villageIssue.title}
+                </td>
                 {milestoneTitles.map((title) => {
                   const meta = row.milestoneMetaByTitle.get(title);
                   const effectiveCategory =
@@ -1200,12 +1201,12 @@ function MonitoringMatrixCard({
                     </td>
                   );
                 })}
-                <td className="max-w-[12rem] px-2 py-2 text-muted-foreground">
+                <td className="max-w-[12rem] px-2 py-2 break-words text-muted-foreground">
                   <span className="line-clamp-2">
                     {row.villageIssue.last_note?.trim() || "—"}
                   </span>
                 </td>
-                <td className="px-2 py-2 text-muted-foreground whitespace-nowrap">
+                <td className="px-2 py-2 break-words text-muted-foreground">
                   {row.villageIssue.last_note_by
                     ? (memberNameByUserId.get(row.villageIssue.last_note_by) ??
                       row.villageIssue.last_note_by)
@@ -1213,9 +1214,6 @@ function MonitoringMatrixCard({
                 </td>
                 <td className="px-2 py-2 text-muted-foreground whitespace-nowrap">
                   {formatDateTime(row.villageIssue.last_note_at)}
-                </td>
-                <td className="px-2 py-2 text-muted-foreground whitespace-nowrap">
-                  {row.percent.toFixed(1)}%
                 </td>
                 <td className="px-2 py-2 whitespace-nowrap">
                   <div className="flex items-center gap-1">
