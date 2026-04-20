@@ -20,7 +20,6 @@ import {
   addProjectMemberByEmailAction,
   createOrganizationProjectInlineAction,
   createProjectInOrganizationAction,
-  createOrganizationProjectAction,
   signOut,
 } from "@/app/auth/actions";
 import { NotificationsBell } from "./notifications-bell";
@@ -2610,9 +2609,8 @@ export function WorkspaceClient({
         <div className="max-w-lg rounded-lg border border-border bg-card p-6 text-sm text-foreground">
           <p className="font-semibold">Tidak ada project yang dapat diakses</p>
           <p className="mt-2 text-muted-foreground">
-            Anda belum memiliki akses ke project mana pun. Buat organisasi dan
-            project pertama lewat form di bawah, atau minta pemilik project
-            menambahkan email Anda sebagai anggota.
+            Anda belum memiliki akses ke project mana pun. Minta pemilik project
+            menambahkan email Anda sebagai anggota, lalu muat ulang halaman.
           </p>
           {userEmail && (
             <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
@@ -2639,65 +2637,6 @@ export function WorkspaceClient({
             <p className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-red-900">
               {joinError}
             </p>
-          )}
-          {userEmail && (
-            <form action={createOrganizationProjectAction} className="mt-4 space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Buat organisasi + project pertama
-              </p>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Nama organisasi *</Label>
-                  <Input
-                    name="organization_name"
-                    required
-                    placeholder="Contoh: KJSB Cirebon"
-                    className="h-8 bg-background text-sm"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">
-                    Slug organisasi (opsional)
-                  </Label>
-                  <Input
-                    name="organization_slug"
-                    placeholder="kjsb-cirebon"
-                    className="h-8 bg-background text-sm"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Nama project *</Label>
-                  <Input
-                    name="project_name"
-                    required
-                    placeholder="Contoh: PLM Cirebon 2027"
-                    className="h-8 bg-background text-sm"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Kode project (opsional)</Label>
-                  <Input
-                    name="project_key"
-                    placeholder="PLM27"
-                    className="h-8 bg-background text-sm"
-                  />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">
-                  Deskripsi project (opsional)
-                </Label>
-                <Textarea
-                  name="project_description"
-                  rows={2}
-                  placeholder="Catatan singkat project"
-                  className="min-h-14 bg-background text-sm"
-                />
-              </div>
-              <Button type="submit">
-                Buat organisasi & project
-              </Button>
-            </form>
           )}
           <p className="mt-4 text-xs text-muted-foreground">
             Jika akun tetap belum mendapat akses, minta admin memeriksa data
@@ -4397,7 +4336,7 @@ export function WorkspaceClient({
                           open={mapGeomDialogOpen}
                           onOpenChange={setMapGeomDialogOpen}
                         >
-                          <DialogContent className="max-w-[min(96vw,760px)] overflow-x-hidden">
+                          <DialogContent className="max-h-[90vh] max-w-[min(96vw,760px)] overflow-x-hidden overflow-y-auto">
                             <DialogHeader>
                               <DialogTitle>
                                 {mapGeomInputMode === "manage"
