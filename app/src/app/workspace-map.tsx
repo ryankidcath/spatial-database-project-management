@@ -522,6 +522,16 @@ export function WorkspaceMap({
   }, []);
 
   useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      mapRef.current?.invalidateSize({ animate: false });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
     const map = mapRef.current;
     const group = layerGroupRef.current;
     if (!map || !group) return;
@@ -611,7 +621,7 @@ export function WorkspaceMap({
   return (
     <div
       ref={containerRef}
-      className="h-[min(70vh,560px)] w-full rounded-md border border-slate-200 bg-slate-100"
+      className="h-full min-h-0 w-full min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-100"
       role="presentation"
     />
   );

@@ -2,6 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import {
+  extractClosedPolygonRingsFromDxfLayer,
+  featureKeysForDxfPolygons,
+  parseDxfDocument,
+  ringToSinglePolygonWkt,
+} from "@/lib/dxf-import-utils";
+import {
+  extractMultiPolygonFromGeoJSON,
+  multiPolygonToWKT,
+} from "@/lib/geojson-multipolygon";
+import {
+  MAX_SPATIAL_GEOMETRY_TEXT_CHARS,
+  spatialGeometryTextTooLargeMessage,
+} from "@/lib/spatial-import-limits";
 
 export type UpsertIssueGeometryFeatureResult = { error: string | null };
 export type UpsertIssueGeometryFeatureBatchResult = {
@@ -20,89 +34,6 @@ export type DeleteAllIssueGeometryFeaturesResult = {
 export type UpdateIssueGeometryFeaturePropertiesResult = {
   error: string | null;
 };
-
-type Position = [number, number];
-type LinearRing = Position[];
-type PolygonCoords = LinearRing[];
-type MultiPolygonCoords = PolygonCoords[];
-
-function closeRingIfNeeded(ring: LinearRing): LinearRing {
-  if (ring.length === 0) return ring;
-  const [ax, ay] = ring[0];
-  const [bx, by] = ring[ring.length - 1];
-  if (ax === bx && ay === by) return ring;
-  return [...ring, ring[0]];
-}
-
-function parseRing(raw: unknown): LinearRing | null {
-  if (!Array.isArray(raw) || raw.length < 4) return null;
-  const out: LinearRing = [];
-  for (const p of raw) {
-    if (!Array.isArray(p) || p.length < 2) return null;
-    const x = Number(p[0]);
-    const y = Number(p[1]);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    out.push([x, y]);
-  }
-  return closeRingIfNeeded(out);
-}
-
-function parsePolygon(raw: unknown): PolygonCoords | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const out: PolygonCoords = [];
-  for (const ring of raw) {
-    const parsed = parseRing(ring);
-    if (!parsed) return null;
-    out.push(parsed);
-  }
-  return out;
-}
-
-function extractMultiPolygonFromGeoJSON(input: unknown): MultiPolygonCoords | null {
-  if (!input || typeof input !== "object") return null;
-  const obj = input as { type?: string; geometry?: unknown; coordinates?: unknown; features?: unknown[] };
-
-  if (obj.type === "Feature") {
-    return extractMultiPolygonFromGeoJSON(obj.geometry);
-  }
-  if (obj.type === "FeatureCollection") {
-    if (!Array.isArray(obj.features) || obj.features.length === 0) return null;
-    const all: MultiPolygonCoords = [];
-    for (const f of obj.features) {
-      const mp = extractMultiPolygonFromGeoJSON(f);
-      if (!mp) continue;
-      all.push(...mp);
-    }
-    return all.length > 0 ? all : null;
-  }
-  if (obj.type === "Polygon") {
-    const poly = parsePolygon(obj.coordinates);
-    return poly ? [poly] : null;
-  }
-  if (obj.type === "MultiPolygon") {
-    if (!Array.isArray(obj.coordinates) || obj.coordinates.length === 0) return null;
-    const out: MultiPolygonCoords = [];
-    for (const poly of obj.coordinates) {
-      const parsed = parsePolygon(poly);
-      if (!parsed) return null;
-      out.push(parsed);
-    }
-    return out;
-  }
-  return null;
-}
-
-function multiPolygonToWKT(coords: MultiPolygonCoords): string {
-  const polyText = coords
-    .map((poly) => {
-      const rings = poly
-        .map((ring) => `(${ring.map(([x, y]) => `${x} ${y}`).join(", ")})`)
-        .join(", ");
-      return `(${rings})`;
-    })
-    .join(", ");
-  return `MULTIPOLYGON(${polyText})`;
-}
 
 type ServerSupabase = NonNullable<
   Awaited<ReturnType<typeof createServerSupabaseClient>>
@@ -160,6 +91,9 @@ export async function upsertIssueGeometryFeatureAction(
 
   if (!projectId || !issueId || !featureKey || !geojsonRaw) {
     return { error: "project/unit kerja, feature_key, dan geojson wajib diisi" };
+  }
+  if (geojsonRaw.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return { error: spatialGeometryTextTooLargeMessage("GeoJSON") };
   }
   const sridParsed = parseSourceSrid(sourceSridRaw);
   if (!sridParsed.ok) return { error: sridParsed.error };
@@ -246,6 +180,14 @@ export async function upsertIssueGeometryFeatureBatchAction(
   if (!projectId || !issueId || !batchRaw) {
     return {
       error: "project/unit kerja dan batch_geojson_json wajib diisi",
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+  if (batchRaw.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("Batch GeoJSON"),
       insertedOrUpdated: 0,
       failed: 0,
       failureSamples: [],
@@ -533,4 +475,231 @@ export async function deleteAllIssueGeometryFeaturesForIssueAction(
 
   revalidatePath("/", "layout");
   return { error: null, deleted: removed?.length ?? 0 };
+}
+
+
+/** Impor polygon tertutup (LWPOLYLINE / POLYLINE, INSERT blok, HATCH) dari satu layer DXF. */
+export async function upsertIssueGeometryFeaturesFromDxfAction(
+  formData: FormData
+): Promise<UpsertIssueGeometryFeatureBatchResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return {
+      error: "Supabase tidak dikonfigurasi",
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return {
+      error: "Belum masuk",
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const dxfText = String(formData.get("dxf_text") ?? "");
+  const layerName = String(formData.get("layer_name") ?? "").trim();
+  const keyPrefix = String(formData.get("feature_key_prefix") ?? "").trim();
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
+
+  if (!projectId || !issueId || !dxfText.trim() || !layerName) {
+    return {
+      error: "project_id, issue_id, teks DXF, dan layer wajib diisi",
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+  if (dxfText.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("DXF"),
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+
+  const sridParsed = parseSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) {
+    return {
+      error: sridParsed.error,
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+
+  const issueCheck = await ensureIssueInProject(supabase, projectId, issueId);
+  if (!issueCheck.ok) {
+    return {
+      error: issueCheck.error,
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+
+  let dxf: ReturnType<typeof parseDxfDocument>;
+  try {
+    dxf = parseDxfDocument(dxfText);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Gagal membaca DXF.";
+    return {
+      error: msg,
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+
+  const rings = extractClosedPolygonRingsFromDxfLayer(dxf, layerName, dxfText);
+  if (rings.length === 0) {
+    return {
+      error:
+        "Tidak ada poligon tertutup di layer ini. Pastikan LWPOLYLINE/POLYLINE tertutup, INSERT blok (definisi berisi poligon tertutup), atau HATCH boundary valid, pada layer yang dipilih.",
+      insertedOrUpdated: 0,
+      failed: 0,
+      failureSamples: [],
+    };
+  }
+
+  const keysJsonRaw = String(formData.get("feature_keys_json") ?? "").trim();
+  let featureKeys: string[];
+  let labelPerIndex: (string | null)[] | null = null;
+  if (keysJsonRaw) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(keysJsonRaw);
+    } catch {
+      return {
+        error: "feature_keys_json harus berupa JSON array string yang valid.",
+        insertedOrUpdated: 0,
+        failed: 0,
+        failureSamples: [],
+      };
+    }
+    if (!Array.isArray(parsed) || parsed.length !== rings.length) {
+      return {
+        error: `feature_keys_json harus array dengan ${rings.length} elemen (sama dengan jumlah poligon tertutup).`,
+        insertedOrUpdated: 0,
+        failed: 0,
+        failureSamples: [],
+      };
+    }
+    featureKeys = parsed.map((x) => String(x ?? "").trim());
+    if (featureKeys.some((k) => !k)) {
+      return {
+        error: "Setiap feature_key pada feature_keys_json tidak boleh kosong.",
+        insertedOrUpdated: 0,
+        failed: 0,
+        failureSamples: [],
+      };
+    }
+
+    const labelsJsonRaw = String(formData.get("feature_labels_json") ?? "").trim();
+    if (labelsJsonRaw) {
+      let labelsParsed: unknown;
+      try {
+        labelsParsed = JSON.parse(labelsJsonRaw);
+      } catch {
+        return {
+          error: "feature_labels_json harus berupa JSON array yang valid.",
+          insertedOrUpdated: 0,
+          failed: 0,
+          failureSamples: [],
+        };
+      }
+      if (!Array.isArray(labelsParsed) || labelsParsed.length !== rings.length) {
+        return {
+          error: `feature_labels_json harus array dengan ${rings.length} elemen (sama dengan jumlah poligon).`,
+          insertedOrUpdated: 0,
+          failed: 0,
+          failureSamples: [],
+        };
+      }
+      labelPerIndex = labelsParsed.map((x) => {
+        const t = String(x ?? "").trim();
+        return t.length > 0 ? t : null;
+      });
+    }
+  } else {
+    if (!keyPrefix) {
+      return {
+        error:
+          "Isi prefix feature_key atau kirim feature_keys_json (mapping per poligon).",
+        insertedOrUpdated: 0,
+        failed: 0,
+        failureSamples: [],
+      };
+    }
+    featureKeys = featureKeysForDxfPolygons(keyPrefix, layerName, rings.length);
+  }
+
+  let insertedOrUpdated = 0;
+  let failed = 0;
+  const failureSamples: string[] = [];
+
+  for (let i = 0; i < rings.length; i++) {
+    const ring = rings[i]!;
+    const featureKey = featureKeys[i]!;
+    let wkt: string;
+    try {
+      wkt = ringToSinglePolygonWkt(ring);
+    } catch {
+      failed++;
+      if (failureSamples.length < 10) {
+        failureSamples.push(`#${i + 1}/${featureKey}: ring tidak valid`);
+      }
+      continue;
+    }
+
+    const properties: Record<string, unknown> = {
+      source: "dxf",
+      dxf_layer: layerName,
+      dxf_polygon_index: i + 1,
+    };
+
+    const defaultLabel = `DXF ${layerName} #${i + 1}`;
+    const customLabel = labelPerIndex?.[i];
+    const resolvedLabel =
+      customLabel != null && customLabel.trim() !== ""
+        ? customLabel.trim()
+        : defaultLabel;
+
+    const { error: upsertErr } = await supabase.schema("spatial").rpc(
+      "upsert_issue_geometry_feature_from_wkt",
+      {
+        p_issue_id: issueId,
+        p_feature_key: featureKey,
+        p_label: resolvedLabel,
+        p_properties: properties,
+        p_geom_wkt: wkt,
+        p_source_srid: sridParsed.srid,
+      }
+    );
+    if (upsertErr) {
+      failed++;
+      if (failureSamples.length < 10) {
+        failureSamples.push(`#${i + 1}/${featureKey}: ${upsertErr.message}`);
+      }
+      continue;
+    }
+    insertedOrUpdated++;
+  }
+
+  revalidatePath("/", "layout");
+  return {
+    error: null,
+    insertedOrUpdated,
+    failed,
+    failureSamples,
+  };
 }

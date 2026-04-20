@@ -10,6 +10,9 @@ export type UpdateTaskProgressResult = { error: string | null };
 export type DeleteTaskResult = { error: string | null };
 export type DeleteProjectResult = { error: string | null };
 export type UpdateTaskLastNoteResult = { error: string | null };
+export type UpdateTaskBasicResult = { error: string | null };
+export type CycleTaskStatusResult = { error: string | null };
+export type CloneTaskChildrenResult = { error: string | null };
 type ServerSupabase = NonNullable<
   Awaited<ReturnType<typeof createServerSupabaseClient>>
 >;
@@ -239,6 +242,98 @@ async function markIssueDoneWithHierarchy(
   return null;
 }
 
+async function syncAncestorStatusFromChildren(
+  supabase: ServerSupabase,
+  projectId: string,
+  seedIssueId: string
+): Promise<string | null> {
+  const { data: statuses, error: statusErr } = await supabase
+    .schema("core_pm")
+    .from("statuses")
+    .select("id, category, position")
+    .eq("project_id", projectId)
+    .order("position", { ascending: true });
+  if (statusErr) return statusErr.message;
+
+  const statusIdByCategory = new Map<string, string>();
+  for (const st of statuses ?? []) {
+    const cat = String(st.category ?? "").trim();
+    if (!cat) continue;
+    if (!statusIdByCategory.has(cat)) statusIdByCategory.set(cat, st.id);
+  }
+
+  const { data: rows, error: rowsErr } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .select("id, parent_id, status_id")
+    .eq("project_id", projectId)
+    .is("deleted_at", null);
+  if (rowsErr) return rowsErr.message;
+
+  const categoryByStatusId = new Map(
+    (statuses ?? []).map((s) => [s.id, String(s.category ?? "").trim()])
+  );
+  const parentById = new Map<string, string | null>();
+  const childrenByParent = new Map<string, string[]>();
+  const categoryByIssueId = new Map<string, string>();
+  for (const row of rows ?? []) {
+    parentById.set(row.id, row.parent_id ?? null);
+    const category =
+      (row.status_id ? categoryByStatusId.get(row.status_id) : null) ?? "todo";
+    categoryByIssueId.set(row.id, category);
+    if (row.parent_id) {
+      const arr = childrenByParent.get(row.parent_id) ?? [];
+      arr.push(row.id);
+      childrenByParent.set(row.parent_id, arr);
+    }
+  }
+
+  let cursor: string | null = seedIssueId;
+  const visited = new Set<string>();
+  while (cursor) {
+    if (visited.has(cursor)) break;
+    visited.add(cursor);
+    const parentId: string | null = parentById.get(cursor) ?? null;
+    if (!parentId) break;
+
+    const childIds = childrenByParent.get(parentId) ?? [];
+    if (childIds.length === 0) {
+      cursor = parentId;
+      continue;
+    }
+    const childCategories = childIds.map((cid) => categoryByIssueId.get(cid) ?? "todo");
+    const allTodo = childCategories.every((c) => c === "todo");
+    const allDone = childCategories.every((c) => c === "done");
+    const anyInProgress = childCategories.some((c) => c === "in_progress");
+    const nextCategory = allDone
+      ? "done"
+      : allTodo
+        ? "todo"
+        : anyInProgress
+          ? "in_progress"
+          : "in_progress"; // campuran todo+done => anggap sedang berjalan.
+
+    const currentCategory = categoryByIssueId.get(parentId) ?? "todo";
+    if (currentCategory !== nextCategory) {
+      const nextStatusId = statusIdByCategory.get(nextCategory);
+      if (nextStatusId) {
+        const { error: upErr } = await supabase
+          .schema("core_pm")
+          .from("issues")
+          .update({ status_id: nextStatusId })
+          .eq("id", parentId)
+          .eq("project_id", projectId)
+          .is("deleted_at", null);
+        if (upErr) return upErr.message;
+        categoryByIssueId.set(parentId, nextCategory);
+      }
+    }
+    cursor = parentId;
+  }
+
+  return null;
+}
+
 export async function createProjectTaskAction(
   formData: FormData
 ): Promise<CreateProjectTaskResult> {
@@ -334,6 +429,14 @@ export async function createProjectTaskAction(
       return { error: syncErr };
     }
   }
+  if (insertedIssue?.id) {
+    const statusSyncErr = await syncAncestorStatusFromChildren(
+      supabase,
+      projectId,
+      insertedIssue.id
+    );
+    if (statusSyncErr) return { error: statusSyncErr };
+  }
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -402,6 +505,55 @@ export async function updateTaskProgressAction(
   return { error: null };
 }
 
+export async function updateTaskBasicAction(
+  formData: FormData
+): Promise<UpdateTaskBasicResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const title = String(formData.get("title") ?? "").trim();
+  const startsAtRaw = String(formData.get("starts_at") ?? "").trim();
+  const dueAtRaw = String(formData.get("due_at") ?? "").trim();
+
+  if (!issueId || !projectId) {
+    return { error: "issue_id atau project_id kosong" };
+  }
+  if (!title) {
+    return { error: "Judul unit kerja wajib diisi" };
+  }
+
+  const startsAt = startsAtRaw ? startsAtRaw : null;
+  const dueAt = dueAtRaw ? dueAtRaw : null;
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .update({
+      title,
+      starts_at: startsAt,
+      due_at: dueAt,
+    })
+    .eq("id", issueId)
+    .eq("project_id", projectId)
+    .is("deleted_at", null);
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
 export async function setTaskDoneAction(
   formData: FormData
 ): Promise<SetTaskDoneResult> {
@@ -425,6 +577,12 @@ export async function setTaskDoneAction(
 
   const markErr = await markIssueDoneWithHierarchy(supabase, projectId, issueId);
   if (markErr) return { error: markErr };
+  const statusSyncErr = await syncAncestorStatusFromChildren(
+    supabase,
+    projectId,
+    issueId
+  );
+  if (statusSyncErr) return { error: statusSyncErr };
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -503,6 +661,12 @@ export async function reopenTaskAction(
   if (error) {
     return { error: error.message };
   }
+  const statusSyncErr = await syncAncestorStatusFromChildren(
+    supabase,
+    projectId,
+    issueId
+  );
+  if (statusSyncErr) return { error: statusSyncErr };
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -643,6 +807,183 @@ export async function updateTaskLastNoteAction(
   if (error) {
     return { error: error.message };
   }
+  const statusSyncErr = await syncAncestorStatusFromChildren(
+    supabase,
+    projectId,
+    issueId
+  );
+  if (statusSyncErr) return { error: statusSyncErr };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function cycleTaskStatusAction(
+  formData: FormData
+): Promise<CycleTaskStatusResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const currentCategory = String(formData.get("current_category") ?? "")
+    .trim()
+    .toLowerCase();
+  if (!issueId || !projectId) {
+    return { error: "issue_id atau project_id kosong" };
+  }
+
+  const order = ["todo", "in_progress", "done"] as const;
+  const currentIdx = order.indexOf(currentCategory as (typeof order)[number]);
+  const nextCategory = order[(currentIdx >= 0 ? currentIdx + 1 : 0) % order.length];
+
+  const { data: nextStatus, error: nextStatusErr } = await supabase
+    .schema("core_pm")
+    .from("statuses")
+    .select("id")
+    .eq("project_id", projectId)
+    .eq("category", nextCategory)
+    .order("position", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (nextStatusErr) {
+    return { error: nextStatusErr.message };
+  }
+  if (!nextStatus?.id) {
+    return { error: `Status ${nextCategory} belum tersedia di project ini` };
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .update({ status_id: nextStatus.id })
+    .eq("id", issueId)
+    .eq("project_id", projectId)
+    .is("deleted_at", null);
+  if (error) {
+    return { error: error.message };
+  }
+  const statusSyncErr = await syncAncestorStatusFromChildren(
+    supabase,
+    projectId,
+    issueId
+  );
+  if (statusSyncErr) return { error: statusSyncErr };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function cloneTaskChildrenAction(
+  formData: FormData
+): Promise<CloneTaskChildrenResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const sourceIssueId = String(formData.get("source_issue_id") ?? "").trim();
+  const targetIssueId = String(formData.get("target_issue_id") ?? "").trim();
+  const copyStatus = String(formData.get("copy_status") ?? "0").trim() === "1";
+  const skipExistingTitles =
+    String(formData.get("skip_existing_titles") ?? "1").trim() !== "0";
+
+  if (!projectId || !sourceIssueId || !targetIssueId) {
+    return { error: "project_id/source_issue_id/target_issue_id wajib diisi" };
+  }
+  if (sourceIssueId === targetIssueId) {
+    return { error: "Sumber dan target unit kerja tidak boleh sama" };
+  }
+
+  const { data: sourceChildren, error: sourceErr } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .select(
+      "id, title, status_id, starts_at, due_at, progress_target, progress_actual, issue_weight, sort_order"
+    )
+    .eq("project_id", projectId)
+    .eq("parent_id", sourceIssueId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: true });
+  if (sourceErr) {
+    return { error: sourceErr.message };
+  }
+  if (!sourceChildren || sourceChildren.length === 0) {
+    return { error: "Unit sumber belum punya turunan untuk diduplikasi" };
+  }
+
+  const { data: targetChildren, error: targetErr } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .select("title, sort_order")
+    .eq("project_id", projectId)
+    .eq("parent_id", targetIssueId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false });
+  if (targetErr) {
+    return { error: targetErr.message };
+  }
+
+  const existingTitleKey = new Set(
+    (targetChildren ?? []).map((r) => r.title.trim().toLocaleLowerCase())
+  );
+  let nextSortOrder = Number(targetChildren?.[0]?.sort_order ?? 0);
+
+  const rowsToInsert: Array<Record<string, unknown>> = [];
+  for (const sourceRow of sourceChildren) {
+    const title = String(sourceRow.title ?? "").trim();
+    if (!title) continue;
+    const titleKey = title.toLocaleLowerCase();
+    if (skipExistingTitles && existingTitleKey.has(titleKey)) continue;
+    existingTitleKey.add(titleKey);
+    nextSortOrder += 10;
+    rowsToInsert.push({
+      project_id: projectId,
+      parent_id: targetIssueId,
+      title,
+      sort_order: nextSortOrder,
+      status_id: copyStatus ? sourceRow.status_id : null,
+      starts_at: null,
+      due_at: null,
+      progress_target: null,
+      progress_actual: null,
+      issue_weight:
+        sourceRow.issue_weight == null ? 1 : Number(sourceRow.issue_weight) || 1,
+    });
+  }
+
+  if (rowsToInsert.length === 0) {
+    return { error: "Tidak ada turunan baru yang bisa diduplikasi (semua sudah ada)." };
+  }
+
+  const { error: insertErr } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .insert(rowsToInsert);
+  if (insertErr) {
+    return { error: insertErr.message };
+  }
+  const statusSyncErr = await syncAncestorStatusFromChildren(
+    supabase,
+    projectId,
+    targetIssueId
+  );
+  if (statusSyncErr) return { error: statusSyncErr };
 
   revalidatePath("/", "layout");
   return { error: null };

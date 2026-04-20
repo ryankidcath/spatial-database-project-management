@@ -34,7 +34,8 @@ export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const publicPath =
     path.startsWith("/login") ||
-    path.startsWith("/auth/callback");
+    path.startsWith("/auth/callback") ||
+    path.startsWith("/help/");
 
   if (!user && !publicPath) {
     const redirectUrl = request.nextUrl.clone();

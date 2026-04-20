@@ -9,6 +9,8 @@ export type UpsertIssueFeatureAttributesBatchResult = {
   failed: number;
   failureSamples: string[];
 };
+export type UpsertIssueFeatureAttributePayloadResult = { error: string | null };
+export type DeleteIssueFeatureAttributeResult = { error: string | null };
 
 type ServerSupabase = NonNullable<
   Awaited<ReturnType<typeof createServerSupabaseClient>>
@@ -179,5 +181,98 @@ export async function upsertIssueFeatureAttributesCsvAction(
 
   revalidatePath("/", "layout");
   return { error: null, insertedOrUpdated, failed, failureSamples };
+}
+
+export async function upsertIssueFeatureAttributePayloadAction(
+  formData: FormData
+): Promise<UpsertIssueFeatureAttributePayloadResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const featureKey = String(formData.get("feature_key") ?? "").trim();
+  const propertiesRaw = String(formData.get("properties_json") ?? "").trim();
+  if (!projectId || !issueId || !featureKey) {
+    return { error: "project_id, issue_id, dan feature_key wajib diisi" };
+  }
+
+  let payload: Record<string, unknown> = {};
+  if (propertiesRaw) {
+    try {
+      const parsed = JSON.parse(propertiesRaw) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { error: "properties_json harus object JSON" };
+      }
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      return { error: "properties_json tidak valid" };
+    }
+  }
+
+  const issueCheck = await ensureIssueInProject(supabase, projectId, issueId);
+  if (!issueCheck.ok) return { error: issueCheck.error };
+
+  const { error: upErr } = await supabase
+    .schema("spatial")
+    .from("issue_feature_attributes")
+    .upsert(
+      {
+        issue_id: issueId,
+        feature_key: featureKey,
+        payload,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "issue_id,feature_key" }
+    );
+  if (upErr) return { error: upErr.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function deleteIssueFeatureAttributeAction(
+  formData: FormData
+): Promise<DeleteIssueFeatureAttributeResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const featureKey = String(formData.get("feature_key") ?? "").trim();
+  if (!projectId || !issueId || !featureKey) {
+    return { error: "project_id, issue_id, dan feature_key wajib diisi" };
+  }
+
+  const issueCheck = await ensureIssueInProject(supabase, projectId, issueId);
+  if (!issueCheck.ok) return { error: issueCheck.error };
+
+  const { error: delErr } = await supabase
+    .schema("spatial")
+    .from("issue_feature_attributes")
+    .delete()
+    .eq("issue_id", issueId)
+    .eq("feature_key", featureKey);
+
+  if (delErr) return { error: delErr.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
 }
 

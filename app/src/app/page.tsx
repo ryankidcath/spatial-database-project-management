@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   WorkspaceClient,
   type BidangHasilUkurMapRow,
+  type IssueFeatureAttributeRow,
   type IssueGeometryFeatureMapRow,
   type DemoFootprintRow,
   type IssueRow,
@@ -82,7 +83,7 @@ export default async function Home({ searchParams }: HomeProps) {
   const { data: projects, error: projectsError } = await supabase
     .schema("core_pm")
     .from("projects")
-    .select("id, name, key, organization_id")
+    .select("id, name, key, organization_id, description, hierarchy_labels")
     .is("deleted_at", null)
     .eq("is_archived", false)
     .order("name");
@@ -312,6 +313,15 @@ export default async function Home({ searchParams }: HomeProps) {
   const plmPengukuranStatusSummary = (pSumRaw ?? []) as PlmPengukuranStatusSummaryRow[];
   const alatUkur = (alatUkurRaw ?? []) as AlatUkurRow[];
   const issueGeometryFeatureMap = (issueGeomRaw ?? []) as IssueGeometryFeatureMapRow[];
+  const { data: issueAttrRaw, error: issueAttrError } =
+    spatialEnabledForScopedProjects
+      ? await supabase
+          .schema("spatial")
+          .from("v_issue_feature_attribute_map")
+          .select("id, project_id, issue_id, feature_key, payload")
+          .in("project_id", scopedProjectIds)
+      : { data: [] as IssueFeatureAttributeRow[], error: null };
+  const issueFeatureAttributes = (issueAttrRaw ?? []) as IssueFeatureAttributeRow[];
 
   const berkasIds = berkasPermohonan.map((b) => b.id);
   const [
@@ -506,6 +516,7 @@ export default async function Home({ searchParams }: HomeProps) {
     profilesError?.message ??
     bidangMapError?.message ??
     issueGeomError?.message ??
+    issueAttrError?.message ??
     registryError?.message ??
     orgModulesError?.message ??
     berkasError?.message ??
@@ -544,6 +555,7 @@ export default async function Home({ searchParams }: HomeProps) {
         footprints={footprints}
         bidangHasilUkurMap={bidangHasilUkurMap}
         issueGeometryFeatureMap={issueGeometryFeatureMap}
+        issueFeatureAttributes={issueFeatureAttributes}
         moduleRegistry={moduleRegistry}
         organizationModules={organizationModules}
         berkasPermohonan={berkasPermohonan}
@@ -564,6 +576,7 @@ export default async function Home({ searchParams }: HomeProps) {
         financePembayaran={financePembayaran}
         fetchError={fetchError}
         userEmail={user?.email ?? null}
+        userId={user?.id ?? null}
         userNotifications={userNotifications}
         joinError={joinError}
       />

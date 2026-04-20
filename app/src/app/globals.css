@@ -139,3 +139,17 @@
 .workspace-map-popup .leaflet-popup-close-button {
   color: var(--muted-foreground);
 }
+
+/* Radix ScrollArea: scrollbar di atas isi viewport + fade opacity (hindari konflik utility). */
+.pm-scroll-area-scrollbar {
+  z-index: 20;
+}
+.pm-scroll-area-scrollbar[data-state="visible"] {
+  opacity: 1;
+  transition: opacity 180ms ease-out;
+}
+.pm-scroll-area-scrollbar[data-state="hidden"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 700ms ease-in-out;
+}
