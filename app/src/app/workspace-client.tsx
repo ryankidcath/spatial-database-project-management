@@ -13,6 +13,7 @@ import {
   useTransition,
   type Dispatch,
   type ReactElement,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import { ChevronRight, PanelLeft, Trash2 } from "lucide-react";
@@ -1362,6 +1363,28 @@ function MonitoringMatrixCard({
   );
 }
 
+/** Baris mapping: apakah `feature_key` (setelah trim, banding huruf kecil) sudah punya geometri untuk unit kerja ini. */
+function geometryKeyStatusCell(
+  rawKey: string,
+  existingGeometryKeysLower: Set<string>
+): ReactNode {
+  const t = rawKey.trim().toLowerCase();
+  if (t.length === 0) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (existingGeometryKeysLower.has(t)) {
+    return (
+      <Badge
+        variant="outline"
+        className="shrink-0 px-1.5 py-0 font-normal text-[10px] leading-tight"
+      >
+        Sudah ada
+      </Badge>
+    );
+  }
+  return <span className="text-muted-foreground">Belum</span>;
+}
+
 export function WorkspaceClient({
   organizations,
   projects,
@@ -2063,17 +2086,23 @@ export function WorkspaceClient({
       .sort((a, b) => a.feature_key.localeCompare(b.feature_key));
   }, [issueGeometryFeatureMap, selectedProjectId, selectedTaskId]);
 
-  /** `feature_key` dari atribut unit kerja ini yang belum punya geometri — saran impor DXF. */
-  const mapDxfAttributeKeysWithoutGeometry = useMemo(() => {
-    if (!selectedTaskId || !selectedProjectId) return [];
-    const geomLower = new Set(
+  /** `feature_key` geometri yang sudah tersimpan untuk unit kerja aktif (perbandingan case-insensitive). */
+  const geometryKeysLowerForSelectedTask = useMemo(() => {
+    if (!selectedProjectId || !selectedTaskId) return new Set<string>();
+    return new Set(
       issueGeometryFeatureMap
         .filter(
           (g) =>
-            g.issue_id === selectedTaskId && g.project_id === selectedProjectId
+            g.project_id === selectedProjectId && g.issue_id === selectedTaskId
         )
-        .map((g) => g.feature_key.toLowerCase())
+        .map((g) => g.feature_key.trim().toLowerCase())
+        .filter((k) => k.length > 0)
     );
+  }, [issueGeometryFeatureMap, selectedProjectId, selectedTaskId]);
+
+  /** `feature_key` dari atribut unit kerja ini yang belum punya geometri — saran impor DXF. */
+  const mapDxfAttributeKeysWithoutGeometry = useMemo(() => {
+    if (!selectedTaskId || !selectedProjectId) return [];
     const seen = new Set<string>();
     const out: string[] = [];
     for (const a of issueFeatureAttributes) {
@@ -2081,7 +2110,7 @@ export function WorkspaceClient({
         continue;
       }
       const low = a.feature_key.toLowerCase();
-      if (geomLower.has(low)) continue;
+      if (geometryKeysLowerForSelectedTask.has(low)) continue;
       if (seen.has(low)) continue;
       seen.add(low);
       out.push(a.feature_key);
@@ -2089,8 +2118,8 @@ export function WorkspaceClient({
     out.sort((x, y) => x.localeCompare(y));
     return out;
   }, [
+    geometryKeysLowerForSelectedTask,
     issueFeatureAttributes,
-    issueGeometryFeatureMap,
     selectedProjectId,
     selectedTaskId,
   ]);
@@ -4956,12 +4985,21 @@ export function WorkspaceClient({
                                               Feature key & label per poligon (
                                               {mapGeojsonBatchKeys.length})
                                             </Label>
+                                            <p className="text-[11px] text-muted-foreground">
+                                              Kolom <span className="font-medium text-foreground">Geometri</span>:{" "}
+                                              <span className="font-medium">Sudah ada</span> = key ini sudah punya
+                                              geometri untuk unit kerja ini (simpan akan menimpa);{" "}
+                                              <span className="font-medium">Belum</span> = belum ada.
+                                            </p>
                                             <div className="max-h-[38vh] overflow-y-auto rounded-md border border-border">
                                               <table className="w-full border-collapse text-left text-[11px]">
                                                 <thead>
                                                   <tr className="border-b border-border bg-muted/50 text-muted-foreground">
                                                     <th className="w-8 px-1.5 py-1 font-medium">
                                                       #
+                                                    </th>
+                                                    <th className="w-[5.5rem] shrink-0 px-1.5 py-1 font-medium">
+                                                      Geometri
                                                     </th>
                                                     <th className="px-1.5 py-1 font-medium">
                                                       Feature key
@@ -4979,6 +5017,12 @@ export function WorkspaceClient({
                                                     >
                                                       <td className="px-1.5 py-1 text-muted-foreground">
                                                         {i + 1}
+                                                      </td>
+                                                      <td className="px-1 py-1 align-middle">
+                                                        {geometryKeyStatusCell(
+                                                          keyVal,
+                                                          geometryKeysLowerForSelectedTask
+                                                        )}
                                                       </td>
                                                       <td className="px-1 py-0.5">
                                                         <Input
@@ -5485,11 +5529,20 @@ export function WorkspaceClient({
                                             </p>
                                           ) : null}
                                         </div>
+                                        <p className="text-[11px] text-muted-foreground">
+                                          Kolom <span className="font-medium text-foreground">Geometri</span>:{" "}
+                                          <span className="font-medium">Sudah ada</span> = key ini sudah punya
+                                          geometri untuk unit kerja ini (simpan akan menimpa);{" "}
+                                          <span className="font-medium">Belum</span> = belum ada.
+                                        </p>
                                         <div className="max-h-52 overflow-y-auto rounded-md border border-border">
                                           <table className="w-full border-collapse text-left text-xs">
                                             <thead>
                                               <tr className="sticky top-0 border-b border-border bg-muted/80 text-muted-foreground">
                                                 <th className="w-10 px-2 py-1.5 font-medium">#</th>
+                                                <th className="w-[5.5rem] shrink-0 px-2 py-1.5 font-medium">
+                                                  Geometri
+                                                </th>
                                                 <th className="min-w-[8rem] px-2 py-1.5 font-medium">
                                                   Feature key
                                                 </th>
@@ -5524,6 +5577,12 @@ export function WorkspaceClient({
                                                 >
                                                   <td className="px-2 py-1.5 text-muted-foreground">
                                                     {idx + 1}
+                                                  </td>
+                                                  <td className="px-1 py-1.5 align-middle">
+                                                    {geometryKeyStatusCell(
+                                                      key,
+                                                      geometryKeysLowerForSelectedTask
+                                                    )}
                                                   </td>
                                                   <td className="px-1 py-0.5">
                                                     <Input
