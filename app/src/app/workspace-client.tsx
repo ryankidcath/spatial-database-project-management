@@ -1628,8 +1628,13 @@ export function WorkspaceClient({
     setMapGeomDialogOpen(true);
   }, [resetMapDxfState]);
   const [memberPending, startMemberTransition] = useTransition();
+  const [scopeNavPending, startScopeNavTransition] = useTransition();
   const workspaceActionPending =
-    taskPending || mapGeomPending || memberPending || projectPropertiesPending;
+    taskPending ||
+    mapGeomPending ||
+    memberPending ||
+    projectPropertiesPending ||
+    scopeNavPending;
   const [taskDeleteConfirm, setTaskDeleteConfirm] =
     useState<TaskDeleteConfirmState | null>(null);
   const [taskNoteEditor, setTaskNoteEditor] = useState<TaskNoteEditorState | null>(null);
@@ -2557,11 +2562,16 @@ export function WorkspaceClient({
     projectWideMilestoneTitles,
   ]);
 
-  const replaceQuery = (mutate: (p: URLSearchParams) => void) => {
-    const p = new URLSearchParams(searchParams.toString());
-    mutate(p);
-    router.replace(`/?${p.toString()}`, { scroll: false });
-  };
+  const replaceQuery = useCallback(
+    (mutate: (p: URLSearchParams) => void) => {
+      startScopeNavTransition(() => {
+        const p = new URLSearchParams(searchParams.toString());
+        mutate(p);
+        void router.replace(`/?${p.toString()}`, { scroll: false });
+      });
+    },
+    [router, searchParams, startScopeNavTransition]
+  );
 
   /** Hanya mengubah `task` — tidak memicu RSC; data server tidak bergantung pada query `task`. */
   const commitTaskSelection = useCallback(
@@ -2829,6 +2839,7 @@ export function WorkspaceClient({
                   type="button"
                   variant="ghost"
                   size="sm"
+                  disabled={workspaceActionPending}
                   onClick={() => {
                     replaceQuery((q) => {
                       q.set("org", o.id);
@@ -3026,6 +3037,7 @@ export function WorkspaceClient({
                     type="button"
                     variant="ghost"
                     size="sm"
+                    disabled={workspaceActionPending}
                     onClick={() => {
                       if (p.id === selectedProjectId) {
                         commitTaskSelection(null);
@@ -3116,6 +3128,7 @@ export function WorkspaceClient({
                             type="button"
                             variant="ghost"
                             size="sm"
+                            disabled={workspaceActionPending}
                             onClick={() => {
                               if (p.id !== selectedProjectId) {
                                 replaceQuery((q) => {
