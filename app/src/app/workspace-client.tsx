@@ -16,7 +16,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { ChevronRight, PanelLeft, Trash2 } from "lucide-react";
+import { ChevronRight, Loader2, PanelLeft, Trash2 } from "lucide-react";
 import {
   addProjectMemberByEmailAction,
   createOrganizationProjectInlineAction,
@@ -36,6 +36,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1627,6 +1628,8 @@ export function WorkspaceClient({
     setMapGeomDialogOpen(true);
   }, [resetMapDxfState]);
   const [memberPending, startMemberTransition] = useTransition();
+  const workspaceActionPending =
+    taskPending || mapGeomPending || memberPending || projectPropertiesPending;
   const [taskDeleteConfirm, setTaskDeleteConfirm] =
     useState<TaskDeleteConfirmState | null>(null);
   const [taskNoteEditor, setTaskNoteEditor] = useState<TaskNoteEditorState | null>(null);
@@ -3296,7 +3299,32 @@ export function WorkspaceClient({
           )}
         </header>
 
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <section
+          className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+          aria-busy={workspaceActionPending}
+        >
+          {workspaceActionPending ? (
+            <div
+              className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background/70 px-6 py-12 backdrop-blur-[1.5px]"
+              role="status"
+              aria-live="polite"
+              aria-label="Memproses permintaan"
+            >
+              <Loader2
+                className="h-8 w-8 animate-spin text-primary"
+                aria-hidden
+              />
+              <p className="text-sm font-medium text-foreground">Memproses…</p>
+              <p className="max-w-sm text-center text-xs text-muted-foreground">
+                Mohon tunggu sebentar. Area ini tidak merespons klik sampai selesai.
+              </p>
+              <div className="mt-2 w-full max-w-xs space-y-2">
+                <Skeleton className="h-2.5 w-full" />
+                <Skeleton className="h-2.5 w-[88%]" />
+                <Skeleton className="h-2.5 w-[72%]" />
+              </div>
+            </div>
+          ) : null}
           <ScrollArea
             className="min-h-0 flex-1"
             type="scroll"
