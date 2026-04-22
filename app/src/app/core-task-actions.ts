@@ -353,6 +353,7 @@ export async function createProjectTaskAction(
   const title = String(formData.get("title") ?? "").trim();
   const statusIdRaw = String(formData.get("status_id") ?? "").trim();
   const parentIdRaw = String(formData.get("parent_id") ?? "").trim();
+  const beforeIssueIdRaw = String(formData.get("before_issue_id") ?? "").trim();
   const startsAtRaw = String(formData.get("starts_at") ?? "").trim();
   const dueAtRaw = String(formData.get("due_at") ?? "").trim();
   const progressTargetRaw = String(formData.get("progress_target") ?? "");
@@ -367,6 +368,7 @@ export async function createProjectTaskAction(
   const dueAt = dueAtRaw ? dueAtRaw : null;
   const statusId = statusIdRaw ? statusIdRaw : null;
   const parentId = parentIdRaw ? parentIdRaw : null;
+  const beforeIssueId = beforeIssueIdRaw ? beforeIssueIdRaw : null;
   const progressTarget = parseOptionalNumber(progressTargetRaw);
   const progressActual = parseOptionalNumber(progressActualRaw);
   const issueWeightParsed = parseOptionalNumber(issueWeightRaw);
@@ -378,24 +380,74 @@ export async function createProjectTaskAction(
   }
   const issueWeight = issueWeightParsed ?? 1;
 
-  let sortQuery = supabase
-    .schema("core_pm")
-    .from("issues")
-    .select("sort_order")
-    .eq("project_id", projectId)
-    .is("deleted_at", null)
-    .order("sort_order", { ascending: false })
-    .limit(1);
-  sortQuery = parentId
-    ? sortQuery.eq("parent_id", parentId)
-    : sortQuery.is("parent_id", null);
-  const { data: topRows, error: topErr } = await sortQuery;
+  let sortOrder = 10;
+  if (beforeIssueId) {
+    let anchorQuery = supabase
+      .schema("core_pm")
+      .from("issues")
+      .select("id, sort_order")
+      .eq("project_id", projectId)
+      .eq("id", beforeIssueId)
+      .is("deleted_at", null)
+      .limit(1);
+    anchorQuery = parentId
+      ? anchorQuery.eq("parent_id", parentId)
+      : anchorQuery.is("parent_id", null);
+    const { data: anchorIssue, error: anchorErr } = await anchorQuery.maybeSingle();
+    if (anchorErr) {
+      return { error: anchorErr.message };
+    }
+    if (!anchorIssue) {
+      return { error: "Posisi sisip tidak valid untuk induk yang dipilih" };
+    }
+    sortOrder = Number(anchorIssue.sort_order ?? 0);
 
-  if (topErr) {
-    return { error: topErr.message };
+    let shiftQuery = supabase
+      .schema("core_pm")
+      .from("issues")
+      .select("id, sort_order")
+      .eq("project_id", projectId)
+      .is("deleted_at", null)
+      .gte("sort_order", sortOrder)
+      .order("sort_order", { ascending: false });
+    shiftQuery = parentId
+      ? shiftQuery.eq("parent_id", parentId)
+      : shiftQuery.is("parent_id", null);
+    const { data: toShift, error: shiftErr } = await shiftQuery;
+    if (shiftErr) {
+      return { error: shiftErr.message };
+    }
+    for (const row of toShift ?? []) {
+      const current = Number(row.sort_order ?? 0);
+      const { error: upErr } = await supabase
+        .schema("core_pm")
+        .from("issues")
+        .update({ sort_order: current + 10 })
+        .eq("id", row.id)
+        .eq("project_id", projectId)
+        .is("deleted_at", null);
+      if (upErr) {
+        return { error: upErr.message };
+      }
+    }
+  } else {
+    let sortQuery = supabase
+      .schema("core_pm")
+      .from("issues")
+      .select("sort_order")
+      .eq("project_id", projectId)
+      .is("deleted_at", null)
+      .order("sort_order", { ascending: false })
+      .limit(1);
+    sortQuery = parentId
+      ? sortQuery.eq("parent_id", parentId)
+      : sortQuery.is("parent_id", null);
+    const { data: topRows, error: topErr } = await sortQuery;
+    if (topErr) {
+      return { error: topErr.message };
+    }
+    sortOrder = Number(topRows?.[0]?.sort_order ?? 0) + 10;
   }
-
-  const sortOrder = Number(topRows?.[0]?.sort_order ?? 0) + 10;
 
   const { data: insertedIssue, error } = await supabase
     .schema("core_pm")

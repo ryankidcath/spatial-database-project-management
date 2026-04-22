@@ -2479,8 +2479,8 @@ export function WorkspaceClient({
 
   const monitoringView = useMemo(() => {
     if (!selectedProjectId) return null;
-    /** Matriks monitoring hanya saat unit kerja dipilih; di akar project tidak ditampilkan. */
-    if (selectedTaskId && selectedTask && subtreeVillageProgress.rows.length > 0) {
+    /** Matriks monitoring tetap tampil saat unit kerja dipilih, meski belum punya turunan. */
+    if (selectedTaskId && selectedTask) {
       const parentDepth = projectIssueDepthById.get(selectedTask.id) ?? 0;
       return {
         title: selectedTask.title,
@@ -2561,6 +2561,26 @@ export function WorkspaceClient({
     labelForDepth,
     projectWideMilestoneTitles,
   ]);
+
+  const addChildSiblingOptions = useMemo(() => {
+    if (!selectedProjectId || !monitoringAddChildContext) return [] as IssueRow[];
+    return issues
+      .filter(
+        (i) =>
+          i.project_id === selectedProjectId &&
+          i.parent_id === (monitoringAddChildContext.parentId ?? null)
+      )
+      .sort((a, b) => a.sort_order - b.sort_order);
+  }, [issues, selectedProjectId, monitoringAddChildContext]);
+
+  const tableAddSiblingOptions = useMemo(() => {
+    if (!selectedProjectId) return [] as IssueRow[];
+    return issues
+      .filter(
+        (i) => i.project_id === selectedProjectId && i.parent_id === (selectedTaskId ?? null)
+      )
+      .sort((a, b) => a.sort_order - b.sort_order);
+  }, [issues, selectedProjectId, selectedTaskId]);
 
   const replaceQuery = useCallback(
     (mutate: (p: URLSearchParams) => void) => {
@@ -3753,6 +3773,21 @@ export function WorkspaceClient({
                             placeholder={`Nama ${monitoringAddChildContext.rowHeader}`}
                           />
                         </div>
+                            <div className="space-y-1">
+                              <Label>Posisi urutan (opsional)</Label>
+                              <select
+                                name="before_issue_id"
+                                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                defaultValue=""
+                              >
+                                <option value="">Taruh di paling akhir</option>
+                                {addChildSiblingOptions.map((opt) => (
+                                  <option key={opt.id} value={opt.id}>
+                                    Sebelum: {opt.title}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
                         <div className="space-y-1">
                           <Label>Mulai</Label>
                           <Input name="starts_at" type="date" />
@@ -3867,6 +3902,21 @@ export function WorkspaceClient({
                                 required
                                 placeholder={`Nama ${tabelViewUi.addTargetLabel}`}
                               />
+                            </div>
+                            <div className="space-y-1">
+                              <Label>Posisi urutan (opsional)</Label>
+                              <select
+                                name="before_issue_id"
+                                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                defaultValue=""
+                              >
+                                <option value="">Taruh di paling akhir</option>
+                                {tableAddSiblingOptions.map((opt) => (
+                                  <option key={opt.id} value={opt.id}>
+                                    Sebelum: {opt.title}
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                             <div className="space-y-1">
                               <Label>Mulai</Label>
