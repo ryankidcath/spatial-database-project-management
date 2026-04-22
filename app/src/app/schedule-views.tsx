@@ -5,9 +5,10 @@ import {
   addMonths,
   formatShortDate,
   ganttPixelLayout,
-  issueCoversLocalDay,
   issueHasSchedule,
   monthMatrix,
+  parseIsoDate,
+  sameLocalDay,
   startOfMonth,
   visibleIssuesForSchedule,
   type ScheduleIssue,
@@ -15,16 +16,23 @@ import {
 
 const WEEKDAYS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
 
+function compactNote(note: string | null | undefined): string {
+  const raw = (note ?? "").trim();
+  if (!raw) return "";
+  return raw.replace(/\s+/g, " ");
+}
+
 function initialCalendarMonth(
   issues: ScheduleIssue[],
   projectId: string | null,
   taskId: string | null
 ): Date {
   if (!projectId) return startOfMonth(new Date());
-  const vis = visibleIssuesForSchedule(issues, projectId, taskId, "calendar")
-    .filter(issueHasSchedule);
+  const vis = visibleIssuesForSchedule(issues, projectId, taskId, "calendar").filter(
+    (i) => Boolean(parseIsoDate(i.last_note_at ?? null))
+  );
   const firstIso = vis
-    .map((i) => i.starts_at || i.due_at)
+    .map((i) => i.last_note_at)
     .filter(Boolean)
     .sort()[0];
   if (firstIso) return startOfMonth(new Date(firstIso));
@@ -49,8 +57,8 @@ export function CalendarScheduleView({
     return visibleIssuesForSchedule(issues, projectId, taskId, "calendar");
   }, [issues, projectId, taskId]);
 
-  const withSchedule = useMemo(
-    () => visible.filter(issueHasSchedule),
+  const withCalendarNote = useMemo(
+    () => visible.filter((i) => Boolean(parseIsoDate(i.last_note_at ?? null))),
     [visible]
   );
 
@@ -74,7 +82,8 @@ export function CalendarScheduleView({
       {taskId && (
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
           Kalender memfilter <strong>unit kerja terpilih dan unit turunan</strong> dalam
-          project ini. Issue tanpa tanggal tidak ditampilkan di grid.
+          project ini. Item ditampilkan berdasarkan tanggal <strong>Kapan</strong>{" "}
+          (catatan terakhir).
         </p>
       )}
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -99,13 +108,13 @@ export function CalendarScheduleView({
         </div>
       </div>
       <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="w-full min-w-[640px] border-collapse text-center text-xs">
+        <table className="w-full min-w-[640px] table-fixed border-collapse text-center text-xs">
           <thead>
             <tr>
               {WEEKDAYS.map((d) => (
                 <th
                   key={d}
-                  className="border-b border-slate-200 bg-slate-50 py-2 font-medium text-slate-600"
+                  className="w-[14.2857%] border-b border-slate-200 bg-slate-50 py-2 font-medium text-slate-600"
                 >
                   {d}
                 </th>
@@ -116,17 +125,22 @@ export function CalendarScheduleView({
             {matrix.map((row, ri) => (
               <tr key={ri}>
                 {row.map(({ date, inMonth }, ci) => {
-                  const dayIssues = withSchedule.filter((i) =>
-                    issueCoversLocalDay(i, date)
-                  );
+                  const dayIssues = withCalendarNote.filter((i) => {
+                    const notedAt = parseIsoDate(i.last_note_at ?? null);
+                    if (!notedAt) return false;
+                    return sameLocalDay(notedAt, date);
+                  });
+                  const maxVisibleDayIssues = 3;
+                  const visibleDayIssues = dayIssues.slice(0, maxVisibleDayIssues);
+                  const hiddenIssueCount = Math.max(0, dayIssues.length - visibleDayIssues.length);
                   return (
                     <td
                       key={ci}
-                      className={`align-top border border-slate-100 p-1 ${
+                      className={`h-28 align-top border border-slate-100 p-1 ${
                         inMonth ? "bg-white" : "bg-slate-50/80 text-slate-400"
                       }`}
                     >
-                      <div className="min-h-[4.5rem] text-left">
+                      <div className="h-full overflow-hidden text-left">
                         <span
                           className={`inline-block rounded px-1 font-medium ${
                             inMonth ? "text-slate-800" : "text-slate-400"
@@ -135,19 +149,39 @@ export function CalendarScheduleView({
                           {date.getDate()}
                         </span>
                         <ul className="mt-1 space-y-0.5">
-                          {dayIssues.map((i) => (
-                            <li key={i.id}>
-                              <button
-                                type="button"
-                                onClick={() => onSelectIssue(i.id)}
-                                className="w-full truncate rounded bg-blue-50 px-1 py-0.5 text-left text-[10px] font-medium text-blue-900 hover:bg-blue-100"
-                                title={`${i.key_display ?? ""} ${i.title}`}
-                              >
-                                {i.key_display ? `${i.key_display} ` : ""}
-                                <span className="font-normal">{i.title}</span>
-                              </button>
+                          {visibleDayIssues.map((i) => {
+                            const note = compactNote(i.last_note);
+                            const titleText = `${i.key_display ? `${i.key_display} ` : ""}${i.title}`;
+                            const tooltip = note ? `${titleText}\nCatatan: ${note}` : titleText;
+                            return (
+                              <li key={i.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectIssue(i.id)}
+                                  className="w-full rounded bg-blue-50 px-1 py-0.5 text-left text-[10px] text-blue-900 hover:bg-blue-100"
+                                  title={tooltip}
+                                >
+                                  <p className="truncate font-medium">
+                                    {i.key_display ? `${i.key_display} ` : ""}
+                                    <span className="font-normal">{i.title}</span>
+                                  </p>
+                                  {note ? (
+                                    <p className="mt-0.5 truncate text-[9px] text-blue-800/90">
+                                      {note}
+                                    </p>
+                                  ) : null}
+                                </button>
+                              </li>
+                            );
+                          })}
+                          {hiddenIssueCount > 0 ? (
+                            <li
+                              className="truncate rounded px-1 py-0.5 text-[10px] text-slate-500"
+                              title={`${hiddenIssueCount} item lainnya`}
+                            >
+                              ...
                             </li>
-                          ))}
+                          ) : null}
                         </ul>
                       </div>
                     </td>
@@ -158,10 +192,9 @@ export function CalendarScheduleView({
           </tbody>
         </table>
       </div>
-      {withSchedule.length === 0 && (
+      {withCalendarNote.length === 0 && (
         <p className="text-sm text-slate-500">
-          Belum ada unit kerja dengan jadwal mulai dan jatuh tempo pada scope
-          ini.
+          Belum ada unit kerja dengan catatan terakhir pada scope ini.
         </p>
       )}
     </div>

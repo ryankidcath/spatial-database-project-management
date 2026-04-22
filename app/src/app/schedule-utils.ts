@@ -8,6 +8,8 @@ export type ScheduleIssue = {
   due_at: string | null;
   key_display: string | null;
   title: string;
+  last_note?: string | null;
+  last_note_at?: string | null;
 };
 
 export function startOfDay(d: Date): Date {

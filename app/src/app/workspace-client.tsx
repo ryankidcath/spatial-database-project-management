@@ -1047,7 +1047,9 @@ function MonitoringMatrixCard({
   setTaskCloneDialog,
   setTaskMsg,
   startTaskTransition,
+  startStatusTransition,
   onAfterMutation,
+  onAfterStatusMutation,
   setTaskNoteEditor,
   rootClassName,
   taskMsg,
@@ -1066,7 +1068,9 @@ function MonitoringMatrixCard({
   setTaskCloneDialog: Dispatch<SetStateAction<TaskCloneDialogState | null>>;
   setTaskMsg: (msg: string | null) => void;
   startTaskTransition: (fn: () => void | Promise<void>) => void;
+  startStatusTransition: (fn: () => void | Promise<void>) => void;
   onAfterMutation: () => void;
+  onAfterStatusMutation: () => void;
   setTaskNoteEditor: (s: TaskNoteEditorState | null) => void;
   /** Default `mt-8` agar jarak ke chart sama level project & level unit terpilih; kosongkan saat ditumpuk di dashboard project. */
   rootClassName?: string;
@@ -1168,7 +1172,7 @@ function MonitoringMatrixCard({
                             fd.set("issue_id", meta.issueId);
                             fd.set("project_id", selectedProjectId);
                             fd.set("current_category", effectiveCategory);
-                            startTaskTransition(async () => {
+                            startStatusTransition(async () => {
                               const r = await cycleTaskStatusAction(fd);
                               if (r.error) {
                                 setOptimisticMilestoneCategoryByIssueId((prev) => {
@@ -1189,7 +1193,7 @@ function MonitoringMatrixCard({
                                 next.delete(meta.issueId);
                                 return next;
                               });
-                              onAfterMutation();
+                              onAfterStatusMutation();
                             });
                           }}
                           title="Klik untuk ganti status"
@@ -1424,6 +1428,8 @@ export function WorkspaceClient({
   const searchParams = useSearchParams();
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
   const [taskPending, startTaskTransition] = useTransition();
+  const [, startStatusTransition] = useTransition();
+  const [, startStatusRefreshTransition] = useTransition();
   const [projectPropertiesOpen, setProjectPropertiesOpen] = useState(false);
   const [projectPropertiesPending, setProjectPropertiesPending] = useState(false);
   const [tableTaskDialogOpen, setTableTaskDialogOpen] = useState(false);
@@ -1642,7 +1648,14 @@ export function WorkspaceClient({
   const [taskCloneDialog, setTaskCloneDialog] = useState<TaskCloneDialogState | null>(
     null
   );
+  const [optimisticStatusByIssueId, setOptimisticStatusByIssueId] = useState<
+    Record<string, string | null>
+  >({});
+  const [pendingStatusIssueIds, setPendingStatusIssueIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [hierarchyLabels, setHierarchyLabels] = useState<Record<number, string>>({});
+  const statusRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const taskNoteInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [projectDeleteConfirm, setProjectDeleteConfirm] =
@@ -1705,6 +1718,20 @@ export function WorkspaceClient({
   useEffect(() => {
     setSelectedTaskId(taskIdFromSearchParams);
   }, [taskIdFromSearchParams]);
+
+  useEffect(() => {
+    setOptimisticStatusByIssueId({});
+    setPendingStatusIssueIds(new Set());
+  }, [issues, selectedProjectId]);
+
+  useEffect(() => {
+    return () => {
+      if (statusRefreshTimerRef.current) {
+        clearTimeout(statusRefreshTimerRef.current);
+        statusRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
 
   /** Jika `issues` kosong di render pertama, terapkan default collapse setelah data ada. */
   const issueTreeCollapseSeeded = useRef(false);
@@ -1962,6 +1989,13 @@ export function WorkspaceClient({
       .filter((s) => s.project_id === selectedProjectId)
       .sort((a, b) => a.position - b.position);
   }, [statuses, selectedProjectId]);
+  const firstStatusIdByCategory = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const s of statusesForProject) {
+      if (!out.has(s.category)) out.set(s.category, s.id);
+    }
+    return out;
+  }, [statusesForProject]);
   const defaultStatusId = statusesForProject[0]?.id ?? null;
 
   const issuesInScope = useMemo(() => {
@@ -2622,6 +2656,18 @@ export function WorkspaceClient({
   const selectIssueInScope = (issueId: string) => {
     commitTaskSelection(issueId);
   };
+
+  const triggerBackgroundRefresh = useCallback(() => {
+    if (statusRefreshTimerRef.current) {
+      clearTimeout(statusRefreshTimerRef.current);
+    }
+    statusRefreshTimerRef.current = setTimeout(() => {
+      startStatusRefreshTransition(() => {
+        router.refresh();
+      });
+      statusRefreshTimerRef.current = null;
+    }, 450);
+  }, [router, startStatusRefreshTransition]);
 
   const openBerkasDetail = (berkasId: string) => {
     if (!selectedProjectId) return;
@@ -3657,7 +3703,9 @@ export function WorkspaceClient({
                     setTaskCloneDialog={setTaskCloneDialog}
                     setTaskMsg={setTaskMsg}
                     startTaskTransition={startTaskTransition}
+                    startStatusTransition={startStatusTransition}
                     onAfterMutation={() => router.refresh()}
+                    onAfterStatusMutation={triggerBackgroundRefresh}
                     setTaskNoteEditor={setTaskNoteEditor}
                     taskMsg={taskMsg}
                   />
@@ -3695,7 +3743,9 @@ export function WorkspaceClient({
                           setTaskCloneDialog={setTaskCloneDialog}
                           setTaskMsg={setTaskMsg}
                           startTaskTransition={startTaskTransition}
+                          startStatusTransition={startStatusTransition}
                           onAfterMutation={() => router.refresh()}
+                          onAfterStatusMutation={triggerBackgroundRefresh}
                           setTaskNoteEditor={setTaskNoteEditor}
                           taskMsg={taskMsg}
                         />
@@ -3978,7 +4028,10 @@ export function WorkspaceClient({
                       const rowLevelLabel = labelForDepth(
                         projectIssueDepthById.get(issue.id) ?? 0
                       );
-                      const st = issue.status_id ? statusById.get(issue.status_id) : null;
+                      const effectiveStatusId =
+                        optimisticStatusByIssueId[issue.id] ?? issue.status_id;
+                      const st = effectiveStatusId ? statusById.get(effectiveStatusId) : null;
+                      const isStatusPending = pendingStatusIssueIds.has(issue.id);
                       const isSelectedRootRow =
                         selectedTaskId != null && issue.id === selectedTaskId;
                       return (
@@ -4003,24 +4056,62 @@ export function WorkspaceClient({
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                disabled={taskPending}
+                                disabled={isStatusPending}
                                 className="h-auto p-0 hover:bg-transparent"
                                 title="Klik untuk rotasi status"
                                 onClick={(e) => {
                                   e.preventDefault();
                                   if (!selectedProjectId) return;
                                   setTaskMsg(null);
+                                  const prevStatusId = effectiveStatusId ?? null;
+                                  const currentCategory = st?.category ?? "todo";
+                                  const nextCategory =
+                                    currentCategory === "todo"
+                                      ? "in_progress"
+                                      : currentCategory === "in_progress"
+                                        ? "done"
+                                        : "todo";
+                                  const nextStatusId = firstStatusIdByCategory.get(nextCategory);
+                                  if (!nextStatusId) {
+                                    setTaskMsg(
+                                      `Status ${nextCategory} belum tersedia di project ini`
+                                    );
+                                    return;
+                                  }
+                                  setOptimisticStatusByIssueId((prev) => ({
+                                    ...prev,
+                                    [issue.id]: nextStatusId,
+                                  }));
+                                  setPendingStatusIssueIds((prev) => {
+                                    const next = new Set(prev);
+                                    next.add(issue.id);
+                                    return next;
+                                  });
                                   const fd = new FormData();
                                   fd.set("issue_id", issue.id);
                                   fd.set("project_id", selectedProjectId);
-                                  fd.set("current_category", st?.category ?? "todo");
-                                  startTaskTransition(async () => {
+                                  fd.set("current_category", currentCategory);
+                                  startStatusTransition(async () => {
                                     const r = await cycleTaskStatusAction(fd);
                                     if (r.error) {
+                                      setOptimisticStatusByIssueId((prev) => ({
+                                        ...prev,
+                                        [issue.id]: prevStatusId,
+                                      }));
+                                      setPendingStatusIssueIds((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete(issue.id);
+                                        return next;
+                                      });
                                       setTaskMsg(r.error);
                                       return;
                                     }
-                                    router.refresh();
+                                    setPendingStatusIssueIds((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(issue.id);
+                                      return next;
+                                    });
+                                    triggerBackgroundRefresh();
                                   });
                                 }}
                               >
