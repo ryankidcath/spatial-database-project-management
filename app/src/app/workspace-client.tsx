@@ -51,10 +51,10 @@ import {
 import { FinancePanel } from "./finance-panel";
 import {
   cloneTaskChildrenAction,
-  cycleTaskStatusAction,
   createProjectTaskAction,
   deleteProjectAction,
   deleteTaskAction,
+  setTaskStatusAction,
   updateTaskBasicAction,
   updateTaskLastNoteAction,
 } from "./core-task-actions";
@@ -1047,9 +1047,9 @@ function MonitoringMatrixCard({
   setTaskCloneDialog,
   setTaskMsg,
   startTaskTransition,
-  startStatusTransition,
+  firstStatusIdByCategory,
+  queueStatusCommit,
   onAfterMutation,
-  onAfterStatusMutation,
   setTaskNoteEditor,
   rootClassName,
   taskMsg,
@@ -1068,9 +1068,9 @@ function MonitoringMatrixCard({
   setTaskCloneDialog: Dispatch<SetStateAction<TaskCloneDialogState | null>>;
   setTaskMsg: (msg: string | null) => void;
   startTaskTransition: (fn: () => void | Promise<void>) => void;
-  startStatusTransition: (fn: () => void | Promise<void>) => void;
+  firstStatusIdByCategory: Map<string, string>;
+  queueStatusCommit: (issueId: string, statusId: string | null) => void;
   onAfterMutation: () => void;
-  onAfterStatusMutation: () => void;
   setTaskNoteEditor: (s: TaskNoteEditorState | null) => void;
   /** Default `mt-8` agar jarak ke chart sama level project & level unit terpilih; kosongkan saat ditumpuk di dashboard project. */
   rootClassName?: string;
@@ -1078,13 +1078,9 @@ function MonitoringMatrixCard({
 }) {
   const [optimisticMilestoneCategoryByIssueId, setOptimisticMilestoneCategoryByIssueId] =
     useState<Record<string, string>>({});
-  const [pendingMilestoneIssueIds, setPendingMilestoneIssueIds] = useState<Set<string>>(
-    () => new Set()
-  );
 
   useEffect(() => {
     setOptimisticMilestoneCategoryByIssueId({});
-    setPendingMilestoneIssueIds(new Set());
   }, [rows, milestoneTitles]);
 
   const cycleCategory = useCallback((current: string): string => {
@@ -1141,8 +1137,6 @@ function MonitoringMatrixCard({
                     meta == null
                       ? "todo"
                       : (optimisticMilestoneCategoryByIssueId[meta.issueId] ?? meta.category);
-                  const isCellPending =
-                    meta != null && pendingMilestoneIssueIds.has(meta.issueId);
                   return (
                     <td key={`${row.villageIssue.id}:${title}`} className="px-2 py-2">
                       {meta == null ? (
@@ -1152,7 +1146,7 @@ function MonitoringMatrixCard({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          disabled={!selectedProjectId || isCellPending}
+                          disabled={!selectedProjectId}
                           className="h-auto p-0 hover:bg-transparent"
                           onClick={(e) => {
                             e.preventDefault();
@@ -1163,38 +1157,14 @@ function MonitoringMatrixCard({
                               ...prev,
                               [meta.issueId]: nextCategory,
                             }));
-                            setPendingMilestoneIssueIds((prev) => {
-                              const next = new Set(prev);
-                              next.add(meta.issueId);
-                              return next;
-                            });
-                            const fd = new FormData();
-                            fd.set("issue_id", meta.issueId);
-                            fd.set("project_id", selectedProjectId);
-                            fd.set("current_category", effectiveCategory);
-                            startStatusTransition(async () => {
-                              const r = await cycleTaskStatusAction(fd);
-                              if (r.error) {
-                                setOptimisticMilestoneCategoryByIssueId((prev) => {
-                                  const next = { ...prev };
-                                  delete next[meta.issueId];
-                                  return next;
-                                });
-                                setPendingMilestoneIssueIds((prev) => {
-                                  const next = new Set(prev);
-                                  next.delete(meta.issueId);
-                                  return next;
-                                });
-                                setTaskMsg(r.error);
-                                return;
-                              }
-                              setPendingMilestoneIssueIds((prev) => {
-                                const next = new Set(prev);
-                                next.delete(meta.issueId);
-                                return next;
-                              });
-                              onAfterStatusMutation();
-                            });
+                            const nextStatusId = firstStatusIdByCategory.get(nextCategory);
+                            if (!nextStatusId) {
+                              setTaskMsg(
+                                `Status ${nextCategory} belum tersedia di project ini`
+                              );
+                              return;
+                            }
+                            queueStatusCommit(meta.issueId, nextStatusId);
                           }}
                           title="Klik untuk ganti status"
                         >
@@ -1651,9 +1621,8 @@ export function WorkspaceClient({
   const [optimisticStatusByIssueId, setOptimisticStatusByIssueId] = useState<
     Record<string, string | null>
   >({});
-  const [pendingStatusIssueIds, setPendingStatusIssueIds] = useState<Set<string>>(
-    () => new Set()
-  );
+  const statusCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queuedStatusCommitByIssueRef = useRef<Map<string, string | null>>(new Map());
   const [hierarchyLabels, setHierarchyLabels] = useState<Record<number, string>>({});
   const statusRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1721,11 +1690,19 @@ export function WorkspaceClient({
 
   useEffect(() => {
     setOptimisticStatusByIssueId({});
-    setPendingStatusIssueIds(new Set());
+    queuedStatusCommitByIssueRef.current.clear();
+    if (statusCommitTimerRef.current) {
+      clearTimeout(statusCommitTimerRef.current);
+      statusCommitTimerRef.current = null;
+    }
   }, [issues, selectedProjectId]);
 
   useEffect(() => {
     return () => {
+      if (statusCommitTimerRef.current) {
+        clearTimeout(statusCommitTimerRef.current);
+        statusCommitTimerRef.current = null;
+      }
       if (statusRefreshTimerRef.current) {
         clearTimeout(statusRefreshTimerRef.current);
         statusRefreshTimerRef.current = null;
@@ -1997,6 +1974,11 @@ export function WorkspaceClient({
     return out;
   }, [statusesForProject]);
   const defaultStatusId = statusesForProject[0]?.id ?? null;
+  const issueStatusIdById = useMemo(() => {
+    const out = new Map<string, string | null>();
+    for (const i of issues) out.set(i.id, i.status_id ?? null);
+    return out;
+  }, [issues]);
 
   const issuesInScope = useMemo(() => {
     if (!selectedProjectId) return [];
@@ -2668,6 +2650,44 @@ export function WorkspaceClient({
       statusRefreshTimerRef.current = null;
     }, 450);
   }, [router, startStatusRefreshTransition]);
+
+  const queueStatusCommit = useCallback(
+    (issueId: string, statusId: string | null) => {
+      if (!selectedProjectId) return;
+      queuedStatusCommitByIssueRef.current.set(issueId, statusId);
+      if (statusCommitTimerRef.current) {
+        clearTimeout(statusCommitTimerRef.current);
+      }
+      statusCommitTimerRef.current = setTimeout(() => {
+        const entries = Array.from(queuedStatusCommitByIssueRef.current.entries());
+        queuedStatusCommitByIssueRef.current.clear();
+        statusCommitTimerRef.current = null;
+        startStatusTransition(async () => {
+          for (const [id, nextStatusId] of entries) {
+            const fd = new FormData();
+            fd.set("issue_id", id);
+            fd.set("project_id", selectedProjectId);
+            fd.set("status_id", nextStatusId ?? "");
+            const r = await setTaskStatusAction(fd);
+            if (r.error) {
+              setTaskMsg(r.error);
+              setOptimisticStatusByIssueId((prev) => ({
+                ...prev,
+                [id]: issueStatusIdById.get(id) ?? null,
+              }));
+            }
+          }
+          triggerBackgroundRefresh();
+        });
+      }, 260);
+    },
+    [
+      issueStatusIdById,
+      selectedProjectId,
+      startStatusTransition,
+      triggerBackgroundRefresh,
+    ]
+  );
 
   const openBerkasDetail = (berkasId: string) => {
     if (!selectedProjectId) return;
@@ -3703,9 +3723,9 @@ export function WorkspaceClient({
                     setTaskCloneDialog={setTaskCloneDialog}
                     setTaskMsg={setTaskMsg}
                     startTaskTransition={startTaskTransition}
-                    startStatusTransition={startStatusTransition}
+                    firstStatusIdByCategory={firstStatusIdByCategory}
+                    queueStatusCommit={queueStatusCommit}
                     onAfterMutation={() => router.refresh()}
-                    onAfterStatusMutation={triggerBackgroundRefresh}
                     setTaskNoteEditor={setTaskNoteEditor}
                     taskMsg={taskMsg}
                   />
@@ -3743,9 +3763,9 @@ export function WorkspaceClient({
                           setTaskCloneDialog={setTaskCloneDialog}
                           setTaskMsg={setTaskMsg}
                           startTaskTransition={startTaskTransition}
-                          startStatusTransition={startStatusTransition}
+                          firstStatusIdByCategory={firstStatusIdByCategory}
+                          queueStatusCommit={queueStatusCommit}
                           onAfterMutation={() => router.refresh()}
-                          onAfterStatusMutation={triggerBackgroundRefresh}
                           setTaskNoteEditor={setTaskNoteEditor}
                           taskMsg={taskMsg}
                         />
@@ -4031,7 +4051,6 @@ export function WorkspaceClient({
                       const effectiveStatusId =
                         optimisticStatusByIssueId[issue.id] ?? issue.status_id;
                       const st = effectiveStatusId ? statusById.get(effectiveStatusId) : null;
-                      const isStatusPending = pendingStatusIssueIds.has(issue.id);
                       const isSelectedRootRow =
                         selectedTaskId != null && issue.id === selectedTaskId;
                       return (
@@ -4056,14 +4075,12 @@ export function WorkspaceClient({
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                disabled={isStatusPending}
                                 className="h-auto p-0 hover:bg-transparent"
                                 title="Klik untuk rotasi status"
                                 onClick={(e) => {
                                   e.preventDefault();
                                   if (!selectedProjectId) return;
                                   setTaskMsg(null);
-                                  const prevStatusId = effectiveStatusId ?? null;
                                   const currentCategory = st?.category ?? "todo";
                                   const nextCategory =
                                     currentCategory === "todo"
@@ -4082,37 +4099,7 @@ export function WorkspaceClient({
                                     ...prev,
                                     [issue.id]: nextStatusId,
                                   }));
-                                  setPendingStatusIssueIds((prev) => {
-                                    const next = new Set(prev);
-                                    next.add(issue.id);
-                                    return next;
-                                  });
-                                  const fd = new FormData();
-                                  fd.set("issue_id", issue.id);
-                                  fd.set("project_id", selectedProjectId);
-                                  fd.set("current_category", currentCategory);
-                                  startStatusTransition(async () => {
-                                    const r = await cycleTaskStatusAction(fd);
-                                    if (r.error) {
-                                      setOptimisticStatusByIssueId((prev) => ({
-                                        ...prev,
-                                        [issue.id]: prevStatusId,
-                                      }));
-                                      setPendingStatusIssueIds((prev) => {
-                                        const next = new Set(prev);
-                                        next.delete(issue.id);
-                                        return next;
-                                      });
-                                      setTaskMsg(r.error);
-                                      return;
-                                    }
-                                    setPendingStatusIssueIds((prev) => {
-                                      const next = new Set(prev);
-                                      next.delete(issue.id);
-                                      return next;
-                                    });
-                                    triggerBackgroundRefresh();
-                                  });
+                                  queueStatusCommit(issue.id, nextStatusId);
                                 }}
                               >
                                 <Badge className={statusBadgeClass(st?.category)}>

@@ -12,6 +12,7 @@ export type DeleteProjectResult = { error: string | null };
 export type UpdateTaskLastNoteResult = { error: string | null };
 export type UpdateTaskBasicResult = { error: string | null };
 export type CycleTaskStatusResult = { error: string | null };
+export type SetTaskStatusResult = { error: string | null };
 export type CloneTaskChildrenResult = { error: string | null };
 type ServerSupabase = NonNullable<
   Awaited<ReturnType<typeof createServerSupabaseClient>>
@@ -917,6 +918,49 @@ export async function cycleTaskStatusAction(
     .schema("core_pm")
     .from("issues")
     .update({ status_id: nextStatus.id })
+    .eq("id", issueId)
+    .eq("project_id", projectId)
+    .is("deleted_at", null);
+  if (error) {
+    return { error: error.message };
+  }
+  const statusSyncErr = await syncAncestorStatusFromChildren(
+    supabase,
+    projectId,
+    issueId
+  );
+  if (statusSyncErr) return { error: statusSyncErr };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function setTaskStatusAction(
+  formData: FormData
+): Promise<SetTaskStatusResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const issueId = String(formData.get("issue_id") ?? "").trim();
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const statusIdRaw = String(formData.get("status_id") ?? "").trim();
+  const statusId = statusIdRaw ? statusIdRaw : null;
+  if (!issueId || !projectId) {
+    return { error: "issue_id atau project_id kosong" };
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("issues")
+    .update({ status_id: statusId })
     .eq("id", issueId)
     .eq("project_id", projectId)
     .is("deleted_at", null);
