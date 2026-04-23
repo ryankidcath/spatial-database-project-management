@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   WorkspaceClient,
   type BidangHasilUkurMapRow,
+  type ActivityLogRow,
   type IssueFeatureAttributeRow,
   type IssueGeometryFeatureMapRow,
   type DemoFootprintRow,
@@ -11,6 +12,7 @@ import {
   type ProjectMemberRow,
   type ProjectRow,
   type StatusRow,
+  type UserPresenceRow,
 } from "./workspace-client";
 import type { BerkasPermohonanRow } from "./plm-berkas-types";
 import type {
@@ -48,6 +50,46 @@ type HomeProps = {
 
 /** Halaman workspace mengikuti cookie sesi; jangan cache statis antar-user. */
 export const dynamic = "force-dynamic";
+
+const ISSUE_SELECT_COLUMNS =
+  "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at, progress_target, progress_actual, issue_weight, last_note, last_note_at, last_note_by";
+
+async function fetchAllIssuesForProjects(
+  supabase: any,
+  scopedProjectIds: string[]
+): Promise<{ data: IssueRow[]; error: { message?: string } | null }> {
+  if (scopedProjectIds.length === 0) {
+    return { data: [], error: null };
+  }
+
+  const pageSize = 1000;
+  let from = 0;
+  const all: IssueRow[] = [];
+
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabase
+      .schema("core_pm")
+      .from("issues")
+      .select(ISSUE_SELECT_COLUMNS)
+      .in("project_id", scopedProjectIds)
+      .is("deleted_at", null)
+      .order("sort_order", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      return { data: all, error };
+    }
+
+    const rows = ((data ?? []) as IssueRow[]);
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return { data: all, error: null };
+}
 
 export default async function Home({ searchParams }: HomeProps) {
   const qp = await searchParams;
@@ -117,9 +159,14 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("name")
       : { data: [] as OrganizationRow[], error: null };
 
+  const issuesResult = await fetchAllIssuesForProjects(
+    supabase,
+    scopedProjectIds
+  );
+
   const [
     { data: statuses, error: statusesError },
-    { data: issues, error: issuesError },
+    { data: auditLogsRaw, error: auditLogsError },
     { data: projectMembersRaw, error: projectMembersError },
     { data: footprintsRaw, error: footprintsError },
     { data: registryRaw, error: registryError },
@@ -137,14 +184,14 @@ export default async function Home({ searchParams }: HomeProps) {
     scopedProjectIds.length > 0
       ? supabase
           .schema("core_pm")
-          .from("issues")
+          .from("audit_log")
           .select(
-            "id, project_id, parent_id, status_id, key_display, title, sort_order, starts_at, due_at, progress_target, progress_actual, issue_weight, last_note, last_note_at, last_note_by"
+            "id, organization_id, project_id, actor_user_id, action, entity, entity_id, payload, created_at"
           )
           .in("project_id", scopedProjectIds)
-          .is("deleted_at", null)
-          .order("sort_order")
-      : Promise.resolve({ data: [] as IssueRow[], error: null }),
+          .order("created_at", { ascending: false })
+          .limit(250)
+      : Promise.resolve({ data: [] as ActivityLogRow[], error: null }),
     scopedProjectIds.length > 0
       ? supabase
           .schema("core_pm")
@@ -174,13 +221,27 @@ export default async function Home({ searchParams }: HomeProps) {
   ]);
 
   const footprints = (footprintsRaw ?? []) as DemoFootprintRow[];
+  const issues = issuesResult.data;
+  const issuesError = issuesResult.error;
+  const auditLogsBase = (auditLogsRaw ?? []) as Array<{
+    id: string;
+    organization_id: string;
+    project_id: string | null;
+    actor_user_id: string;
+    action: string;
+    entity: string;
+    entity_id: string;
+    payload: Record<string, unknown> | null;
+    created_at: string;
+  }>;
   const projectMembersBase = (projectMembersRaw ?? []) as Array<{
     project_id: string;
     user_id: string;
     role: string;
     joined_at: string;
   }>;
-  const memberUserIds = [...new Set(projectMembersBase.map((m) => m.user_id))];
+  const actorUserIds = auditLogsBase.map((l) => l.actor_user_id);
+  const memberUserIds = [...new Set([...projectMembersBase.map((m) => m.user_id), ...actorUserIds])];
   const { data: profilesRaw, error: profilesError } =
     memberUserIds.length > 0
       ? await supabase
@@ -202,6 +263,36 @@ export default async function Home({ searchParams }: HomeProps) {
     joined_at: m.joined_at,
     display_name: displayNameByUserId.get(m.user_id) ?? null,
   }));
+  const activityLogs: ActivityLogRow[] = auditLogsBase.map((l) => ({
+    id: l.id,
+    organization_id: l.organization_id,
+    project_id: l.project_id,
+    actor_user_id: l.actor_user_id,
+    actor_display_name: displayNameByUserId.get(l.actor_user_id) ?? null,
+    action: l.action,
+    entity: l.entity,
+    entity_id: l.entity_id,
+    payload: l.payload ?? {},
+    created_at: l.created_at,
+  }));
+  const { data: presenceRaw, error: presenceError } =
+    memberUserIds.length > 0 && scopedProjectIds.length > 0
+      ? await supabase
+          .schema("core_pm")
+          .from("user_presence")
+          .select("user_id, project_id, last_seen_at, updated_at")
+          .in("user_id", memberUserIds)
+          .in("project_id", scopedProjectIds)
+      : { data: [] as UserPresenceRow[], error: null };
+  const presenceErrMessage = presenceError?.message?.toLowerCase() ?? "";
+  const presenceMissingTable =
+    presenceErrMessage.includes("user_presence") &&
+    (presenceErrMessage.includes("schema cache") ||
+      presenceErrMessage.includes("relation") ||
+      presenceErrMessage.includes("does not exist"));
+  const userPresence = presenceMissingTable
+    ? ([] as UserPresenceRow[])
+    : ((presenceRaw ?? []) as UserPresenceRow[]);
 
   const moduleRegistry = (registryRaw ?? []) as ModuleRegistryRow[];
   const organizationModules = (orgModulesRaw ?? []) as OrganizationModuleRow[];
@@ -511,6 +602,7 @@ export default async function Home({ searchParams }: HomeProps) {
     orgsError?.message ??
     statusesError?.message ??
     issuesError?.message ??
+    auditLogsError?.message ??
     projectMembersError?.message ??
     footprintsError?.message ??
     profilesError?.message ??
@@ -536,6 +628,7 @@ export default async function Home({ searchParams }: HomeProps) {
     finInvErr?.message ??
     finItemErr?.message ??
     finPayErr?.message ??
+    (presenceMissingTable ? null : presenceError?.message) ??
     null;
 
   return (
@@ -574,6 +667,8 @@ export default async function Home({ searchParams }: HomeProps) {
         financeInvoices={financeInvoices}
         financeInvoiceItems={financeInvoiceItems}
         financePembayaran={financePembayaran}
+        activityLogs={activityLogs}
+        userPresence={userPresence}
         fetchError={fetchError}
         userEmail={user?.email ?? null}
         userId={user?.id ?? null}

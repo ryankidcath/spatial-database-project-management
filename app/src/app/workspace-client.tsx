@@ -16,7 +16,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { ChevronRight, Loader2, PanelLeft, Trash2 } from "lucide-react";
+import { ChevronRight, PanelLeft, Trash2 } from "lucide-react";
 import {
   addProjectMemberByEmailAction,
   createOrganizationProjectInlineAction,
@@ -36,7 +36,14 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,6 +66,7 @@ import {
   updateTaskLastNoteAction,
 } from "./core-task-actions";
 import { updateProjectPropertiesAction } from "./project-properties-actions";
+import { heartbeatUserPresenceAction } from "./user-presence-actions";
 import {
   deleteAllIssueGeometryFeaturesForIssueAction,
   deleteIssueGeometryFeatureByIdAction,
@@ -103,11 +111,11 @@ const DxfMappingPreviewMap = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div
-        className="flex h-52 min-h-[13rem] w-full items-center justify-center rounded-md border border-dashed border-border bg-muted/30 text-xs text-muted-foreground"
-        role="status"
-      >
-        Memuat pratinjau peta…
+      <div className="flex h-52 min-h-[13rem] w-full items-center justify-center rounded-md border border-dashed border-border bg-muted/30 text-xs text-muted-foreground">
+        <div className="inline-flex items-center gap-2">
+          <Spinner className="size-4" />
+          <span>Harap tunggu, memuat pratinjau peta…</span>
+        </div>
       </div>
     ),
   }
@@ -161,7 +169,10 @@ const WorkspaceMap = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex min-h-[12rem] w-full flex-1 items-center justify-center rounded-md border border-border bg-muted/40 text-sm text-muted-foreground">
-        Memuat peta…
+        <div className="inline-flex items-center gap-2">
+          <Spinner className="size-4" />
+          <span>Harap tunggu, memuat peta…</span>
+        </div>
       </div>
     ),
   }
@@ -243,6 +254,26 @@ export type ProjectMemberRow = {
   display_name: string | null;
 };
 
+export type ActivityLogRow = {
+  id: string;
+  organization_id: string;
+  project_id: string | null;
+  actor_user_id: string;
+  actor_display_name: string | null;
+  action: string;
+  entity: string;
+  entity_id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type UserPresenceRow = {
+  user_id: string;
+  project_id: string;
+  last_seen_at: string;
+  updated_at: string;
+};
+
 type Props = {
   organizations: OrganizationRow[];
   projects: ProjectRow[];
@@ -271,6 +302,8 @@ type Props = {
   financeInvoices?: FinanceInvoiceRow[];
   financeInvoiceItems?: FinanceInvoiceItemRow[];
   financePembayaran?: FinancePembayaranRow[];
+  activityLogs?: ActivityLogRow[];
+  userPresence?: UserPresenceRow[];
   fetchError: string | null;
   userEmail: string | null;
   /** Untuk cek owner saat edit properti project. */
@@ -676,18 +709,110 @@ function formatDateTime(value: string | null): string {
   }).format(date);
 }
 
+function normalizeMilestoneTitleKey(title: string): string {
+  return title.trim().toLocaleLowerCase();
+}
+
+const STANDARD_TASK_TITLE_ORDER = [
+  "koordinasi",
+  "daftar tkad",
+  "invoice/pembayaran",
+  "pemasangan patok",
+  "penjadwalan pengukuran",
+  "pengukuran",
+  "pemetaan",
+  "pembuatan laporan",
+] as const;
+
+const STANDARD_TASK_TITLE_RANK: Map<string, number> = new Map(
+  STANDARD_TASK_TITLE_ORDER.map((k, idx) => [k, idx] as const)
+);
+
+function compareIssueByStandardTaskOrder(a: IssueRow, b: IssueRow): number {
+  const ak = normalizeMilestoneTitleKey(a.title);
+  const bk = normalizeMilestoneTitleKey(b.title);
+  const ar = STANDARD_TASK_TITLE_RANK.get(ak);
+  const br = STANDARD_TASK_TITLE_RANK.get(bk);
+  if (ar != null && br != null && ar !== br) return ar - br;
+  if (ar != null && br == null) return -1;
+  if (ar == null && br != null) return 1;
+  if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+  const titleCmp = a.title.localeCompare(b.title, "id", { sensitivity: "base" });
+  if (titleCmp !== 0) return titleCmp;
+  return a.id.localeCompare(b.id);
+}
+
+function compareFeatureKeyNatural(a: string, b: string): number {
+  return a.localeCompare(b, "id", { numeric: true, sensitivity: "base" });
+}
+
+function initialsFromName(name: string): string {
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
+}
+
+function formatAuditActionLabel(action: string): string {
+  const map: Record<string, string> = {
+    task_created: "Buat tugas",
+    task_progress_updated: "Ubah progres tugas",
+    task_basic_updated: "Ubah detail tugas",
+    task_deleted: "Hapus tugas",
+    task_note_updated: "Ubah catatan tugas",
+    task_note_cleared: "Hapus catatan tugas",
+    task_status_set: "Set status tugas",
+    task_status_cycled: "Rotasi status tugas",
+    task_marked_done: "Tandai tugas selesai",
+    task_reopened: "Buka ulang tugas",
+    task_children_cloned: "Duplikasi turunan tugas",
+    project_deleted: "Hapus project",
+    project_created: "Buat project",
+    project_member_added: "Tambah anggota project",
+    project_properties_updated: "Ubah properti project",
+    geometry_feature_upserted: "Simpan geometri",
+    geometry_feature_batch_upserted: "Impor geometri batch",
+    geometry_feature_dxf_imported: "Impor geometri DXF",
+    geometry_feature_properties_updated: "Ubah properti geometri",
+    geometry_feature_deleted: "Hapus geometri",
+    geometry_feature_deleted_all: "Hapus semua geometri unit",
+    feature_attribute_csv_upserted: "Impor atribut CSV",
+    feature_attribute_upserted: "Simpan atribut fitur",
+    feature_attribute_deleted: "Hapus atribut fitur",
+    user_logged_in: "Login",
+    user_logged_out: "Logout",
+  };
+  return map[action] ?? action.replaceAll("_", " ");
+}
+
+function compareIssueTitleAsc(a: IssueRow, b: IssueRow): number {
+  const titleCmp = a.title.localeCompare(b.title, "id", { sensitivity: "base" });
+  if (titleCmp !== 0) return titleCmp;
+  return a.id.localeCompare(b.id);
+}
+
 function buildIssuesChildByParentForMonitoring(
   projectIssues: IssueRow[]
 ): Map<string, IssueRow[]> {
   const childByParent = new Map<string, IssueRow[]>();
+  const issueById = new Map(projectIssues.map((i) => [i.id, i] as const));
   for (const i of projectIssues) {
     if (!i.parent_id) continue;
     const arr = childByParent.get(i.parent_id) ?? [];
     arr.push(i);
     childByParent.set(i.parent_id, arr);
   }
-  for (const arr of childByParent.values()) {
-    arr.sort((a, b) => a.sort_order - b.sort_order);
+  for (const [parentId, arr] of childByParent.entries()) {
+    const parent = issueById.get(parentId);
+    const isVillageLevel = parent != null && !parent.parent_id;
+    if (isVillageLevel) {
+      arr.sort(compareIssueTitleAsc);
+      continue;
+    }
+    arr.sort(compareIssueByStandardTaskOrder);
   }
   return childByParent;
 }
@@ -700,7 +825,19 @@ function computeVillageProgressForParent(
   milestoneColumnOrder: string[] | null
 ): { milestoneTitles: string[]; rows: SubtreeVillageProgressRow[] } {
   const villageIssues = childByParent.get(parentId) ?? [];
-  const milestoneTitleSet = new Set<string>();
+  const milestoneTitleByKey = new Map<string, string>();
+  const orderedMilestoneTitles =
+    milestoneColumnOrder != null && milestoneColumnOrder.length > 0
+      ? milestoneColumnOrder
+      : null;
+  const orderedTitleByKey = new Map<string, string>();
+  if (orderedMilestoneTitles) {
+    for (const title of orderedMilestoneTitles) {
+      const key = normalizeMilestoneTitleKey(title);
+      if (!key || orderedTitleByKey.has(key)) continue;
+      orderedTitleByKey.set(key, title.trim() || title);
+    }
+  }
   const rows: SubtreeVillageProgressRow[] = [];
 
   for (const village of villageIssues) {
@@ -714,12 +851,16 @@ function computeVillageProgressForParent(
       const st = ms.status_id ? statusById.get(ms.status_id) : undefined;
       const category = st?.category ?? "todo";
       if (category === "done") doneCount++;
-      milestoneMetaByTitle.set(ms.title, {
+      const titleKey = normalizeMilestoneTitleKey(ms.title);
+      if (!titleKey) continue;
+      milestoneMetaByTitle.set(titleKey, {
         issueId: ms.id,
         category,
       });
-      if (milestoneColumnOrder == null || milestoneColumnOrder.length === 0) {
-        milestoneTitleSet.add(ms.title);
+      if (!orderedMilestoneTitles) {
+        if (!milestoneTitleByKey.has(titleKey)) {
+          milestoneTitleByKey.set(titleKey, ms.title.trim() || ms.title);
+        }
       }
     }
     const totalCount = milestones.length;
@@ -734,9 +875,9 @@ function computeVillageProgressForParent(
   }
 
   const milestoneTitles =
-    milestoneColumnOrder != null && milestoneColumnOrder.length > 0
-      ? [...milestoneColumnOrder]
-      : [...milestoneTitleSet];
+    orderedMilestoneTitles != null
+      ? [...orderedTitleByKey.values()]
+      : [...milestoneTitleByKey.values()];
 
   return { milestoneTitles, rows };
 }
@@ -818,6 +959,7 @@ function flattenIssuesWithDepth(
   issues: IssueRow[]
 ): { issue: IssueRow; depth: number }[] {
   const list = issues.filter((i) => i.project_id === projectId);
+  const issueById = new Map(list.map((i) => [i.id, i] as const));
   const byParent = new Map<string | null, IssueRow[]>();
   for (const i of list) {
     const k = i.parent_id;
@@ -825,7 +967,13 @@ function flattenIssuesWithDepth(
     arr.push(i);
     byParent.set(k, arr);
   }
-  for (const arr of byParent.values()) {
+  for (const [parentId, arr] of byParent.entries()) {
+    const parent = parentId ? issueById.get(parentId) : null;
+    const isVillageLevel = parent != null && !parent.parent_id;
+    if (isVillageLevel) {
+      arr.sort(compareIssueTitleAsc);
+      continue;
+    }
     arr.sort((a, b) => a.sort_order - b.sort_order);
   }
   const out: { issue: IssueRow; depth: number }[] = [];
@@ -1132,7 +1280,9 @@ function MonitoringMatrixCard({
                   {row.villageIssue.title}
                 </td>
                 {milestoneTitles.map((title) => {
-                  const meta = row.milestoneMetaByTitle.get(title);
+                  const meta = row.milestoneMetaByTitle.get(
+                    normalizeMilestoneTitleKey(title)
+                  );
                   const effectiveCategory =
                     meta == null
                       ? "todo"
@@ -1388,6 +1538,8 @@ export function WorkspaceClient({
   financeInvoices = [],
   financeInvoiceItems = [],
   financePembayaran = [],
+  activityLogs = [],
+  userPresence = [],
   fetchError,
   userEmail,
   userId = null,
@@ -1402,6 +1554,7 @@ export function WorkspaceClient({
   const [, startStatusRefreshTransition] = useTransition();
   const [projectPropertiesOpen, setProjectPropertiesOpen] = useState(false);
   const [projectPropertiesPending, setProjectPropertiesPending] = useState(false);
+  const [liveUserPresence, setLiveUserPresence] = useState<UserPresenceRow[]>(userPresence);
   const [tableTaskDialogOpen, setTableTaskDialogOpen] = useState(false);
   const [monitoringAddChildOpen, setMonitoringAddChildOpen] = useState(false);
   const [monitoringAddChildFormNonce, setMonitoringAddChildFormNonce] = useState(0);
@@ -1605,12 +1758,18 @@ export function WorkspaceClient({
   }, [resetMapDxfState]);
   const [memberPending, startMemberTransition] = useTransition();
   const [scopeNavPending, startScopeNavTransition] = useTransition();
+  const [viewSwitchPending, startViewSwitchTransition] = useTransition();
+  const [scopeRoutePending, setScopeRoutePending] = useState(false);
+  const [delayedViewPending, setDelayedViewPending] = useState(false);
+  const viewPendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceActionPending =
     taskPending ||
     mapGeomPending ||
     memberPending ||
     projectPropertiesPending ||
-    scopeNavPending;
+    scopeNavPending ||
+    scopeRoutePending ||
+    delayedViewPending;
   const [taskDeleteConfirm, setTaskDeleteConfirm] =
     useState<TaskDeleteConfirmState | null>(null);
   const [taskNoteEditor, setTaskNoteEditor] = useState<TaskNoteEditorState | null>(null);
@@ -1629,6 +1788,7 @@ export function WorkspaceClient({
   const taskNoteInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [projectDeleteConfirm, setProjectDeleteConfirm] =
     useState<ProjectDeleteConfirmState | null>(null);
+  const [activityLogFilter, setActivityLogFilter] = useState<"all" | "session">("all");
   const [projectMsg, setProjectMsg] = useState<string | null>(null);
   const [organizationMsg, setOrganizationMsg] = useState<string | null>(null);
   const [memberMsg, setMemberMsg] = useState<string | null>(null);
@@ -1639,6 +1799,10 @@ export function WorkspaceClient({
     parentIssueIdsWithChildren(issues)
   );
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    setLiveUserPresence(userPresence);
+  }, [userPresence]);
 
   const orgsWithProjects = useMemo(() => {
     const ids = new Set(projects.map((p) => p.organization_id));
@@ -1710,13 +1874,51 @@ export function WorkspaceClient({
     };
   }, []);
 
-  /** Jika `issues` kosong di render pertama, terapkan default collapse setelah data ada. */
-  const issueTreeCollapseSeeded = useRef(false);
   useEffect(() => {
-    if (issueTreeCollapseSeeded.current || issues.length === 0) return;
-    issueTreeCollapseSeeded.current = true;
-    setCollapsedIssueIds(parentIssueIdsWithChildren(issues));
-  }, [issues]);
+    if (!selectedProjectId || !userId) return;
+    let stopped = false;
+    const beat = async () => {
+      if (stopped) return;
+      const fd = new FormData();
+      fd.set("project_id", selectedProjectId);
+      const r = await heartbeatUserPresenceAction(fd);
+      if (stopped || r.error) return;
+      const nowIso = new Date().toISOString();
+      setLiveUserPresence((prev) => {
+        const next = prev.filter(
+          (p) => !(p.user_id === userId && p.project_id === selectedProjectId)
+        );
+        next.push({
+          user_id: userId,
+          project_id: selectedProjectId,
+          last_seen_at: nowIso,
+          updated_at: nowIso,
+        });
+        return next;
+      });
+    };
+    void beat();
+    const timer = setInterval(() => {
+      void beat();
+    }, 30_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [selectedProjectId, userId]);
+
+  /** Saat login awal / pindah organisasi, reset tree issue ke kondisi collapsed default. */
+  useEffect(() => {
+    if (!canonicalOrgId) return;
+    const projectIdsInOrg = new Set(
+      projects
+        .filter((p) => p.organization_id === canonicalOrgId)
+        .map((p) => p.id)
+    );
+    setCollapsedProjectIds(new Set(projectIdsInOrg));
+    const issuesInOrg = issues.filter((i) => projectIdsInOrg.has(i.project_id));
+    setCollapsedIssueIds(parentIssueIdsWithChildren(issuesInOrg));
+  }, [canonicalOrgId, projects, issues]);
 
   const selectedBerkasId = useMemo(() => {
     if (parseViewParam(searchParams.get("view")) !== "Berkas") return null;
@@ -2078,6 +2280,13 @@ export function WorkspaceClient({
       (g) => g.project_id === selectedProjectId
     );
   }, [issueGeometryFeatureMap, selectedProjectId]);
+  const geometrySummary = useMemo(() => {
+    const geometryCount = issueGeometryForSelectedProject.length;
+    const issueCountWithGeometry = new Set(
+      issueGeometryForSelectedProject.map((g) => g.issue_id)
+    ).size;
+    return { geometryCount, issueCountWithGeometry };
+  }, [issueGeometryForSelectedProject]);
 
   const issueIdsInSelectedTaskSubtree = useMemo(() => {
     if (!selectedProjectId || !selectedTaskId) return null;
@@ -2254,7 +2463,7 @@ export function WorkspaceClient({
           const bt = issueTitleById.get(b.issue_id) ?? "";
           return (
             at.localeCompare(bt) ||
-            a.feature_key.localeCompare(b.feature_key) ||
+            compareFeatureKeyNatural(a.feature_key, b.feature_key) ||
             a.id.localeCompare(b.id)
           );
         });
@@ -2370,7 +2579,7 @@ export function WorkspaceClient({
     if (selectedTaskId) {
       const children = issues
         .filter((i) => i.parent_id === selectedTaskId)
-        .sort((a, b) => a.sort_order - b.sort_order);
+        .sort(compareIssueByStandardTaskOrder);
       /** Baris unit terpilih tidak ditampilkan; hanya turunan langsungnya. */
       return children.map((issue) => ({ issue, depth: 0 }));
     }
@@ -2379,6 +2588,89 @@ export function WorkspaceClient({
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((issue) => ({ issue, depth: 0 }));
   }, [selectedProjectId, selectedTaskId, issues]);
+
+  const activityLogsInScope = useMemo(() => {
+    if (!selectedProjectId) return [] as ActivityLogRow[];
+    const selectedTaskIssueId = selectedTaskId ?? null;
+    return activityLogs
+      .filter((log) => log.project_id === selectedProjectId)
+      .filter((log) => {
+        if (!selectedTaskIssueId) return true;
+        if (log.entity === "issue" && log.entity_id === selectedTaskIssueId) return true;
+        const payloadIssueId =
+          typeof log.payload?.issue_id === "string" ? log.payload.issue_id : null;
+        const payloadTargetIssueId =
+          typeof log.payload?.target_issue_id === "string"
+            ? log.payload.target_issue_id
+            : null;
+        return (
+          payloadIssueId === selectedTaskIssueId || payloadTargetIssueId === selectedTaskIssueId
+        );
+      })
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+      .slice(0, 20);
+  }, [activityLogs, selectedProjectId, selectedTaskId]);
+  const filteredActivityLogsInScope = useMemo(() => {
+    if (activityLogFilter === "all") return activityLogsInScope;
+    return activityLogsInScope.filter(
+      (log) => log.action === "user_logged_in" || log.action === "user_logged_out"
+    );
+  }, [activityLogFilter, activityLogsInScope]);
+
+  const onlineUsersForSelectedProject = useMemo(() => {
+    if (!selectedProjectId) return [] as Array<{ userId: string; name: string; at: string }>;
+    const timeoutMs = 90_000;
+    const nowMs = Date.now();
+    const online = liveUserPresence
+      .filter((p) => p.project_id === selectedProjectId)
+      .filter((p) => {
+        const seenMs = Date.parse(p.last_seen_at);
+        if (!Number.isFinite(seenMs)) return false;
+        return nowMs - seenMs <= timeoutMs;
+      })
+      .map((p) => ({
+        userId: p.user_id,
+        name: memberNameByUserId.get(p.user_id) ?? p.user_id,
+        at: p.last_seen_at,
+      }))
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    return online;
+  }, [liveUserPresence, memberNameByUserId, selectedProjectId]);
+
+  const memberPresenceRowsForSelectedProject = useMemo(() => {
+    if (!selectedProjectId) {
+      return [] as Array<{ userId: string; name: string; isOnline: boolean; lastSeenAt: string | null }>;
+    }
+    const timeoutMs = 90_000;
+    const nowMs = Date.now();
+    const seenByUser = new Map<string, string>();
+    for (const p of liveUserPresence) {
+      if (p.project_id !== selectedProjectId) continue;
+      const prev = seenByUser.get(p.user_id);
+      if (!prev || Date.parse(p.last_seen_at) > Date.parse(prev)) {
+        seenByUser.set(p.user_id, p.last_seen_at);
+      }
+    }
+    return projectMembersForSelectedProject
+      .map((m) => {
+        const lastSeenAt = seenByUser.get(m.user_id) ?? null;
+        const seenMs = lastSeenAt ? Date.parse(lastSeenAt) : NaN;
+        const isOnline = Number.isFinite(seenMs) && nowMs - seenMs <= timeoutMs;
+        return {
+          userId: m.user_id,
+          name: m.display_name?.trim() || m.user_id,
+          isOnline,
+          lastSeenAt,
+        };
+      })
+      .sort((a, b) => {
+        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+        const aSeen = a.lastSeenAt ? Date.parse(a.lastSeenAt) : 0;
+        const bSeen = b.lastSeenAt ? Date.parse(b.lastSeenAt) : 0;
+        if (aSeen !== bSeen) return bSeen - aSeen;
+        return a.name.localeCompare(b.name);
+      });
+  }, [liveUserPresence, projectMembersForSelectedProject, selectedProjectId]);
 
   /** Label tab Tabel mengikuti properti project & kedalaman scope. */
   const tabelViewUi = useMemo(() => {
@@ -2530,10 +2822,10 @@ export function WorkspaceClient({
     for (const root of roots) {
       for (const v of childByParent.get(root.id) ?? []) {
         for (const m of childByParent.get(v.id) ?? []) {
-          if (!seen.has(m.title)) {
-            seen.add(m.title);
-            order.push(m.title);
-          }
+          const key = normalizeMilestoneTitleKey(m.title);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          order.push(m.title.trim() || m.title);
         }
       }
     }
@@ -2600,14 +2892,39 @@ export function WorkspaceClient({
 
   const replaceQuery = useCallback(
     (mutate: (p: URLSearchParams) => void) => {
+      const currentQuery = searchParams.toString();
+      const p = new URLSearchParams(currentQuery);
+      mutate(p);
+      const nextQuery = p.toString();
+      if (nextQuery === currentQuery) return;
+      setScopeRoutePending(true);
       startScopeNavTransition(() => {
-        const p = new URLSearchParams(searchParams.toString());
-        mutate(p);
         void router.replace(`/?${p.toString()}`, { scroll: false });
       });
     },
     [router, searchParams, startScopeNavTransition]
   );
+
+  useEffect(() => {
+    if (!scopeRoutePending) return;
+    setScopeRoutePending(false);
+  }, [searchParams, scopeRoutePending]);
+
+  useEffect(() => {
+    if (viewSwitchPending) {
+      if (viewPendingTimerRef.current) clearTimeout(viewPendingTimerRef.current);
+      viewPendingTimerRef.current = setTimeout(() => {
+        setDelayedViewPending(true);
+        viewPendingTimerRef.current = null;
+      }, 250);
+      return;
+    }
+    if (viewPendingTimerRef.current) {
+      clearTimeout(viewPendingTimerRef.current);
+      viewPendingTimerRef.current = null;
+    }
+    setDelayedViewPending(false);
+  }, [viewSwitchPending]);
 
   /** Hanya mengubah `task` — tidak memicu RSC; data server tidak bergantung pada query `task`. */
   const commitTaskSelection = useCallback(
@@ -3333,14 +3650,16 @@ export function WorkspaceClient({
           value={activeView}
           onValueChange={(value) => {
             const v = value as ViewId;
-            setActiveView(v);
-            const q = new URLSearchParams(searchParams.toString());
-            q.set("view", viewToParam(v));
-            if (v !== "Berkas" && v !== "Map") {
-              q.delete("berkas");
-            }
-            const next = `/?${q.toString()}`;
-            window.history.replaceState(window.history.state, "", next);
+            startViewSwitchTransition(() => {
+              setActiveView(v);
+              const q = new URLSearchParams(searchParams.toString());
+              q.set("view", viewToParam(v));
+              if (v !== "Berkas" && v !== "Map") {
+                q.delete("berkas");
+              }
+              const next = `/?${q.toString()}`;
+              window.history.replaceState(window.history.state, "", next);
+            });
           }}
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
         >
@@ -3375,6 +3694,75 @@ export function WorkspaceClient({
             </div>
             {userEmail && (
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {selectedProjectId && (
+                  <Popover>
+                    <PopoverTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-auto gap-1.5 px-2 py-1 text-xs leading-none"
+                        >
+                          <div className="flex -space-x-1">
+                            {onlineUsersForSelectedProject.slice(0, 3).map((u) => (
+                              <span
+                                key={u.userId}
+                                className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-background bg-emerald-100 text-[9px] font-medium text-emerald-700"
+                                title={u.name}
+                              >
+                                {initialsFromName(u.name)}
+                              </span>
+                            ))}
+                            {onlineUsersForSelectedProject.length === 0 ? (
+                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-background bg-muted text-[9px] text-muted-foreground">
+                                0
+                              </span>
+                            ) : null}
+                          </div>
+                          <span className="text-xs leading-none">
+                            Online {onlineUsersForSelectedProject.length}
+                          </span>
+                        </Button>
+                      }
+                    />
+                    <PopoverContent align="end" className="w-72">
+                      <PopoverHeader>
+                        <PopoverTitle>Online sekarang</PopoverTitle>
+                        <p className="text-xs text-muted-foreground">
+                          {onlineUsersForSelectedProject.length} online dari{" "}
+                          {memberPresenceRowsForSelectedProject.length} anggota
+                        </p>
+                      </PopoverHeader>
+                      {memberPresenceRowsForSelectedProject.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Belum ada anggota project.
+                        </p>
+                      ) : (
+                        <ul className="space-y-1.5">
+                          {memberPresenceRowsForSelectedProject.slice(0, 16).map((u) => (
+                            <li key={u.userId} className="flex items-center justify-between gap-2 text-xs">
+                              <div className="min-w-0">
+                                <p className="truncate font-medium text-foreground">{u.name}</p>
+                                <p className="truncate text-muted-foreground">
+                                  {u.lastSeenAt
+                                    ? `terakhir aktif ${formatDateTime(u.lastSeenAt)}`
+                                    : "belum terdeteksi aktif"}
+                                </p>
+                              </div>
+                              <span
+                                className={cn(
+                                  "h-2 w-2 shrink-0 rounded-full",
+                                  u.isOnline ? "bg-emerald-500" : "bg-muted-foreground/40"
+                                )}
+                              />
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </PopoverContent>
+                  </Popover>
+                )}
                 <NotificationsBell notifications={userNotifications} />
                 <ThemeToggle />
                 <form action={signOut} className="flex shrink-0 items-center gap-2">
@@ -3404,23 +3792,16 @@ export function WorkspaceClient({
         >
           {workspaceActionPending ? (
             <div
-              className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background/70 px-6 py-12 backdrop-blur-[1.5px]"
+              className="absolute inset-0 z-40 bg-background/70 px-6 py-6 backdrop-blur-[2px]"
               role="status"
               aria-live="polite"
               aria-label="Memproses permintaan"
             >
-              <Loader2
-                className="h-8 w-8 animate-spin text-primary"
-                aria-hidden
-              />
-              <p className="text-sm font-medium text-foreground">Memproses…</p>
-              <p className="max-w-sm text-center text-xs text-muted-foreground">
-                Mohon tunggu sebentar. Area ini tidak merespons klik sampai selesai.
-              </p>
-              <div className="mt-2 w-full max-w-xs space-y-2">
-                <Skeleton className="h-2.5 w-full" />
-                <Skeleton className="h-2.5 w-[88%]" />
-                <Skeleton className="h-2.5 w-[72%]" />
+              <div className="flex h-full items-center justify-center">
+                <div className="inline-flex items-center gap-3 rounded-lg border border-border bg-card/95 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                  <Spinner className="size-4" />
+                  <span>Harap tunggu, data sedang dimuat…</span>
+                </div>
               </div>
             </div>
           ) : null}
@@ -3582,8 +3963,8 @@ export function WorkspaceClient({
                         </div>
                       </>
                     ) : (
-                      <div className="mt-2 flex min-h-0 flex-col gap-4 lg:flex-row lg:items-stretch">
-                        <div className="flex w-full flex-col gap-2 lg:w-72 lg:max-w-xs lg:shrink-0">
+                      <div className="mt-2 space-y-4">
+                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                           {hierarchySummaryRows.map((row) => (
                             <Card key={`h:${row.depth}`} className={DASHBOARD_GRADIENT_CARD}>
                               <CardContent className="p-5">
@@ -3606,6 +3987,26 @@ export function WorkspaceClient({
                               </CardContent>
                             </Card>
                           ))}
+                          <Card className={DASHBOARD_GRADIENT_CARD}>
+                            <CardContent className="p-5">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="font-sans text-sm font-medium leading-none tracking-normal text-muted-foreground/90">
+                                  Geometri
+                                </p>
+                                <Badge className="rounded-full px-2 py-0 font-sans text-[10px] font-semibold leading-5 border border-sky-500/25 bg-gradient-to-b from-sky-500/20 to-sky-500/8 text-sky-700/95 dark:text-sky-300">
+                                  tersimpan
+                                </Badge>
+                              </div>
+                              <p className="mt-2 font-sans text-4xl font-bold leading-none tracking-normal text-foreground tabular-nums">
+                                {geometrySummary.geometryCount.toLocaleString("id-ID")}
+                              </p>
+                              <p className="mt-5 font-sans text-base font-semibold leading-snug tracking-normal text-foreground">
+                                pada{" "}
+                                {geometrySummary.issueCountWithGeometry.toLocaleString("id-ID")}{" "}
+                                unit kerja
+                              </p>
+                            </CardContent>
+                          </Card>
                         </div>
                         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:min-w-0 lg:flex-row lg:items-stretch lg:gap-4">
                           <div
@@ -3730,48 +4131,55 @@ export function WorkspaceClient({
                     taskMsg={taskMsg}
                   />
                 )}
-                {!selectedTaskId &&
-                  selectedProjectId &&
-                  projectMonitoringBlocks.length > 0 && (
-                    <div className="mt-8 space-y-8">
-                      {projectMonitoringBlocks.map((block) => (
-                        <MonitoringMatrixCard
-                          key={block.rootId}
-                          rootClassName=""
-                          blockTitle={block.rootTitle}
-                          rowHeader={block.rowHeader}
-                          leafHeader={block.leafHeader}
-                          milestoneTitles={block.milestoneTitles}
-                          rows={block.rows}
-                          onAddChild={() => {
-                            setTaskMsg(null);
-                            setMonitoringAddChildContext({
-                              parentId: block.rootId,
-                              parentTitle: block.rootTitle,
-                              parentHeader: block.parentHeader,
-                              rowHeader: block.rowHeader,
-                              leafHeader: block.leafHeader,
-                            });
-                            setMonitoringAddChildFormNonce((n) => n + 1);
-                            setMonitoringAddChildOpen(true);
-                          }}
-                          addChildDisabled={taskPending || !selectedProjectId}
-                          selectedProjectId={selectedProjectId}
-                          taskPending={taskPending}
-                          memberNameByUserId={memberNameByUserId}
-                          taskCloneDialog={taskCloneDialog}
-                          setTaskCloneDialog={setTaskCloneDialog}
-                          setTaskMsg={setTaskMsg}
-                          startTaskTransition={startTaskTransition}
-                          firstStatusIdByCategory={firstStatusIdByCategory}
-                          queueStatusCommit={queueStatusCommit}
-                          onAfterMutation={() => router.refresh()}
-                          setTaskNoteEditor={setTaskNoteEditor}
-                          taskMsg={taskMsg}
-                        />
-                      ))}
+                {/* Eksperimen performa: sembunyikan matriks project-wide di Dashboard level project. */}
+                {selectedProjectId && (
+                  <div className="mt-8 rounded-xl border border-border bg-card shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+                      <p className="text-sm font-semibold text-foreground">Aktivitas terbaru</p>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant={activityLogFilter === "all" ? "secondary" : "outline"}
+                          onClick={() => setActivityLogFilter("all")}
+                        >
+                          Semua
+                        </Button>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant={activityLogFilter === "session" ? "secondary" : "outline"}
+                          onClick={() => setActivityLogFilter("session")}
+                        >
+                          Sesi user
+                        </Button>
+                      </div>
                     </div>
-                  )}
+                    {filteredActivityLogsInScope.length === 0 ? (
+                      <p className="px-4 py-3 text-xs text-muted-foreground">
+                        {activityLogFilter === "session"
+                          ? "Belum ada aktivitas sesi user pada scope ini."
+                          : "Belum ada aktivitas tercatat pada scope ini."}
+                      </p>
+                    ) : (
+                      <ul className="divide-y divide-border/70">
+                        {filteredActivityLogsInScope.map((log) => (
+                          <li key={log.id} className="px-4 py-2.5 text-xs">
+                            <p className="text-foreground">
+                              <span className="font-medium">
+                                {log.actor_display_name ?? log.actor_user_id}
+                              </span>{" "}
+                              • {formatAuditActionLabel(log.action)}
+                            </p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              {formatDateTime(log.created_at)} • {log.entity}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 <Dialog
                   open={monitoringAddChildOpen && monitoringAddChildContext != null}
                   onOpenChange={(open) => {

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { writeProjectAuditLog } from "./audit-log-actions";
 
 export type UpsertIssueFeatureAttributesBatchResult = {
   error: string | null;
@@ -179,6 +180,15 @@ export async function upsertIssueFeatureAttributesCsvAction(
     insertedOrUpdated++;
   }
 
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "feature_attribute_csv_upserted",
+    entity: "issue_feature_attribute",
+    entityId: issueId,
+    payload: { issue_id: issueId, inserted_or_updated: insertedOrUpdated, failed },
+  });
+
   revalidatePath("/", "layout");
   return { error: null, insertedOrUpdated, failed, failureSamples };
 }
@@ -235,6 +245,15 @@ export async function upsertIssueFeatureAttributePayloadAction(
     );
   if (upErr) return { error: upErr.message };
 
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "feature_attribute_upserted",
+    entity: "issue_feature_attribute",
+    entityId: issueId,
+    payload: { issue_id: issueId, feature_key: featureKey },
+  });
+
   revalidatePath("/", "layout");
   return { error: null };
 }
@@ -271,6 +290,15 @@ export async function deleteIssueFeatureAttributeAction(
     .eq("feature_key", featureKey);
 
   if (delErr) return { error: delErr.message };
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "feature_attribute_deleted",
+    entity: "issue_feature_attribute",
+    entityId: issueId,
+    payload: { issue_id: issueId, feature_key: featureKey },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };

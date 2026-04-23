@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { writeProjectAuditLog, writeUserAuthAuditLog } from "../audit-log-actions";
 import {
   getSignupMode,
   isEmailAllowedForSignup,
@@ -17,9 +18,16 @@ export async function login(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
 
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
     redirect("/login?error=" + encodeURIComponent(error.message));
+  }
+  if (data.user?.id) {
+    await writeUserAuthAuditLog(supabase, {
+      actorUserId: data.user.id,
+      action: "user_logged_in",
+      payload: { source: "password_login", email },
+    });
   }
 
   revalidatePath("/", "layout");
@@ -91,6 +99,16 @@ export async function signup(formData: FormData) {
 export async function signOut() {
   const supabase = await createServerSupabaseClient();
   if (supabase) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user?.id) {
+      await writeUserAuthAuditLog(supabase, {
+        actorUserId: user.id,
+        action: "user_logged_out",
+        payload: { source: "manual_signout", email: user.email ?? null },
+      });
+    }
     await supabase.auth.signOut();
   }
   revalidatePath("/", "layout");
@@ -252,6 +270,15 @@ export async function createOrganizationProjectInlineAction(
     return { error: "Gagal membaca organisasi/project yang baru dibuat." };
   }
 
+  await writeProjectAuditLog(supabase, {
+    projectId: projectRow.id,
+    actorUserId: user.id,
+    action: "project_created",
+    entity: "project",
+    entityId: projectRow.id,
+    payload: { organization_id: projectRow.organization_id, project_name: projectName },
+  });
+
   revalidatePath("/", "layout");
   return {
     error: null,
@@ -303,6 +330,15 @@ export async function addProjectMemberByEmailAction(
     }
     return { error: error.message };
   }
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "project_member_added",
+    entity: "project_member",
+    entityId: projectId,
+    payload: { email, role },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };

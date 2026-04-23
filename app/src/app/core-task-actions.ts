@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { writeProjectAuditLog } from "./audit-log-actions";
 
 export type CreateProjectTaskResult = { error: string | null };
 export type SetTaskDoneResult = { error: string | null };
@@ -489,6 +490,14 @@ export async function createProjectTaskAction(
       insertedIssue.id
     );
     if (statusSyncErr) return { error: statusSyncErr };
+    await writeProjectAuditLog(supabase, {
+      projectId,
+      actorUserId: user.id,
+      action: "task_created",
+      entity: "issue",
+      entityId: insertedIssue.id,
+      payload: { title, parent_id: parentId, status_id: statusId },
+    });
   }
 
   revalidatePath("/", "layout");
@@ -554,6 +563,19 @@ export async function updateTaskProgressAction(
     }
   }
 
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "task_progress_updated",
+    entity: "issue",
+    entityId: issueId,
+    payload: {
+      progress_target: progressTarget,
+      progress_actual: progressActual,
+      issue_weight: issueWeight,
+    },
+  });
+
   revalidatePath("/", "layout");
   return { error: null };
 }
@@ -603,6 +625,15 @@ export async function updateTaskBasicAction(
     return { error: error.message };
   }
 
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "task_basic_updated",
+    entity: "issue",
+    entityId: issueId,
+    payload: { title, starts_at: startsAt, due_at: dueAt },
+  });
+
   revalidatePath("/", "layout");
   return { error: null };
 }
@@ -636,6 +667,15 @@ export async function setTaskDoneAction(
     issueId
   );
   if (statusSyncErr) return { error: statusSyncErr };
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "task_marked_done",
+    entity: "issue",
+    entityId: issueId,
+    payload: {},
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -721,6 +761,15 @@ export async function reopenTaskAction(
   );
   if (statusSyncErr) return { error: statusSyncErr };
 
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "task_reopened",
+    entity: "issue",
+    entityId: issueId,
+    payload: { status_id: reopenStatus.id },
+  });
+
   revalidatePath("/", "layout");
   return { error: null };
 }
@@ -760,6 +809,15 @@ export async function deleteTaskAction(
       error: "Unit kerja tidak ditemukan atau sudah terhapus sebelumnya.",
     };
   }
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "task_deleted",
+    entity: "issue",
+    entityId: issueId,
+    payload: { deleted_count: Number(deletedCount) },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -805,6 +863,14 @@ export async function deleteProjectAction(
   if (error) {
     return { error: error.message };
   }
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "project_deleted",
+    entity: "project",
+    entityId: projectId,
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -866,6 +932,15 @@ export async function updateTaskLastNoteAction(
     issueId
   );
   if (statusSyncErr) return { error: statusSyncErr };
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: lastNote ? "task_note_updated" : "task_note_cleared",
+    entity: "issue",
+    entityId: issueId,
+    payload: { note_length: lastNote.length },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -930,6 +1005,15 @@ export async function cycleTaskStatusAction(
     issueId
   );
   if (statusSyncErr) return { error: statusSyncErr };
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "task_status_cycled",
+    entity: "issue",
+    entityId: issueId,
+    payload: { next_category: nextCategory, status_id: nextStatus.id },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -1080,6 +1164,19 @@ export async function cloneTaskChildrenAction(
     targetIssueId
   );
   if (statusSyncErr) return { error: statusSyncErr };
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "task_children_cloned",
+    entity: "issue",
+    entityId: targetIssueId,
+    payload: {
+      source_issue_id: sourceIssueId,
+      inserted_count: rowsToInsert.length,
+      copy_status: copyStatus,
+    },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };

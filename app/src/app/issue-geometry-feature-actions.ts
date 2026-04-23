@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { writeProjectAuditLog } from "./audit-log-actions";
 import {
   extractClosedPolygonRingsFromDxfLayer,
   featureKeysForDxfPolygons,
@@ -143,6 +144,14 @@ export async function upsertIssueGeometryFeatureAction(
   if (upsertErr) {
     return { error: upsertErr.message };
   }
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "geometry_feature_upserted",
+    entity: "issue_geometry_feature",
+    entityId: issueId,
+    payload: { issue_id: issueId, feature_key: featureKey },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -311,6 +320,15 @@ export async function upsertIssueGeometryFeatureBatchAction(
     insertedOrUpdated++;
   }
 
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "geometry_feature_batch_upserted",
+    entity: "issue_geometry_feature",
+    entityId: issueId,
+    payload: { issue_id: issueId, inserted_or_updated: insertedOrUpdated, failed },
+  });
+
   revalidatePath("/", "layout");
   return {
     error: null,
@@ -391,6 +409,14 @@ export async function updateIssueGeometryFeaturePropertiesAction(
   if (updErr) {
     return { error: updErr.message };
   }
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "geometry_feature_properties_updated",
+    entity: "issue_geometry_feature",
+    entityId: featureId,
+    payload: { issue_id: issueId },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -432,6 +458,14 @@ export async function deleteIssueGeometryFeatureByIdAction(
   if (delErr) {
     return { error: delErr.message };
   }
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "geometry_feature_deleted",
+    entity: "issue_geometry_feature",
+    entityId: featureId,
+    payload: { issue_id: issueId },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -472,6 +506,14 @@ export async function deleteAllIssueGeometryFeaturesForIssueAction(
   if (delErr) {
     return { error: delErr.message, deleted: 0 };
   }
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "geometry_feature_deleted_all",
+    entity: "issue_geometry_feature",
+    entityId: issueId,
+    payload: { issue_id: issueId, deleted: removed?.length ?? 0 },
+  });
 
   revalidatePath("/", "layout");
   return { error: null, deleted: removed?.length ?? 0 };
@@ -694,6 +736,15 @@ export async function upsertIssueGeometryFeaturesFromDxfAction(
     }
     insertedOrUpdated++;
   }
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "geometry_feature_dxf_imported",
+    entity: "issue_geometry_feature",
+    entityId: issueId,
+    payload: { issue_id: issueId, inserted_or_updated: insertedOrUpdated, failed, layer: layerName },
+  });
 
   revalidatePath("/", "layout");
   return {

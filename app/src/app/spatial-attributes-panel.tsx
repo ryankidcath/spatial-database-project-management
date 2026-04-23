@@ -222,6 +222,10 @@ function SpatialAttributesPanelInner({
   unitKerjaColumnLabel,
 }: SpatialAttributesPanelProps) {
   const router = useRouter();
+  const topScrollRef = useRef<HTMLDivElement | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const topScrollInnerRef = useRef<HTMLDivElement | null>(null);
+  const syncLockRef = useRef<"top" | "table" | null>(null);
   const [spatialSearchQuery, setSpatialSearchQuery] = useState("");
   const [, startSpatialSearchFilterTransition] = useTransition();
   const [spatialTablePage, setSpatialTablePage] = useState(1);
@@ -327,6 +331,55 @@ function SpatialAttributesPanelInner({
     return ["feature_key", ...keys.filter((k) => k !== "feature_key")];
   }, [issueGeometryRowsForTableViewFiltered]);
 
+  const syncTopScrollWidth = useCallback(() => {
+    const top = topScrollRef.current;
+    const topInner = topScrollInnerRef.current;
+    const table = tableScrollRef.current;
+    if (!top || !topInner || !table) return;
+    topInner.style.width = `${Math.max(table.scrollWidth, table.clientWidth)}px`;
+  }, []);
+
+  useEffect(() => {
+    syncTopScrollWidth();
+  }, [
+    syncTopScrollWidth,
+    issueGeometryAttributeKeysForTableView.length,
+    issueGeometryRowsForTableViewPaged.length,
+    spatialTablePage,
+  ]);
+
+  useEffect(() => {
+    const top = topScrollRef.current;
+    const table = tableScrollRef.current;
+    if (!top || !table) return;
+
+    const onTopScroll = () => {
+      if (syncLockRef.current === "table") return;
+      syncLockRef.current = "top";
+      table.scrollLeft = top.scrollLeft;
+      syncLockRef.current = null;
+    };
+    const onTableScroll = () => {
+      if (syncLockRef.current === "top") return;
+      syncLockRef.current = "table";
+      top.scrollLeft = table.scrollLeft;
+      syncLockRef.current = null;
+    };
+
+    top.addEventListener("scroll", onTopScroll, { passive: true });
+    table.addEventListener("scroll", onTableScroll, { passive: true });
+    return () => {
+      top.removeEventListener("scroll", onTopScroll);
+      table.removeEventListener("scroll", onTableScroll);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => syncTopScrollWidth();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [syncTopScrollWidth]);
+
   const openSpatialDeleteConfirm = useCallback(
     (row: SpatialAttributeTableRow) => {
       if (!selectedProjectId) return;
@@ -392,7 +445,7 @@ function SpatialAttributesPanelInner({
   );
 
   return (
-    <div className="mt-4 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
+    <div className="mt-4 rounded-xl border border-border bg-card shadow-sm">
       <div className="flex min-w-0 flex-nowrap items-center gap-2 border-b border-border px-4 py-2.5">
         <p className="shrink-0 text-sm font-semibold text-foreground">Atribut Spasial</p>
         <SpatialAttributeSearchField
@@ -757,100 +810,113 @@ function SpatialAttributesPanelInner({
           {spatialDeleteMsg}
         </p>
       )}
-      <table className="w-full min-w-[44rem] border-collapse text-left text-xs">
-        <thead>
-          <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
-            <th className="px-3 py-2 font-medium">{unitKerjaColumnLabel}</th>
-            {issueGeometryAttributeKeysForTableView.map((key) => (
-              <th key={key} className="px-3 py-2 font-medium">
-                {key}
+      <div className="border-b border-border/70">
+        <div
+          ref={topScrollRef}
+          className="overflow-x-auto spatial-attrs-scroll"
+          aria-label="Scroll horizontal atas atribut spasial"
+        >
+          <div ref={topScrollInnerRef} className="h-px" />
+        </div>
+      </div>
+      <div ref={tableScrollRef} className="overflow-x-auto spatial-attrs-scroll">
+        <table className="w-full min-w-[44rem] border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+              <th className="sticky top-0 z-20 bg-card px-3 py-2 font-medium">
+                {unitKerjaColumnLabel}
               </th>
-            ))}
-            <th className="min-w-[9rem] whitespace-nowrap px-3 py-2 text-right font-medium">
-              Aksi
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {issueGeometryRowsForTableViewPaged.map((row) => {
-            const props = issueGeometryPropertiesForDisplay(row);
-            return (
-              <tr key={row.id} className="border-b border-border/70">
-                <td className="px-3 py-2">
-                  {issueTitleById.get(row.issue_id) ?? row.issue_id}
-                </td>
-                {issueGeometryAttributeKeysForTableView.map((key) => (
-                  <td
-                    key={`${row.id}:${key}`}
-                    className="max-w-[260px] truncate px-3 py-2 font-mono"
-                    title={compactValuePreview(props[key], 500)}
-                  >
-                    {compactValuePreview(props[key])}
+              {issueGeometryAttributeKeysForTableView.map((key) => (
+                <th key={key} className="sticky top-0 z-20 bg-card px-3 py-2 font-medium">
+                  {key}
+                </th>
+              ))}
+              <th className="sticky top-0 z-20 min-w-[9rem] whitespace-nowrap bg-card px-3 py-2 text-right font-medium">
+                Aksi
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {issueGeometryRowsForTableViewPaged.map((row) => {
+              const props = issueGeometryPropertiesForDisplay(row);
+              return (
+                <tr key={row.id} className="border-b border-border/70">
+                  <td className="px-3 py-2">
+                    {issueTitleById.get(row.issue_id) ?? row.issue_id}
                   </td>
-                ))}
-                <td className="px-3 py-2 text-right align-middle">
-                  <div className="flex flex-wrap items-center justify-end gap-1">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs"
-                      title="Edit atribut"
-                      disabled={spatialRowDeletingId === row.id}
-                      onClick={() => {
-                        setSpatialAttributeEditMsg(null);
-                        if (row.geometryFeatureId) {
-                          const source = issueGeometryFeatureMap.find(
-                            (g) => g.id === row.geometryFeatureId
-                          );
-                          if (!source) return;
+                  {issueGeometryAttributeKeysForTableView.map((key) => (
+                    <td
+                      key={`${row.id}:${key}`}
+                      className="max-w-[260px] truncate px-3 py-2 font-mono"
+                      title={compactValuePreview(props[key], 500)}
+                    >
+                      {compactValuePreview(props[key])}
+                    </td>
+                  ))}
+                  <td className="px-3 py-2 text-right align-middle">
+                    <div className="flex flex-wrap items-center justify-end gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs"
+                        title="Edit atribut"
+                        disabled={spatialRowDeletingId === row.id}
+                        onClick={() => {
+                          setSpatialAttributeEditMsg(null);
+                          if (row.geometryFeatureId) {
+                            const source = issueGeometryFeatureMap.find(
+                              (g) => g.id === row.geometryFeatureId
+                            );
+                            if (!source) return;
+                            setSpatialAttributeEditEntries(
+                              buildSpatialAttributeEditEntries(source)
+                            );
+                            setSpatialAttributeEditRow(source);
+                            setSpatialAttributeEditAttrRow(null);
+                            return;
+                          }
                           setSpatialAttributeEditEntries(
-                            buildSpatialAttributeEditEntries(source)
+                            buildSpatialAttributeEditEntriesFromTableRow(row)
                           );
-                          setSpatialAttributeEditRow(source);
-                          setSpatialAttributeEditAttrRow(null);
-                          return;
+                          setSpatialAttributeEditRow(null);
+                          setSpatialAttributeEditAttrRow(row);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10"
+                        title={
+                          row.geometryFeatureId
+                            ? "Hapus geometri fitur ini"
+                            : "Hapus baris atribut ini"
                         }
-                        setSpatialAttributeEditEntries(
-                          buildSpatialAttributeEditEntriesFromTableRow(row)
-                        );
-                        setSpatialAttributeEditRow(null);
-                        setSpatialAttributeEditAttrRow(row);
-                      }}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10"
-                      title={
-                        row.geometryFeatureId
-                          ? "Hapus geometri fitur ini"
-                          : "Hapus baris atribut ini"
-                      }
-                      disabled={spatialRowDeletingId === row.id}
-                      onClick={() => openSpatialDeleteConfirm(row)}
-                    >
-                      Hapus
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {issueGeometryRowsForTableViewFiltered.length === 0 && (
-        <p className="m-4 text-xs text-muted-foreground">
-          {spatialSearchQuery
-            ? "Tidak ada data yang cocok dengan kata kunci pencarian."
-            : selectedTaskId
-              ? "Belum ada data atribut/geometri untuk unit kerja terpilih."
-              : "Belum ada data atribut/geometri unit kerja pada project ini."}
-        </p>
-      )}
+                        disabled={spatialRowDeletingId === row.id}
+                        onClick={() => openSpatialDeleteConfirm(row)}
+                      >
+                        Hapus
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {issueGeometryRowsForTableViewFiltered.length === 0 && (
+          <p className="m-4 text-xs text-muted-foreground">
+            {spatialSearchQuery
+              ? "Tidak ada data yang cocok dengan kata kunci pencarian."
+              : selectedTaskId
+                ? "Belum ada data atribut/geometri untuk unit kerja terpilih."
+                : "Belum ada data atribut/geometri unit kerja pada project ini."}
+          </p>
+        )}
+      </div>
       <Dialog
         open={
           spatialAttributeEditRow !== null || spatialAttributeEditAttrRow !== null

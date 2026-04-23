@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { writeProjectAuditLog } from "./audit-log-actions";
 
 export type UpdateProjectPropertiesResult = { error: string | null };
 
@@ -69,6 +70,19 @@ export async function updateProjectPropertiesAction(input: {
   if (error) {
     return { error: error.message };
   }
+
+  await writeProjectAuditLog(supabase, {
+    projectId: pid,
+    actorUserId: user.id,
+    action: "project_properties_updated",
+    entity: "project",
+    entityId: pid,
+    payload: {
+      name,
+      description_len: description.length,
+      hierarchy_labels_count: Object.keys(labelsPayload).length,
+    },
+  });
 
   revalidatePath("/", "layout");
   return { error: null };
