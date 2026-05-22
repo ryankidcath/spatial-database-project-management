@@ -13,7 +13,9 @@ import {
 export type MapFootprintLayerKind =
   | "demo"
   | "bidang_hasil_ukur"
-  | "issue_geometry";
+  | "issue_geometry"
+  | "virtual_table"
+  | "import_preview";
 
 export type MapFootprint = {
   id: string;
@@ -46,10 +48,28 @@ function escapePopupText(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function popupTitle(label: string, layerKind: MapFootprintLayerKind): string {
-  return layerKind === "bidang_hasil_ukur"
-    ? `${label} (hasil ukur PLM)`
-    : label;
+function popupTitle(
+  label: string,
+  layerKind: MapFootprintLayerKind,
+  properties?: Record<string, unknown>
+): string {
+  if (layerKind === "bidang_hasil_ukur") {
+    return `${label} (hasil ukur PLM)`;
+  }
+  if (layerKind === "virtual_table") {
+    const table =
+      typeof properties?.Tabel === "string" ? properties.Tabel.trim() : "";
+    const row =
+      typeof properties?._popup_row_title === "string"
+        ? properties._popup_row_title.trim()
+        : "";
+    if (table && row) return `${table} — ${row}`;
+    if (table) return table;
+  }
+  if (layerKind === "import_preview") {
+    return "Pratinjau impor (belum disimpan)";
+  }
+  return label;
 }
 
 function stringifyValueForPopup(value: unknown): string {
@@ -68,13 +88,18 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function mergedPopupProperties(
   value: unknown,
-  fallbackProperties?: unknown
+  fallbackProperties?: unknown,
+  layerKind?: MapFootprintLayerKind
 ): Record<string, unknown> {
   const featureProps =
     isRecord(value) && isRecord(value.properties) ? value.properties : null;
   const fallbackProps = isRecord(fallbackProperties)
     ? fallbackProperties
     : null;
+  // Tabel virtual: data baris dari DB (fallback) mengalahkan properties GeoJSON.
+  if (layerKind === "virtual_table") {
+    return { ...(featureProps ?? {}), ...(fallbackProps ?? {}) };
+  }
   return { ...(fallbackProps ?? {}), ...(featureProps ?? {}) };
 }
 
@@ -193,10 +218,12 @@ function popupHtmlWithGeoJson(
   value: unknown
 ): string {
   const layerKind = fp.layerKind ?? "demo";
-  const title = escapePopupText(popupTitle(fp.label, layerKind));
-  const properties = mergedPopupProperties(value, fp.popupProperties);
+  const properties = mergedPopupProperties(value, fp.popupProperties, layerKind);
+  const title = escapePopupText(popupTitle(fp.label, layerKind, properties));
   const visibleProperties = Object.fromEntries(
-    Object.entries(properties).filter(([key]) => key !== "_row_id")
+    Object.entries(properties).filter(
+      ([key]) => key !== "_row_id" && key !== "_popup_row_title"
+    )
   );
   const hasProperties = Object.keys(visibleProperties).length > 0;
   const rowsHtml = propertyGridRowsHtml(visibleProperties);
@@ -457,13 +484,21 @@ function polygonStyle(
       ? "#047857"
       : layerKind === "issue_geometry"
         ? "#6d28d9"
-        : "#2563eb";
+        : layerKind === "virtual_table"
+          ? "#b45309"
+          : layerKind === "import_preview"
+            ? "#0d9488"
+            : "#2563eb";
   const defaultFill =
     layerKind === "bidang_hasil_ukur"
       ? "#10b981"
       : layerKind === "issue_geometry"
         ? "#a78bfa"
-        : "#3b82f6";
+        : layerKind === "virtual_table"
+          ? "#fbbf24"
+          : layerKind === "import_preview"
+            ? "#5eead4"
+            : "#3b82f6";
   const stroke =
     typeof props?.stroke === "string" ? props.stroke : defaultStroke;
   let fillColor =
@@ -476,8 +511,9 @@ function polygonStyle(
   return {
     color: stroke,
     fillColor,
-    fillOpacity,
-    weight: 2,
+    fillOpacity: layerKind === "import_preview" ? 0.28 : fillOpacity,
+    weight: layerKind === "import_preview" ? 2.5 : 2,
+    dashArray: layerKind === "import_preview" ? "6 4" : undefined,
   };
 }
 

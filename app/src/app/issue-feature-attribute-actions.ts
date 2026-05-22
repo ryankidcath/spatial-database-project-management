@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { parseSimpleCsv } from "@/lib/csv-parse";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog } from "./audit-log-actions";
 
@@ -33,53 +34,6 @@ async function ensureIssueInProject(
   if (issueErr) return { ok: false, error: issueErr.message };
   if (!issue?.id) return { ok: false, error: "Unit kerja tidak ditemukan pada project ini" };
   return { ok: true };
-}
-
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-        continue;
-      }
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (c === "," && !inQuotes) {
-      out.push(cur);
-      cur = "";
-      continue;
-    }
-    cur += c;
-  }
-  out.push(cur);
-  return out.map((v) => v.trim());
-}
-
-function parseSimpleCsv(raw: string): Array<Record<string, string>> {
-  const lines = raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (lines.length < 2) return [];
-  const headers = parseCsvLine(lines[0]).map((h) => h.trim());
-  const rows: Array<Record<string, string>> = [];
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseCsvLine(lines[i]);
-    const rec: Record<string, string> = {};
-    for (let j = 0; j < headers.length; j++) {
-      const key = headers[j];
-      if (!key) continue;
-      rec[key] = vals[j] ?? "";
-    }
-    rows.push(rec);
-  }
-  return rows;
 }
 
 export async function upsertIssueFeatureAttributesCsvAction(

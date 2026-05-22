@@ -1,0 +1,2701 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { parseSimpleCsv } from "@/lib/csv-parse";
+import {
+  MAX_VIRTUAL_TABLE_BULK_DELETE_ROWS,
+  MAX_VIRTUAL_TABLE_CSV_CHARS,
+  MAX_VIRTUAL_TABLE_CSV_ROWS,
+  VIRTUAL_TABLE_CSV_IMPORTABLE_TYPES,
+} from "@/lib/virtual-table-import-limits";
+import {
+  defaultTitleFromFeature,
+  extractMatchKeyFromProperties,
+  featureToStoredGeometry,
+  geoProp,
+  mapPropertiesToPayload,
+  normalizeVirtualTableMatchKey,
+  parseFeatureCollectionForVirtualImport,
+} from "@/lib/virtual-table-geojson-import";
+import {
+  MAX_SPATIAL_GEOMETRY_TEXT_CHARS,
+  spatialGeometryTextTooLargeMessage,
+} from "@/lib/spatial-import-limits";
+import {
+  buildCompositeKecamatanTitleIndex,
+  buildRelationLookupIndex,
+  relationLookupSlugFromConfig,
+  resolveCompositeKecamatanTitle,
+  resolveRelationIdFromCsv,
+  type CompositeKecamatanTitleIndex,
+  type RelationLookupIndex,
+} from "@/lib/virtual-table-relation-import";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { writeProjectAuditLog } from "./audit-log-actions";
+
+type ActionResult = { error: string | null };
+type CreateTableResult = { error: string | null; tableId: string | null };
+
+const MAX_GEOJSON_DESA_TARGET_ROWS = 15000;
+
+function bidangUpsertStorageKey(
+  desaRelationSlug: string | null,
+  desaRowId: string | null | undefined,
+  matchNorm: string
+): string {
+  if (desaRelationSlug && desaRowId && String(desaRowId).trim()) {
+    return `${String(desaRowId).trim().toLowerCase()}::${matchNorm}`;
+  }
+  return matchNorm;
+}
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/^(\d)/, "t$1") // slug must start with letter
+    .slice(0, 48);
+}
+
+function uniqueColumnSlugForTable(
+  existingSlugs: Set<string>,
+  baseSlug: string,
+  excludeSlug?: string
+): string {
+  let finalSlug = baseSlug;
+  let suffix = 2;
+  while (
+    existingSlugs.has(finalSlug) &&
+    (excludeSlug == null || finalSlug !== excludeSlug)
+  ) {
+    finalSlug = `${baseSlug}_${suffix}`;
+    suffix++;
+  }
+  return finalSlug;
+}
+
+function remapSlugInViewConfig(
+  config: Record<string, unknown>,
+  oldSlug: string,
+  newSlug: string
+): Record<string, unknown> {
+  if (oldSlug === newSlug) return config;
+
+  const filters = Array.isArray(config.filters)
+    ? (config.filters as { column?: string }[]).map((f) =>
+        f.column === oldSlug ? { ...f, column: newSlug } : f
+      )
+    : [];
+
+  const sorts = Array.isArray(config.sorts)
+    ? (config.sorts as { column?: string }[]).map((s) =>
+        s.column === oldSlug ? { ...s, column: newSlug } : s
+      )
+    : [];
+
+  const groupBy =
+    config.groupBy === oldSlug ? newSlug : (config.groupBy as string | null);
+
+  const visibleColumns = Array.isArray(config.visibleColumns)
+    ? (config.visibleColumns as string[]).map((c) => (c === oldSlug ? newSlug : c))
+    : [];
+
+  const columnWidthsRaw = config.columnWidths;
+  const columnWidths: Record<string, number> = {};
+  if (columnWidthsRaw && typeof columnWidthsRaw === "object") {
+    for (const [k, v] of Object.entries(
+      columnWidthsRaw as Record<string, number>
+    )) {
+      columnWidths[k === oldSlug ? newSlug : k] = v;
+    }
+  }
+
+  return {
+    ...config,
+    filters,
+    sorts,
+    groupBy,
+    visibleColumns,
+    columnWidths,
+  };
+}
+
+async function migrateVirtualColumnSlug(
+  supabase: NonNullable<Awaited<ReturnType<typeof createServerSupabaseClient>>>,
+  tableId: string,
+  oldSlug: string,
+  newSlug: string
+): Promise<{ rowsUpdated: number; error: string | null }> {
+  if (oldSlug === newSlug) return { rowsUpdated: 0, error: null };
+
+  const { data: rows, error: rowsErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, payload")
+    .eq("table_id", tableId)
+    .is("deleted_at", null);
+
+  if (rowsErr) return { rowsUpdated: 0, error: rowsErr.message };
+
+  let rowsUpdated = 0;
+  const typedRows = (rows ?? []) as {
+    id: string;
+    payload: Record<string, unknown> | null;
+  }[];
+
+  for (const row of typedRows) {
+    const payload = row.payload ?? {};
+    if (!(oldSlug in payload)) continue;
+    const newPayload = { ...payload };
+    if (newSlug in newPayload && newPayload[newSlug] !== newPayload[oldSlug]) {
+      return {
+        rowsUpdated: 0,
+        error: `Baris ${row.id.slice(0, 8)} sudah punya kolom "${newSlug}" — migrasi slug dibatalkan`,
+      };
+    }
+    newPayload[newSlug] = newPayload[oldSlug];
+    delete newPayload[oldSlug];
+    const { error: upErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .update({
+        payload: newPayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id);
+    if (upErr) return { rowsUpdated, error: upErr.message };
+    rowsUpdated++;
+  }
+
+  const { data: views, error: viewsErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .select("id, config")
+    .eq("table_id", tableId);
+
+  if (viewsErr) return { rowsUpdated, error: viewsErr.message };
+
+  for (const view of views ?? []) {
+    const v = view as { id: string; config: Record<string, unknown> | null };
+    const cfg = v.config ?? {};
+    const next = remapSlugInViewConfig(cfg, oldSlug, newSlug);
+    const { error: viewErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_views")
+      .update({ config: next, updated_at: new Date().toISOString() })
+      .eq("id", v.id);
+    if (viewErr) return { rowsUpdated, error: viewErr.message };
+  }
+
+  const { data: allRelationCols, error: relColErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("id, config")
+    .eq("data_type", "relation");
+
+  if (relColErr) return { rowsUpdated, error: relColErr.message };
+
+  for (const col of allRelationCols ?? []) {
+    const c = col as { id: string; config: Record<string, unknown> | null };
+    const cfg = c.config ?? {};
+    if (cfg.target_table_id !== tableId) continue;
+    if (relationLookupSlugFromConfig(cfg) !== oldSlug) continue;
+    const nextConfig = { ...cfg, lookup_slug: newSlug };
+    const { error: relUpErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_columns")
+      .update({ config: nextConfig, updated_at: new Date().toISOString() })
+      .eq("id", c.id);
+    if (relUpErr) return { rowsUpdated, error: relUpErr.message };
+  }
+
+  return { rowsUpdated, error: null };
+}
+
+const VALID_DATA_TYPES = new Set([
+  "text",
+  "number",
+  "date",
+  "select",
+  "checkbox",
+  "url",
+  "user",
+  "file",
+  "relation",
+  "geometry",
+]);
+
+// ---------------------------------------------------------------------------
+// Virtual Tables
+// ---------------------------------------------------------------------------
+
+export async function createVirtualTableAction(
+  formData: FormData
+): Promise<CreateTableResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", tableId: null };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", tableId: null };
+
+  const projectId = String(formData.get("project_id") ?? "").trim() || null;
+  const organizationId = String(formData.get("organization_id") ?? "").trim() || null;
+  const displayName = String(formData.get("display_name") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim() || null;
+  const icon = String(formData.get("icon") ?? "").trim() || null;
+
+  if (!projectId && !organizationId) return { error: "project_id atau organization_id harus diisi", tableId: null };
+  if (projectId && organizationId) return { error: "Hanya boleh salah satu: project_id atau organization_id", tableId: null };
+  if (!displayName) return { error: "Nama tabel tidak boleh kosong", tableId: null };
+
+  const baseSlug = slugify(displayName);
+  if (!baseSlug) return { error: "Nama tabel tidak valid untuk slug", tableId: null };
+
+  // Deduplicate slug within the scope
+  const scopeQuery = supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("slug")
+    .is("deleted_at", null)
+    .like("slug", `${baseSlug}%`);
+
+  if (projectId) scopeQuery.eq("project_id", projectId);
+  else scopeQuery.eq("organization_id", organizationId!);
+
+  const { data: existing } = await scopeQuery;
+
+  const existingSlugs = new Set((existing ?? []).map((r: { slug: string }) => r.slug));
+  let slug = baseSlug;
+  let suffix = 2;
+  while (existingSlugs.has(slug)) {
+    slug = `${baseSlug}_${suffix}`;
+    suffix++;
+  }
+
+  // Get next sort_order
+  let sortQuery = supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("sort_order")
+    .is("deleted_at", null);
+
+  if (projectId) sortQuery = sortQuery.eq("project_id", projectId);
+  else sortQuery = sortQuery.eq("organization_id", organizationId!);
+
+  const { data: maxSort } = await sortQuery
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const nextSortOrder = ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  const insertData: Record<string, unknown> = {
+    slug,
+    display_name: displayName,
+    description,
+    icon,
+    sort_order: nextSortOrder,
+    created_by: user.id,
+  };
+  if (projectId) insertData.project_id = projectId;
+  else insertData.organization_id = organizationId;
+
+  const { data: table, error: tableErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .insert(insertData)
+    .select("id")
+    .single();
+
+  if (tableErr) return { error: tableErr.message, tableId: null };
+  const tableId = (table as { id: string }).id;
+
+  // Auto-create default "Title" column
+  const { error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .insert({
+      table_id: tableId,
+      slug: "title",
+      display_name: "Title",
+      data_type: "text",
+      position: 0,
+      is_required: true,
+    });
+
+  if (colErr) return { error: colErr.message, tableId };
+
+  if (projectId) {
+    await writeProjectAuditLog(supabase, {
+      projectId,
+      actorUserId: user.id,
+      action: "virtual_table.create",
+      entity: "core_pm.virtual_tables",
+      entityId: tableId,
+      payload: { display_name: displayName, slug, scope: "project" },
+    });
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null, tableId };
+}
+
+export async function updateVirtualTableAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  if (!tableId) return { error: "table_id kosong" };
+
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  const displayName = formData.get("display_name");
+  if (displayName != null) {
+    const name = String(displayName).trim();
+    if (!name) return { error: "Nama tabel tidak boleh kosong" };
+    updates.display_name = name;
+  }
+  if (formData.has("description")) {
+    updates.description = String(formData.get("description") ?? "").trim() || null;
+  }
+  if (formData.has("icon")) {
+    updates.icon = String(formData.get("icon") ?? "").trim() || null;
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .update(updates)
+    .eq("id", tableId)
+    .is("deleted_at", null);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function deleteVirtualTableAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  if (!tableId) return { error: "table_id kosong" };
+
+  // Fetch project_id for audit log before soft-delete
+  const { data: tbl } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("project_id, display_name")
+    .eq("id", tableId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  const { error } = await supabase.schema("core_pm").rpc("soft_delete_virtual_table", {
+    p_table_id: tableId,
+  });
+
+  if (error) return { error: error.message };
+
+  if (tbl) {
+    const t = tbl as { project_id: string; display_name: string };
+    await writeProjectAuditLog(supabase, {
+      projectId: t.project_id,
+      actorUserId: user.id,
+      action: "virtual_table.delete",
+      entity: "core_pm.virtual_tables",
+      entityId: tableId,
+      payload: { display_name: t.display_name },
+    });
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+// ---------------------------------------------------------------------------
+// Virtual Columns
+// ---------------------------------------------------------------------------
+
+export async function addVirtualColumnAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  const displayName = String(formData.get("display_name") ?? "").trim();
+  const dataType = String(formData.get("data_type") ?? "").trim();
+  const isRequired = formData.get("is_required") === "true";
+  const configRaw = String(formData.get("config") ?? "{}").trim();
+
+  if (!tableId) return { error: "table_id kosong" };
+  if (!displayName) return { error: "Nama kolom tidak boleh kosong" };
+  if (!VALID_DATA_TYPES.has(dataType)) return { error: `Tipe data tidak valid: ${dataType}` };
+
+  let config: Record<string, unknown> = {};
+  try {
+    config = JSON.parse(configRaw);
+  } catch {
+    return { error: "Config bukan JSON valid" };
+  }
+
+  const slug = slugify(displayName);
+  if (!slug) return { error: "Nama kolom tidak valid untuk slug" };
+
+  // Check slug uniqueness within the table
+  const { data: existingCols } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug")
+    .eq("table_id", tableId);
+
+  const existingSlugs = new Set((existingCols ?? []).map((r: { slug: string }) => r.slug));
+  const finalSlug = uniqueColumnSlugForTable(existingSlugs, slug);
+
+  // Get next position
+  const { data: maxPos } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("position")
+    .eq("table_id", tableId)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const nextPosition = ((maxPos as { position: number } | null)?.position ?? -1) + 1;
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .insert({
+      table_id: tableId,
+      slug: finalSlug,
+      display_name: displayName,
+      data_type: dataType,
+      position: nextPosition,
+      is_required: isRequired,
+      config,
+    });
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export type UpdateVirtualColumnResult = {
+  error: string | null;
+  /** Slug berubah karena rename nama tampilan; data baris dimigrasikan. */
+  slugChanged?: boolean;
+  oldSlug?: string;
+  newSlug?: string;
+  rowsUpdated?: number;
+};
+
+export async function updateVirtualColumnAction(
+  formData: FormData
+): Promise<UpdateVirtualColumnResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const columnId = String(formData.get("column_id") ?? "").trim();
+  if (!columnId) return { error: "column_id kosong" };
+
+  const { data: colRow, error: colFetchErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("id, table_id, slug, display_name")
+    .eq("id", columnId)
+    .maybeSingle();
+
+  if (colFetchErr) return { error: colFetchErr.message };
+  if (!colRow) return { error: "Kolom tidak ditemukan" };
+
+  const col = colRow as {
+    id: string;
+    table_id: string;
+    slug: string;
+    display_name: string;
+  };
+
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  let slugChanged = false;
+  let oldSlug = col.slug;
+  let newSlug = col.slug;
+  let rowsUpdated = 0;
+
+  const displayName = formData.get("display_name");
+  if (displayName != null) {
+    const name = String(displayName).trim();
+    if (!name) return { error: "Nama kolom tidak boleh kosong" };
+    updates.display_name = name;
+
+    const baseSlug = slugify(name);
+    if (!baseSlug) {
+      return { error: "Nama kolom tidak valid untuk slug (gunakan huruf/angka)" };
+    }
+
+    if (baseSlug !== col.slug) {
+      const { data: siblings, error: sibErr } = await supabase
+        .schema("core_pm")
+        .from("virtual_columns")
+        .select("slug")
+        .eq("table_id", col.table_id);
+
+      if (sibErr) return { error: sibErr.message };
+
+      const existingSlugs = new Set(
+        (siblings ?? []).map((r: { slug: string }) => r.slug)
+      );
+      const finalSlug = uniqueColumnSlugForTable(
+        existingSlugs,
+        baseSlug,
+        col.slug
+      );
+
+      const mig = await migrateVirtualColumnSlug(
+        supabase,
+        col.table_id,
+        col.slug,
+        finalSlug
+      );
+      if (mig.error) return { error: mig.error };
+
+      slugChanged = true;
+      oldSlug = col.slug;
+      newSlug = finalSlug;
+      rowsUpdated = mig.rowsUpdated;
+      updates.slug = finalSlug;
+    }
+  }
+
+  if (formData.has("is_required")) {
+    updates.is_required = formData.get("is_required") === "true";
+  }
+
+  if (formData.has("config")) {
+    try {
+      updates.config = JSON.parse(String(formData.get("config") ?? "{}"));
+    } catch {
+      return { error: "Config bukan JSON valid" };
+    }
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .update(updates)
+    .eq("id", columnId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return {
+    error: null,
+    ...(slugChanged
+      ? { slugChanged: true, oldSlug, newSlug, rowsUpdated }
+      : {}),
+  };
+}
+
+export async function deleteVirtualColumnAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const columnId = String(formData.get("column_id") ?? "").trim();
+  if (!columnId) return { error: "column_id kosong" };
+
+  // Get column info to remove its key from all rows
+  const { data: col, error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("table_id, slug")
+    .eq("id", columnId)
+    .maybeSingle();
+
+  if (colErr) return { error: colErr.message };
+  if (!col) return { error: "Kolom tidak ditemukan" };
+
+  const { table_id, slug } = col as { table_id: string; slug: string };
+
+  // Remove the key from all rows' payloads using JSONB operator
+  // payload - 'key' removes the key from the object
+  const { data: rows } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, payload")
+    .eq("table_id", table_id)
+    .is("deleted_at", null);
+
+  if (rows && rows.length > 0) {
+    for (const row of rows as { id: string; payload: Record<string, unknown> }[]) {
+      if (slug in row.payload) {
+        const newPayload = { ...row.payload };
+        delete newPayload[slug];
+        await supabase
+          .schema("core_pm")
+          .from("virtual_rows")
+          .update({ payload: newPayload, updated_at: new Date().toISOString() })
+          .eq("id", row.id);
+      }
+    }
+  }
+
+  // Delete the column definition
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .delete()
+    .eq("id", columnId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function reorderVirtualColumnsAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  // column_ids: JSON array of column IDs in desired order
+  const raw = String(formData.get("column_ids") ?? "[]");
+  let columnIds: string[];
+  try {
+    columnIds = JSON.parse(raw);
+    if (!Array.isArray(columnIds)) throw new Error();
+  } catch {
+    return { error: "column_ids bukan JSON array valid" };
+  }
+
+  for (let i = 0; i < columnIds.length; i++) {
+    const { error } = await supabase
+      .schema("core_pm")
+      .from("virtual_columns")
+      .update({ position: i, updated_at: new Date().toISOString() })
+      .eq("id", columnIds[i]);
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+// ---------------------------------------------------------------------------
+// Virtual Rows
+// ---------------------------------------------------------------------------
+
+function validateCellValue(
+  value: unknown,
+  dataType: string,
+  isRequired: boolean,
+  columnName: string
+): string | null {
+  if (value == null || value === "") {
+    if (isRequired) return `${columnName} wajib diisi`;
+    return null;
+  }
+  switch (dataType) {
+    case "number": {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return `${columnName} harus berupa angka`;
+      break;
+    }
+    case "date": {
+      if (typeof value !== "string" || !value.match(/^\d{4}-\d{2}-\d{2}/))
+        return `${columnName} harus format tanggal (YYYY-MM-DD)`;
+      break;
+    }
+    case "checkbox": {
+      if (typeof value !== "boolean")
+        return `${columnName} harus boolean`;
+      break;
+    }
+    case "select": {
+      break;
+    }
+    case "relation": {
+      if (Array.isArray(value)) {
+        for (const v of value) {
+          if (typeof v !== "string")
+            return `${columnName}: setiap relasi harus berupa UUID string`;
+        }
+      } else if (typeof value !== "string") {
+        return `${columnName} harus berupa UUID string`;
+      }
+      break;
+    }
+  }
+  return null;
+}
+
+export async function createVirtualRowAction(
+  formData: FormData
+): Promise<ActionResult & { rowId?: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  if (!tableId) return { error: "table_id kosong" };
+
+  let payload: Record<string, unknown> = {};
+  const payloadRaw = formData.get("payload");
+  if (payloadRaw) {
+    try {
+      payload = JSON.parse(String(payloadRaw));
+    } catch {
+      return { error: "payload bukan JSON valid" };
+    }
+  }
+
+  // Fetch columns for validation
+  const { data: columns } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type, is_required")
+    .eq("table_id", tableId)
+    .order("position");
+
+  // Validate only non-empty fields on create (allow blank rows for spreadsheet-style UX)
+  const hasAnyValue = Object.keys(payload).length > 0;
+  if (columns && hasAnyValue) {
+    for (const col of columns as {
+      slug: string;
+      display_name: string;
+      data_type: string;
+      is_required: boolean;
+    }[]) {
+      const err = validateCellValue(
+        payload[col.slug],
+        col.data_type,
+        col.is_required,
+        col.display_name
+      );
+      if (err) return { error: err };
+    }
+  }
+
+  // Get next sort_order
+  const { data: maxSort } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("sort_order")
+    .eq("table_id", tableId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const nextSort = ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  const { data: inserted, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .insert({
+      table_id: tableId,
+      payload,
+      sort_order: nextSort,
+      created_by: user.id,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) return { error: error.message, rowId: null };
+
+  revalidatePath("/", "layout");
+  return { error: null, rowId: (inserted as { id: string } | null)?.id ?? null };
+}
+
+export type ImportVirtualRowsCsvResult = {
+  error: string | null;
+  inserted: number;
+  failed: number;
+  skippedEmpty: number;
+  skippedDuplicates: number;
+  failureSamples: string[];
+  unknownHeaders: string[];
+};
+
+export type VirtualTableImportRelationHint = {
+  column_slug: string;
+  column_display_name: string;
+  target_table_id: string;
+  target_table_name: string;
+  lookup_slug: string;
+  target_row_count: number;
+  is_multi: boolean;
+};
+
+export type VirtualTableImportContextResult = {
+  error: string | null;
+  relation_hints: VirtualTableImportRelationHint[];
+};
+
+/** Tipe kolom tabel target yang boleh dipakai untuk lookup impor CSV relasi. */
+const RELATION_LOOKUP_COLUMN_TYPES = new Set(["text", "number", "url", "select"]);
+
+export type RelationLookupColumnOption = {
+  slug: string;
+  display_name: string;
+  data_type: string;
+};
+
+export async function fetchRelationLookupColumnOptionsAction(
+  targetTableId: string
+): Promise<{ columns: RelationLookupColumnOption[]; error: string | null }> {
+  const empty = { columns: [] as RelationLookupColumnOption[] };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { ...empty, error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ...empty, error: "Belum masuk" };
+
+  if (!targetTableId.trim()) return { ...empty, error: "table_id kosong" };
+
+  const { data: columnsRaw, error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type")
+    .eq("table_id", targetTableId)
+    .order("position");
+
+  if (colErr) return { ...empty, error: colErr.message };
+
+  const columns = (columnsRaw ?? [])
+    .filter((c: { data_type: string }) =>
+      RELATION_LOOKUP_COLUMN_TYPES.has(c.data_type)
+    )
+    .map(
+      (c: { slug: string; display_name: string; data_type: string }) => ({
+        slug: c.slug,
+        display_name: c.display_name,
+        data_type: c.data_type,
+      })
+    );
+
+  return { columns, error: null };
+}
+
+type RelationLookupCacheEntry = {
+  index: RelationLookupIndex;
+  targetTableLabel: string;
+  targetRowCount: number;
+};
+
+type VirtualColumnForImport = {
+  slug: string;
+  display_name: string;
+  data_type: string;
+  is_required: boolean;
+  config: Record<string, unknown>;
+};
+
+function csvDedupValuesEqual(
+  importVal: unknown,
+  existingVal: unknown,
+  col: VirtualColumnForImport | undefined
+): boolean {
+  const dt = col?.data_type;
+  if (dt === "number") {
+    const a =
+      typeof importVal === "number" ? importVal : Number(importVal);
+    const b =
+      typeof existingVal === "number" ? existingVal : Number(existingVal);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+    return a === b;
+  }
+  if (dt === "checkbox") {
+    return Boolean(importVal) === Boolean(existingVal);
+  }
+  if (dt === "date") {
+    const a = String(importVal ?? "").slice(0, 10);
+    const b = String(existingVal ?? "").slice(0, 10);
+    return a === b;
+  }
+  if (dt === "relation") {
+    const a = String(importVal ?? "").trim().toLowerCase();
+    const b = String(existingVal ?? "").trim().toLowerCase();
+    return a.length > 0 && a === b;
+  }
+  return (
+    String(importVal ?? "").trim() === String(existingVal ?? "").trim()
+  );
+}
+
+/** True jika nilai di payload impor untuk setiap kolom sama dengan baris yang sudah ada (kolom lain di DB diabaikan). */
+function csvImportPayloadMatchesExistingRow(
+  existingPayload: Record<string, unknown>,
+  importPayload: Record<string, unknown>,
+  colBySlug: Map<string, VirtualColumnForImport>
+): boolean {
+  const keys = Object.keys(importPayload);
+  if (keys.length === 0) return false;
+  for (const k of keys) {
+    const col = colBySlug.get(k);
+    if (
+      !csvDedupValuesEqual(importPayload[k], existingPayload[k], col)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function csvImportPayloadBatchDedupKey(
+  importPayload: Record<string, unknown>,
+  colBySlug: Map<string, VirtualColumnForImport>
+): string {
+  const keys = Object.keys(importPayload).sort();
+  const parts: string[] = [];
+  for (const k of keys) {
+    const col = colBySlug.get(k);
+    parts.push(k);
+    parts.push("=");
+    if (col?.data_type === "number") {
+      const n =
+        typeof importPayload[k] === "number"
+          ? importPayload[k]
+          : Number(importPayload[k]);
+      parts.push(Number.isFinite(n) ? String(n) : "NaN");
+    } else if (col?.data_type === "checkbox") {
+      parts.push(Boolean(importPayload[k]) ? "1" : "0");
+    } else if (col?.data_type === "date") {
+      parts.push(String(importPayload[k] ?? "").slice(0, 10));
+    } else if (col?.data_type === "relation") {
+      parts.push(String(importPayload[k] ?? "").trim().toLowerCase());
+    } else {
+      parts.push(String(importPayload[k] ?? "").trim());
+    }
+    parts.push("\x1e");
+  }
+  return parts.join("");
+}
+
+function resolveCsvHeaderToSlug(
+  header: string,
+  columns: VirtualColumnForImport[]
+): string | null {
+  const h = header.trim();
+  if (!h) return null;
+  const lower = h.toLowerCase();
+  for (const col of columns) {
+    if (col.slug.toLowerCase() === lower) return col.slug;
+    if (col.display_name.trim().toLowerCase() === lower) return col.slug;
+    if (slugify(col.display_name) === slugify(h)) return col.slug;
+  }
+  return null;
+}
+
+function parseCheckboxCsv(raw: string): boolean | null {
+  const s = raw.trim().toLowerCase();
+  if (["true", "1", "ya", "yes", "y", "✓", "x"].includes(s)) return true;
+  if (["false", "0", "tidak", "no", "n"].includes(s)) return false;
+  return null;
+}
+
+function coerceCsvCellValue(
+  raw: string,
+  col: VirtualColumnForImport
+): { value: unknown; error: string | null } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { value: undefined, error: null };
+
+  switch (col.data_type) {
+    case "text":
+    case "url":
+      return { value: trimmed, error: null };
+    case "number": {
+      const normalized = trimmed.replace(/\s/g, "").replace(",", ".");
+      const n = Number(normalized);
+      if (!Number.isFinite(n)) {
+        return { value: undefined, error: `bukan angka valid` };
+      }
+      return { value: n, error: null };
+    }
+    case "date": {
+      if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+        return { value: trimmed.slice(0, 10), error: null };
+      }
+      return {
+        value: undefined,
+        error: `tanggal harus YYYY-MM-DD`,
+      };
+    }
+    case "checkbox": {
+      const b = parseCheckboxCsv(trimmed);
+      if (b === null) {
+        return {
+          value: undefined,
+          error: `centang harus ya/tidak, true/false, atau 1/0`,
+        };
+      }
+      return { value: b, error: null };
+    }
+    case "select": {
+      const options = (col.config?.options as string[] | undefined) ?? [];
+      if (options.length > 0 && !options.includes(trimmed)) {
+        return {
+          value: undefined,
+          error: `nilai tidak ada di opsi: ${options.slice(0, 5).join(", ")}${options.length > 5 ? "…" : ""}`,
+        };
+      }
+      return { value: trimmed, error: null };
+    }
+    default:
+      return { value: undefined, error: null };
+  }
+}
+
+async function loadRelationLookupCache(
+  supabase: NonNullable<Awaited<ReturnType<typeof createServerSupabaseClient>>>,
+  targetTableId: string,
+  lookupSlug: string
+): Promise<
+  | { ok: true; entry: RelationLookupCacheEntry }
+  | { ok: false; error: string }
+> {
+  const { data: targetTable, error: tblErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("id, display_name")
+    .eq("id", targetTableId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (tblErr) return { ok: false, error: tblErr.message };
+  if (!targetTable) {
+    return { ok: false, error: `Tabel target relasi tidak ditemukan (${targetTableId})` };
+  }
+
+  const { data: targetCols, error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug")
+    .eq("table_id", targetTableId);
+
+  if (colErr) return { ok: false, error: colErr.message };
+
+  const targetSlugs = new Set(
+    (targetCols ?? []).map((c: { slug: string }) => c.slug)
+  );
+  if (!targetSlugs.has(lookupSlug)) {
+    return {
+      ok: false,
+      error: `Kolom lookup "${lookupSlug}" tidak ada di tabel "${(targetTable as { display_name: string }).display_name}"`,
+    };
+  }
+
+  const { data: targetRows, error: rowErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, payload")
+    .eq("table_id", targetTableId)
+    .is("deleted_at", null);
+
+  if (rowErr) return { ok: false, error: rowErr.message };
+
+  const typedRows = (targetRows ?? []).map((r: Record<string, unknown>) => ({
+    id: r.id as string,
+    payload: (r.payload as Record<string, unknown> | null) ?? {},
+  }));
+
+  const index = buildRelationLookupIndex(typedRows, lookupSlug, targetTableId);
+
+  return {
+    ok: true,
+    entry: {
+      index,
+      targetTableLabel: (targetTable as { display_name: string }).display_name,
+      targetRowCount: typedRows.length,
+    },
+  };
+}
+
+export async function fetchVirtualTableImportContextAction(
+  tableId: string
+): Promise<VirtualTableImportContextResult> {
+  const empty = { relation_hints: [] as VirtualTableImportRelationHint[] };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", ...empty };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", ...empty };
+
+  if (!tableId.trim()) return { error: "table_id kosong", ...empty };
+
+  const { data: columnsRaw, error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type, config")
+    .eq("table_id", tableId)
+    .order("position");
+
+  if (colErr) return { error: colErr.message, ...empty };
+
+  const columns = (columnsRaw ?? []) as VirtualColumnForImport[];
+  const relationCols = columns.filter((c) => c.data_type === "relation");
+  const hints: VirtualTableImportRelationHint[] = [];
+
+  for (const col of relationCols) {
+    const targetTableId = col.config?.target_table_id;
+    if (typeof targetTableId !== "string" || !targetTableId) continue;
+
+    const lookupSlug = relationLookupSlugFromConfig(col.config);
+    const loaded = await loadRelationLookupCache(
+      supabase,
+      targetTableId,
+      lookupSlug
+    );
+    if (!loaded.ok) {
+      return { error: loaded.error, ...empty };
+    }
+
+    hints.push({
+      column_slug: col.slug,
+      column_display_name: col.display_name,
+      target_table_id: targetTableId,
+      target_table_name: loaded.entry.targetTableLabel,
+      lookup_slug: lookupSlug,
+      target_row_count: loaded.entry.targetRowCount,
+      is_multi: col.config?.is_multi === true,
+    });
+  }
+
+  return { error: null, relation_hints: hints };
+}
+
+export async function importVirtualRowsCsvAction(
+  formData: FormData
+): Promise<ImportVirtualRowsCsvResult> {
+  const empty = {
+    inserted: 0,
+    failed: 0,
+    skippedEmpty: 0,
+    skippedDuplicates: 0,
+    failureSamples: [] as string[],
+    unknownHeaders: [] as string[],
+  };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", ...empty };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", ...empty };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  const csvRaw = String(formData.get("csv_text") ?? "");
+  if (!tableId) return { error: "table_id kosong", ...empty };
+  if (!csvRaw.trim()) return { error: "csv_text kosong", ...empty };
+  if (csvRaw.length > MAX_VIRTUAL_TABLE_CSV_CHARS) {
+    return {
+      error: `CSV melebihi batas ~${Math.round(MAX_VIRTUAL_TABLE_CSV_CHARS / (1024 * 1024))} MB`,
+      ...empty,
+    };
+  }
+
+  const { data: tableRow, error: tableErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("id, project_id, display_name")
+    .eq("id", tableId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (tableErr) return { error: tableErr.message, ...empty };
+  if (!tableRow) return { error: "Tabel tidak ditemukan", ...empty };
+
+  const { data: columnsRaw, error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type, is_required, config")
+    .eq("table_id", tableId)
+    .order("position");
+
+  if (colErr) return { error: colErr.message, ...empty };
+
+  const columns = (columnsRaw ?? []) as VirtualColumnForImport[];
+  const importableColumns = columns.filter((c) =>
+    VIRTUAL_TABLE_CSV_IMPORTABLE_TYPES.has(c.data_type)
+  );
+
+  if (importableColumns.length === 0) {
+    return {
+      error:
+        "Tidak ada kolom yang bisa diimpor (dukungan: teks, angka, tanggal, centang, URL, pilihan, relasi tunggal).",
+      ...empty,
+    };
+  }
+
+  const relationLookupCaches = new Map<string, RelationLookupCacheEntry>();
+  for (const col of importableColumns) {
+    if (col.data_type !== "relation") continue;
+    const targetTableId = col.config?.target_table_id;
+    if (typeof targetTableId !== "string" || !targetTableId) {
+      return {
+        error: `Kolom "${col.display_name}" relasi tanpa tabel target.`,
+        ...empty,
+      };
+    }
+    const lookupSlug = relationLookupSlugFromConfig(col.config);
+    const cacheKey = `${targetTableId}::${lookupSlug}`;
+    if (relationLookupCaches.has(cacheKey)) continue;
+    const loaded = await loadRelationLookupCache(
+      supabase,
+      targetTableId,
+      lookupSlug
+    );
+    if (!loaded.ok) return { error: loaded.error, ...empty };
+    relationLookupCaches.set(cacheKey, loaded.entry);
+  }
+
+  const parsed = parseSimpleCsv(csvRaw);
+  if (parsed.length === 0) {
+    return {
+      error: "CSV kosong atau tidak valid. Pastikan ada baris header dan minimal 1 baris data.",
+      ...empty,
+    };
+  }
+  if (parsed.length > MAX_VIRTUAL_TABLE_CSV_ROWS) {
+    return {
+      error: `Terlalu banyak baris (maks. ${MAX_VIRTUAL_TABLE_CSV_ROWS}). Bagi file menjadi beberapa impor.`,
+      ...empty,
+    };
+  }
+
+  const headerKeys = Object.keys(parsed[0]);
+  const headerToSlug = new Map<string, string>();
+  const unknownHeaders: string[] = [];
+  for (const header of headerKeys) {
+    const slug = resolveCsvHeaderToSlug(header, importableColumns);
+    if (slug) headerToSlug.set(header, slug);
+    else unknownHeaders.push(header);
+  }
+
+  const mappedSlugs = new Set(headerToSlug.values());
+  if (mappedSlugs.size === 0) {
+    return {
+      error:
+        "Tidak ada kolom CSV yang cocok. Gunakan slug kolom (mis. title) atau nama tampilan kolom sebagai header.",
+      ...empty,
+      unknownHeaders,
+    };
+  }
+
+  const { data: maxSort } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("sort_order")
+    .eq("table_id", tableId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let nextSort =
+    ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  const { data: existingRowsRaw, error: existingErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("payload")
+    .eq("table_id", tableId)
+    .is("deleted_at", null);
+
+  if (existingErr) return { error: existingErr.message, ...empty };
+
+  const existingPayloads = (existingRowsRaw ?? []) as {
+    payload: Record<string, unknown> | null;
+  }[];
+
+  const colBySlug = new Map(importableColumns.map((c) => [c.slug, c]));
+  let inserted = 0;
+  let failed = 0;
+  let skippedEmpty = 0;
+  let skippedDuplicates = 0;
+  const batchDedupKeys = new Set<string>();
+  const failureSamples: string[] = [];
+  const inserts: {
+    table_id: string;
+    payload: Record<string, unknown>;
+    sort_order: number;
+    created_by: string;
+  }[] = [];
+
+  const pushFailure = (lineLabel: string, message: string) => {
+    failed++;
+    if (failureSamples.length < 12) {
+      failureSamples.push(`${lineLabel}: ${message}`);
+    }
+  };
+
+  for (let i = 0; i < parsed.length; i++) {
+    const csvRow = parsed[i];
+    const lineLabel = `Baris ${i + 2}`;
+    const payload: Record<string, unknown> = {};
+    let rowError: string | null = null;
+
+    for (const [header, slug] of headerToSlug) {
+      const col = colBySlug.get(slug);
+      if (!col) continue;
+      const raw = csvRow[header] ?? "";
+
+      if (col.data_type === "relation") {
+        if (col.config?.is_multi === true) {
+          if (raw.trim()) {
+            rowError = `${col.display_name}: impor CSV belum mendukung multi-relasi`;
+            break;
+          }
+          continue;
+        }
+        const targetTableId = col.config?.target_table_id as string;
+        const lookupSlug = relationLookupSlugFromConfig(col.config);
+        const cacheKey = `${targetTableId}::${lookupSlug}`;
+        const cache = relationLookupCaches.get(cacheKey);
+        if (!cache) {
+          rowError = `${col.display_name}: cache lookup relasi tidak tersedia`;
+          break;
+        }
+        if (!raw.trim()) continue;
+        const resolved = resolveRelationIdFromCsv(
+          raw,
+          cache.index,
+          cache.targetTableLabel
+        );
+        if (resolved.error) {
+          rowError = `${col.display_name}: ${resolved.error}`;
+          break;
+        }
+        if (resolved.rowId) payload[slug] = resolved.rowId;
+        continue;
+      }
+
+      const { value, error: coerceErr } = coerceCsvCellValue(raw, col);
+      if (coerceErr) {
+        rowError = `${col.display_name} ${coerceErr}`;
+        break;
+      }
+      if (value !== undefined) payload[slug] = value;
+    }
+
+    if (rowError) {
+      pushFailure(lineLabel, rowError);
+      continue;
+    }
+
+    const hasAnyValue = Object.keys(payload).length > 0;
+    if (!hasAnyValue) {
+      skippedEmpty++;
+      continue;
+    }
+
+    for (const col of columns) {
+      if (!col.is_required) continue;
+      if (!VIRTUAL_TABLE_CSV_IMPORTABLE_TYPES.has(col.data_type)) continue;
+      const val = payload[col.slug];
+      if (val == null || val === "") {
+        rowError = `${col.display_name} wajib diisi`;
+        break;
+      }
+      const err = validateCellValue(val, col.data_type, true, col.display_name);
+      if (err) {
+        rowError = err;
+        break;
+      }
+    }
+
+    if (rowError) {
+      pushFailure(lineLabel, rowError);
+      continue;
+    }
+
+    for (const col of importableColumns) {
+      if (!(col.slug in payload)) continue;
+      const err = validateCellValue(
+        payload[col.slug],
+        col.data_type,
+        false,
+        col.display_name
+      );
+      if (err) {
+        rowError = err;
+        break;
+      }
+    }
+
+    if (rowError) {
+      pushFailure(lineLabel, rowError);
+      continue;
+    }
+
+    const batchKey = csvImportPayloadBatchDedupKey(payload, colBySlug);
+    if (batchDedupKeys.has(batchKey)) {
+      skippedDuplicates++;
+      continue;
+    }
+    let duplicateOfExisting = false;
+    for (const row of existingPayloads) {
+      const ep = row.payload ?? {};
+      if (csvImportPayloadMatchesExistingRow(ep, payload, colBySlug)) {
+        duplicateOfExisting = true;
+        break;
+      }
+    }
+    if (duplicateOfExisting) {
+      skippedDuplicates++;
+      continue;
+    }
+    batchDedupKeys.add(batchKey);
+
+    inserts.push({
+      table_id: tableId,
+      payload,
+      sort_order: nextSort++,
+      created_by: user.id,
+    });
+  }
+
+  const CHUNK = 100;
+  for (let i = 0; i < inserts.length; i += CHUNK) {
+    const chunk = inserts.slice(i, i + CHUNK);
+    const { error: insertErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .insert(chunk);
+    if (insertErr) {
+      return {
+        error: insertErr.message,
+        inserted,
+        failed: failed + (inserts.length - inserted),
+        skippedEmpty,
+        skippedDuplicates,
+        failureSamples: [
+          ...failureSamples,
+          `Insert batch gagal: ${insertErr.message}`,
+        ].slice(0, 12),
+        unknownHeaders,
+      };
+    }
+    inserted += chunk.length;
+  }
+
+  const projectId = (tableRow as { project_id: string | null }).project_id;
+  if (projectId && (inserted > 0 || skippedDuplicates > 0 || failed > 0)) {
+    await writeProjectAuditLog(supabase, {
+      projectId,
+      actorUserId: user.id,
+      action: "virtual_table.import_csv",
+      entity: "core_pm.virtual_rows",
+      entityId: tableId,
+      payload: {
+        table_display_name: (tableRow as { display_name: string }).display_name,
+        inserted,
+        failed,
+        skipped_empty: skippedEmpty,
+        skipped_duplicates: skippedDuplicates,
+      },
+    });
+  }
+
+  revalidatePath("/", "layout");
+  return {
+    error: null,
+    inserted,
+    failed,
+    skippedEmpty,
+    skippedDuplicates,
+    failureSamples,
+    unknownHeaders: [...new Set(unknownHeaders)],
+  };
+}
+
+export type ImportVirtualRowsGeoJsonResult = {
+  error: string | null;
+  inserted: number;
+  updated: number;
+  failed: number;
+  skippedExisting: number;
+  failureSamples: string[];
+};
+
+export async function importVirtualRowsGeoJsonBatchAction(
+  formData: FormData
+): Promise<ImportVirtualRowsGeoJsonResult> {
+  const empty = {
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+  };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", ...empty };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", ...empty };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  const geojsonRaw = String(formData.get("geojson_json") ?? "");
+  const geometryColumnSlug = String(formData.get("geometry_column_slug") ?? "").trim();
+  const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+  const upsertMode = String(formData.get("upsert_mode") ?? "upsert").trim();
+  const desaRelationColumnSlug = String(
+    formData.get("desa_relation_column_slug") ?? ""
+  ).trim();
+  const desaTargetRowId = String(formData.get("desa_target_row_id") ?? "").trim();
+  const featureKeyPrefix = String(formData.get("feature_key_prefix") ?? "").trim();
+  const desaSourceMode = String(formData.get("desa_source_mode") ?? "fixed").trim();
+  const geoDesaLookup = String(formData.get("geo_desa_lookup") ?? "code").trim();
+  const geoCodeProp = String(formData.get("geo_code_prop") ?? "kode_desa").trim() || "kode_desa";
+  const targetCodeSlug =
+    String(formData.get("target_code_slug") ?? "kode_desa").trim() || "kode_desa";
+  const geoKecamatanProp =
+    String(formData.get("geo_kecamatan_prop") ?? "kecamatan").trim() || "kecamatan";
+  const geoNamaDesaProp =
+    String(formData.get("geo_nama_desa_prop") ?? "desa").trim() || "desa";
+  const targetKecamatanSlug =
+    String(formData.get("target_kecamatan_slug") ?? "kecamatan").trim() || "kecamatan";
+  const targetTitleSlug =
+    String(formData.get("target_title_slug") ?? "title").trim() || "title";
+
+  if (!tableId) return { error: "table_id kosong", ...empty };
+  if (!geojsonRaw.trim()) return { error: "geojson_json kosong", ...empty };
+  if (!geometryColumnSlug) return { error: "geometry_column_slug wajib", ...empty };
+  if (!matchColumnSlug) {
+    return {
+      error: "match_column_slug wajib (mis. no_bidang) untuk cocokkan / buat baris.",
+      ...empty,
+    };
+  }
+  if (geojsonRaw.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("GeoJSON"),
+      ...empty,
+    };
+  }
+
+  const parsedFc = parseFeatureCollectionForVirtualImport(geojsonRaw);
+  if (!parsedFc.ok) return { error: parsedFc.error, ...empty };
+  const { fc, rows: polygonRows } = parsedFc;
+
+  const { data: tableRow, error: tableErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("id, project_id, display_name")
+    .eq("id", tableId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (tableErr) return { error: tableErr.message, ...empty };
+  if (!tableRow) return { error: "Tabel tidak ditemukan", ...empty };
+
+  const { data: columnsRaw, error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type, is_required, config")
+    .eq("table_id", tableId)
+    .order("position");
+
+  if (colErr) return { error: colErr.message, ...empty };
+
+  const columns = (columnsRaw ?? []) as VirtualColumnForImport[];
+  const geomCol = columns.find((c) => c.slug === geometryColumnSlug);
+  if (!geomCol || geomCol.data_type !== "geometry") {
+    return { error: `Kolom geometri "${geometryColumnSlug}" tidak ditemukan`, ...empty };
+  }
+  const matchCol = columns.find((c) => c.slug === matchColumnSlug);
+  if (!matchCol || !["text", "number", "url"].includes(matchCol.data_type)) {
+    return {
+      error: `Kolom kunci "${matchColumnSlug}" harus ada (teks/angka/URL)`,
+      ...empty,
+    };
+  }
+
+  const desaCol = desaRelationColumnSlug
+    ? columns.find((c) => c.slug === desaRelationColumnSlug)
+    : undefined;
+
+  let desaRelationRowIdFixed: string | null = null;
+  let codeLookupIndex: RelationLookupIndex | null = null;
+  let compositeLookupIndex: CompositeKecamatanTitleIndex | null = null;
+  let targetDesaTableLabel = "tabel target";
+
+  if (desaRelationColumnSlug) {
+    if (!desaCol || desaCol.data_type !== "relation") {
+      return {
+        error: `Kolom relasi "${desaRelationColumnSlug}" tidak valid`,
+        ...empty,
+      };
+    }
+    if (desaCol.config?.is_multi === true) {
+      return {
+        error: "Kolom relasi multi tidak didukung untuk impor GeoJSON",
+        ...empty,
+      };
+    }
+  }
+
+  if (desaSourceMode === "from_properties") {
+    if (!desaRelationColumnSlug || !desaCol) {
+      return {
+        error:
+          "Lookup dari property GeoJSON memerlukan kolom relasi ke tabel target.",
+        ...empty,
+      };
+    }
+    const targetTableId = desaCol.config?.target_table_id;
+    if (typeof targetTableId !== "string" || !targetTableId) {
+      return { error: "Kolom relasi tanpa tabel target", ...empty };
+    }
+
+    const { data: tgtMeta, error: tgtMetaErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_tables")
+      .select("display_name")
+      .eq("id", targetTableId)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (tgtMetaErr) return { error: tgtMetaErr.message, ...empty };
+    targetDesaTableLabel =
+      (tgtMeta as { display_name: string } | null)?.display_name ?? targetDesaTableLabel;
+
+    const { data: tgtColsRaw, error: tgtColErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_columns")
+      .select("slug")
+      .eq("table_id", targetTableId);
+
+    if (tgtColErr) return { error: tgtColErr.message, ...empty };
+    const tgtSlugs = new Set(
+      (tgtColsRaw ?? []).map((c: { slug: string }) => c.slug)
+    );
+
+    if (geoDesaLookup === "kecamatan_title") {
+      if (!tgtSlugs.has(targetKecamatanSlug) || !tgtSlugs.has(targetTitleSlug)) {
+        return {
+          error: `Tabel "${targetDesaTableLabel}" harus punya kolom "${targetKecamatanSlug}" dan "${targetTitleSlug}" untuk lookup dua kolom gabungan.`,
+          ...empty,
+        };
+      }
+    } else {
+      if (!tgtSlugs.has(targetCodeSlug)) {
+        return {
+          error: `Tabel "${targetDesaTableLabel}" tidak punya kolom "${targetCodeSlug}" — gunakan mode dua kolom gabungan atau tambah kolom kode di tabel target.`,
+          ...empty,
+        };
+      }
+    }
+
+    const { data: tgtRowsRaw, error: tgtRowErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .select("id, payload")
+      .eq("table_id", targetTableId)
+      .is("deleted_at", null)
+      .limit(MAX_GEOJSON_DESA_TARGET_ROWS);
+
+    if (tgtRowErr) return { error: tgtRowErr.message, ...empty };
+    const typedTargetRows = (tgtRowsRaw ?? []).map(
+      (r: Record<string, unknown>) => ({
+        id: r.id as string,
+        payload: (r.payload as Record<string, unknown> | null) ?? {},
+      })
+    );
+    if (typedTargetRows.length >= MAX_GEOJSON_DESA_TARGET_ROWS) {
+      return {
+        error: `Tabel target "${targetDesaTableLabel}" punya terlalu banyak baris (≥${MAX_GEOJSON_DESA_TARGET_ROWS}). Hubungi admin.`,
+        ...empty,
+      };
+    }
+
+    if (geoDesaLookup === "kecamatan_title") {
+      compositeLookupIndex = buildCompositeKecamatanTitleIndex(
+        typedTargetRows,
+        targetKecamatanSlug,
+        targetTitleSlug,
+        targetTableId
+      );
+    } else {
+      codeLookupIndex = buildRelationLookupIndex(
+        typedTargetRows,
+        targetCodeSlug,
+        targetTableId
+      );
+    }
+  } else {
+    if (desaRelationColumnSlug) {
+      if (!desaTargetRowId) {
+        return { error: "Pilih baris tabel target untuk file ini", ...empty };
+      }
+      desaRelationRowIdFixed = desaTargetRowId;
+    } else {
+      const requiredRelation = columns.find(
+        (c) => c.data_type === "relation" && c.is_required
+      );
+      if (requiredRelation) {
+        return {
+          error: `Kolom relasi "${requiredRelation.display_name}" wajib — pilih baris target atau lookup dari property GeoJSON.`,
+          ...empty,
+        };
+      }
+    }
+  }
+
+  const skipGeoPropertyLower = new Set<string>();
+  if (desaSourceMode === "from_properties") {
+    if (geoDesaLookup === "kecamatan_title") {
+      skipGeoPropertyLower.add(geoKecamatanProp.toLowerCase());
+      skipGeoPropertyLower.add(geoNamaDesaProp.toLowerCase());
+    } else {
+      skipGeoPropertyLower.add(geoCodeProp.toLowerCase());
+    }
+  }
+
+  const { data: existingRowsRaw, error: existErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, payload")
+    .eq("table_id", tableId)
+    .is("deleted_at", null);
+
+  if (existErr) return { error: existErr.message, ...empty };
+
+  const existingByUpsertKey = new Map<
+    string,
+    { id: string; payload: Record<string, unknown> }
+  >();
+  for (const row of existingRowsRaw ?? []) {
+    const r = row as { id: string; payload: Record<string, unknown> | null };
+    const payload = r.payload ?? {};
+    const matchK = normalizeVirtualTableMatchKey(payload[matchColumnSlug]);
+    if (!matchK) continue;
+    const storageKey = bidangUpsertStorageKey(
+      desaRelationColumnSlug || null,
+      desaRelationColumnSlug
+        ? (payload[desaRelationColumnSlug] as string | undefined)
+        : null,
+      matchK
+    );
+    if (!existingByUpsertKey.has(storageKey)) {
+      existingByUpsertKey.set(storageKey, { id: r.id, payload });
+    }
+  }
+
+  const { data: maxSort } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("sort_order")
+    .eq("table_id", tableId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let nextSort =
+    ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  const skipSlugs = new Set([
+    geometryColumnSlug,
+    matchColumnSlug,
+    "title",
+    desaRelationColumnSlug,
+  ].filter(Boolean));
+
+  const mapColumns = columns.filter((c) =>
+    ["text", "number", "select", "url"].includes(c.data_type)
+  );
+
+  let inserted = 0;
+  let updated = 0;
+  let failed = 0;
+  let skippedExisting = 0;
+  const failureSamples: string[] = [];
+  const inserts: {
+    table_id: string;
+    payload: Record<string, unknown>;
+    sort_order: number;
+    created_by: string;
+  }[] = [];
+  const updates: { id: string; payload: Record<string, unknown> }[] = [];
+  const pendingInsertIndexByKey = new Map<string, number>();
+
+  const pushFailure = (label: string, message: string) => {
+    failed++;
+    if (failureSamples.length < 12) {
+      failureSamples.push(`${label}: ${message}`);
+    }
+  };
+
+  for (let j = 0; j < polygonRows.length; j++) {
+    const { featureIndex, props } = polygonRows[j]!;
+    const lineLabel = `Poligon #${featureIndex + 1}`;
+    const feat = fc.features[featureIndex];
+    if (!feat || feat.type !== "Feature") {
+      pushFailure(lineLabel, "bukan Feature valid");
+      continue;
+    }
+
+    const matchKeyRaw = extractMatchKeyFromProperties(
+      props,
+      matchColumnSlug,
+      featureIndex,
+      featureKeyPrefix
+    );
+    if (!matchKeyRaw) {
+      pushFailure(lineLabel, `tidak ada nilai untuk kolom kunci "${matchColumnSlug}"`);
+      continue;
+    }
+
+    const matchNorm = normalizeVirtualTableMatchKey(matchKeyRaw);
+    if (!matchNorm) {
+      pushFailure(lineLabel, "kunci pencocokan kosong");
+      continue;
+    }
+
+    let desaIdForFeature: string | null = null;
+    if (desaRelationColumnSlug && desaCol) {
+      if (desaSourceMode === "from_properties") {
+        if (geoDesaLookup === "kecamatan_title" && compositeLookupIndex) {
+          const kecRaw = geoProp(props, geoKecamatanProp);
+          const desRaw = geoProp(props, geoNamaDesaProp);
+          const res = resolveCompositeKecamatanTitle(
+            kecRaw == null ? "" : String(kecRaw),
+            desRaw == null ? "" : String(desRaw),
+            compositeLookupIndex,
+            targetDesaTableLabel
+          );
+          if (res.error) {
+            pushFailure(lineLabel, res.error);
+            continue;
+          }
+          desaIdForFeature = res.rowId ?? null;
+        } else if (codeLookupIndex) {
+          const rawCode = geoProp(props, geoCodeProp);
+          if (rawCode == null || !String(rawCode).trim()) {
+            pushFailure(
+              lineLabel,
+              `property "${geoCodeProp}" kosong (kode lookup wajib ada di setiap feature)`
+            );
+            continue;
+          }
+          const res = resolveRelationIdFromCsv(
+            String(rawCode),
+            codeLookupIndex,
+            targetDesaTableLabel
+          );
+          if (res.error) {
+            pushFailure(lineLabel, res.error);
+            continue;
+          }
+          desaIdForFeature = res.rowId ?? null;
+        }
+      } else {
+        desaIdForFeature = desaRelationRowIdFixed;
+      }
+
+      if (!desaIdForFeature && desaCol.is_required) {
+        pushFailure(lineLabel, "kolom relasi tidak terisi");
+        continue;
+      }
+    }
+
+    const storedGeom = featureToStoredGeometry(feat.geometry, props);
+    if (!storedGeom) {
+      pushFailure(lineLabel, "geometri bukan Polygon/MultiPolygon valid");
+      continue;
+    }
+
+    const mapped = mapPropertiesToPayload(
+      props,
+      mapColumns,
+      skipSlugs,
+      skipGeoPropertyLower
+    );
+    const title = defaultTitleFromFeature(props, matchKeyRaw);
+    const patch: Record<string, unknown> = {
+      ...mapped,
+      title,
+      [matchColumnSlug]:
+        matchCol.data_type === "number" ? Number(matchKeyRaw) : matchKeyRaw,
+      [geometryColumnSlug]: storedGeom,
+    };
+    if (desaRelationColumnSlug && desaIdForFeature) {
+      patch[desaRelationColumnSlug] = desaIdForFeature;
+    }
+
+    const rowUpsertKey = bidangUpsertStorageKey(
+      desaRelationColumnSlug || null,
+      desaIdForFeature,
+      matchNorm
+    );
+
+    const existing = existingByUpsertKey.get(rowUpsertKey);
+    if (existing) {
+      if (upsertMode === "insert_only") {
+        skippedExisting++;
+        continue;
+      }
+      const merged = { ...existing.payload, ...patch };
+      updates.push({ id: existing.id, payload: merged });
+      existingByUpsertKey.set(rowUpsertKey, { id: existing.id, payload: merged });
+      continue;
+    }
+
+    const pendingIdx = pendingInsertIndexByKey.get(rowUpsertKey);
+    if (pendingIdx !== undefined) {
+      inserts[pendingIdx]!.payload = {
+        ...inserts[pendingIdx]!.payload,
+        ...patch,
+      };
+      continue;
+    }
+
+    pendingInsertIndexByKey.set(rowUpsertKey, inserts.length);
+    inserts.push({
+      table_id: tableId,
+      payload: patch,
+      sort_order: nextSort++,
+      created_by: user.id,
+    });
+  }
+
+  inserted = inserts.length;
+  updated = updates.length;
+
+  const CHUNK = 50;
+  for (let i = 0; i < inserts.length; i += CHUNK) {
+    const chunk = inserts.slice(i, i + CHUNK);
+    const { error: insertErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .insert(chunk);
+    if (insertErr) {
+      return {
+        error: insertErr.message,
+        inserted: 0,
+        updated: 0,
+        failed: failed + inserts.length,
+        skippedExisting,
+        failureSamples: [
+          ...failureSamples,
+          `Insert batch gagal: ${insertErr.message}`,
+        ].slice(0, 12),
+      };
+    }
+  }
+
+  for (const u of updates) {
+    const { error: updErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .update({
+        payload: u.payload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", u.id);
+    if (updErr) {
+      pushFailure(`Update ${u.id.slice(0, 8)}`, updErr.message);
+    }
+  }
+
+  const projectId = (tableRow as { project_id: string | null }).project_id;
+  if (projectId && (inserted > 0 || updated > 0)) {
+    await writeProjectAuditLog(supabase, {
+      projectId,
+      actorUserId: user.id,
+      action: "virtual_table.import_geojson",
+      entity: "core_pm.virtual_rows",
+      entityId: tableId,
+      payload: {
+        table_display_name: (tableRow as { display_name: string }).display_name,
+        inserted,
+        updated,
+        failed,
+        skipped_existing: skippedExisting,
+        geometry_column: geometryColumnSlug,
+        match_column: matchColumnSlug,
+        desa_source_mode: desaSourceMode,
+        geo_desa_lookup: geoDesaLookup,
+      },
+    });
+  }
+
+  revalidatePath("/", "layout");
+  return {
+    error: null,
+    inserted,
+    updated,
+    failed,
+    skippedExisting,
+    failureSamples,
+  };
+}
+
+export async function updateVirtualRowCellAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const rowId = String(formData.get("row_id") ?? "").trim();
+  const columnSlug = String(formData.get("column_slug") ?? "").trim();
+  const valueRaw = formData.get("value");
+
+  if (!rowId) return { error: "row_id kosong" };
+  if (!columnSlug) return { error: "column_slug kosong" };
+
+  // Fetch current row
+  const { data: row, error: rowErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("payload, table_id")
+    .eq("id", rowId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (rowErr) return { error: rowErr.message };
+  if (!row) return { error: "Baris tidak ditemukan" };
+
+  const { payload: currentPayload, table_id } = row as {
+    payload: Record<string, unknown>;
+    table_id: string;
+  };
+
+  // Fetch column definition for validation
+  const { data: col } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type, is_required")
+    .eq("table_id", table_id)
+    .eq("slug", columnSlug)
+    .maybeSingle();
+
+  let parsedValue: unknown = valueRaw;
+  if (typeof valueRaw === "string") {
+    // Try to parse JSON values (for checkbox booleans, etc.)
+    try {
+      parsedValue = JSON.parse(valueRaw);
+    } catch {
+      parsedValue = valueRaw;
+    }
+  }
+
+  if (col) {
+    const c = col as {
+      slug: string;
+      display_name: string;
+      data_type: string;
+      is_required: boolean;
+    };
+    const err = validateCellValue(parsedValue, c.data_type, c.is_required, c.display_name);
+    if (err) return { error: err };
+  }
+
+  const newPayload = { ...currentPayload };
+  if (parsedValue == null || parsedValue === "") {
+    delete newPayload[columnSlug];
+  } else {
+    newPayload[columnSlug] = parsedValue;
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .update({ payload: newPayload, updated_at: new Date().toISOString() })
+    .eq("id", rowId)
+    .is("deleted_at", null);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function updateVirtualRowAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const rowId = String(formData.get("row_id") ?? "").trim();
+  if (!rowId) return { error: "row_id kosong" };
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(String(formData.get("payload") ?? "{}"));
+  } catch {
+    return { error: "payload bukan JSON valid" };
+  }
+
+  // Fetch table_id for column validation
+  const { data: row } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("table_id")
+    .eq("id", rowId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (!row) return { error: "Baris tidak ditemukan" };
+
+  const { table_id } = row as { table_id: string };
+
+  // Validate all values against column definitions
+  const { data: columns } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type, is_required")
+    .eq("table_id", table_id)
+    .order("position");
+
+  if (columns) {
+    for (const col of columns as {
+      slug: string;
+      display_name: string;
+      data_type: string;
+      is_required: boolean;
+    }[]) {
+      const err = validateCellValue(
+        payload[col.slug],
+        col.data_type,
+        col.is_required,
+        col.display_name
+      );
+      if (err) return { error: err };
+    }
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .update({ payload, updated_at: new Date().toISOString() })
+    .eq("id", rowId)
+    .is("deleted_at", null);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function deleteVirtualRowAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const rowId = String(formData.get("row_id") ?? "").trim();
+  if (!rowId) return { error: "row_id kosong" };
+
+  const { error } = await supabase.schema("core_pm").rpc("soft_delete_virtual_row", {
+    p_row_id: rowId,
+  });
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function deleteVirtualRowsBulkAction(
+  formData: FormData
+): Promise<ActionResult & { deleted: number }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", deleted: 0 };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", deleted: 0 };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  if (!tableId) return { error: "table_id kosong", deleted: 0 };
+
+  const rawIds = String(formData.get("row_ids") ?? "").trim();
+  if (!rawIds) return { error: "row_ids kosong", deleted: 0 };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawIds);
+  } catch {
+    return { error: "row_ids tidak valid", deleted: 0 };
+  }
+
+  if (!Array.isArray(parsed)) {
+    return { error: "row_ids harus berupa array", deleted: 0 };
+  }
+
+  const rowIds = [...new Set(parsed.map((id) => String(id).trim()).filter(Boolean))];
+  if (rowIds.length === 0) {
+    return { error: "Tidak ada baris yang dipilih", deleted: 0 };
+  }
+
+  if (rowIds.length > MAX_VIRTUAL_TABLE_BULK_DELETE_ROWS) {
+    return {
+      error: `Terlalu banyak baris (${rowIds.length}). Maks. ${MAX_VIRTUAL_TABLE_BULK_DELETE_ROWS} per penghapusan.`,
+      deleted: 0,
+    };
+  }
+
+  for (const id of rowIds) {
+    if (!UUID_RE.test(id)) {
+      return { error: `ID baris tidak valid: ${id}`, deleted: 0 };
+    }
+  }
+
+  const { data: deleted, error } = await supabase.schema("core_pm").rpc(
+    "soft_delete_virtual_rows",
+    {
+      p_table_id: tableId,
+      p_row_ids: rowIds,
+    }
+  );
+
+  if (error) return { error: error.message, deleted: 0 };
+
+  const count = typeof deleted === "number" ? deleted : Number(deleted) || 0;
+  if (count === 0) {
+    return { error: "Tidak ada baris yang dihapus (mungkin sudah dihapus)", deleted: 0 };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null, deleted: count };
+}
+
+// ---------------------------------------------------------------------------
+// Fetch rows for a specific virtual table (called client-side via action)
+// ---------------------------------------------------------------------------
+
+export async function fetchVirtualRowsAction(
+  tableId: string
+): Promise<{ rows: Record<string, unknown>[]; error: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { rows: [], error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { rows: [], error: "Belum masuk" };
+
+  const { data, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, table_id, payload, sort_order, created_by, created_at, updated_at")
+    .eq("table_id", tableId)
+    .is("deleted_at", null)
+    .order("sort_order")
+    .order("created_at", { ascending: true });
+
+  if (error) return { rows: [], error: error.message };
+
+  return { rows: (data ?? []) as Record<string, unknown>[], error: null };
+}
+
+// ---------------------------------------------------------------------------
+// Relation helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch rows from a target table for the relation picker.
+ * Returns { id, displayLabel } pairs using the first 2 columns as display.
+ */
+export async function fetchRelationTargetRowsAction(
+  targetTableId: string
+): Promise<{
+  rows: { id: string; label: string }[];
+  error: string | null;
+}> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { rows: [], error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { rows: [], error: "Belum masuk" };
+
+  // Get first 2 columns by position to build a composite label
+  const { data: cols } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, data_type")
+    .eq("table_id", targetTableId)
+    .order("position")
+    .limit(2);
+
+  const labelSlugs = (cols as { slug: string; data_type: string }[] | null)
+    ?.map((c) => c.slug) ?? ["title"];
+
+  const { data: rows, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, payload")
+    .eq("table_id", targetTableId)
+    .is("deleted_at", null)
+    .order("sort_order")
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  if (error) return { rows: [], error: error.message };
+
+  const result = (rows ?? []).map((r: Record<string, unknown>) => {
+    const payload = r.payload as Record<string, unknown> | null;
+    const parts = labelSlugs
+      .map((slug) => payload?.[slug])
+      .filter((v) => v != null && v !== "" && v !== false)
+      .map(String);
+    return {
+      id: r.id as string,
+      label: parts.length > 0 ? parts.join(" — ") : `(${(r.id as string).slice(0, 8)})`,
+    };
+  });
+
+  return { rows: result, error: null };
+}
+
+/**
+ * Resolve display labels for a set of row IDs across potentially multiple tables.
+ * Used by VirtualTableView to show relation cell display values.
+ */
+export async function resolveRelationLabelsAction(
+  rowIds: string[]
+): Promise<{
+  labels: Record<string, string>;
+  error: string | null;
+}> {
+  if (rowIds.length === 0) return { labels: {}, error: null };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { labels: {}, error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { labels: {}, error: "Belum masuk" };
+
+  // Fetch the rows by IDs
+  const { data: rows, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, table_id, payload")
+    .in("id", rowIds)
+    .is("deleted_at", null);
+
+  if (error) return { labels: {}, error: error.message };
+  if (!rows || rows.length === 0) return { labels: {}, error: null };
+
+  const typedRows = rows as { id: string; table_id: string; payload: Record<string, unknown> }[];
+
+  // Get unique table IDs to find title columns
+  const tableIds = [...new Set(typedRows.map((r) => r.table_id))];
+
+  const { data: allCols } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("table_id, slug, data_type, position")
+    .in("table_id", tableIds)
+    .order("position");
+
+  // Build a map: table_id -> first 2 column slugs for composite label
+  const labelSlugsByTable = new Map<string, string[]>();
+  for (const tableId of tableIds) {
+    const tableCols = (allCols as { table_id: string; slug: string; data_type: string; position: number }[] | null)
+      ?.filter((c) => c.table_id === tableId)
+      ?.slice(0, 2);
+    labelSlugsByTable.set(tableId, tableCols?.map((c) => c.slug) ?? ["title"]);
+  }
+
+  const labels: Record<string, string> = {};
+  for (const row of typedRows) {
+    const slugs = labelSlugsByTable.get(row.table_id) ?? ["title"];
+    const parts = slugs
+      .map((s) => row.payload[s])
+      .filter((v) => v != null && v !== "" && v !== false)
+      .map(String);
+    labels[row.id] = parts.length > 0 ? parts.join(" — ") : `(${row.id.slice(0, 8)})`;
+  }
+
+  return { labels, error: null };
+}
+
+// ---------------------------------------------------------------------------
+// Virtual Views — saved filter/sort/group/column configs
+// ---------------------------------------------------------------------------
+
+export async function createVirtualViewAction(
+  formData: FormData
+): Promise<{ error: string | null; viewId: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", viewId: null };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", viewId: null };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  const name = String(formData.get("name") ?? "").trim();
+  const configRaw = String(formData.get("config") ?? "{}").trim();
+
+  if (!tableId) return { error: "table_id kosong", viewId: null };
+  if (!name) return { error: "Nama view tidak boleh kosong", viewId: null };
+
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(configRaw);
+  } catch {
+    return { error: "Config bukan JSON valid", viewId: null };
+  }
+
+  const { data, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .insert({
+      table_id: tableId,
+      name,
+      config,
+      created_by: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (error) return { error: error.message, viewId: null };
+
+  revalidatePath("/", "layout");
+  return { error: null, viewId: (data as { id: string }).id };
+}
+
+export async function updateVirtualViewAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const viewId = String(formData.get("view_id") ?? "").trim();
+  if (!viewId) return { error: "view_id kosong" };
+
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (formData.has("name")) {
+    const name = String(formData.get("name")).trim();
+    if (!name) return { error: "Nama view tidak boleh kosong" };
+    updates.name = name;
+  }
+
+  if (formData.has("config")) {
+    try {
+      updates.config = JSON.parse(String(formData.get("config") ?? "{}"));
+    } catch {
+      return { error: "Config bukan JSON valid" };
+    }
+  }
+
+  if (formData.has("is_default")) {
+    updates.is_default = formData.get("is_default") === "true";
+  }
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .update(updates)
+    .eq("id", viewId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function deleteVirtualViewAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const viewId = String(formData.get("view_id") ?? "").trim();
+  if (!viewId) return { error: "view_id kosong" };
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .delete()
+    .eq("id", viewId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function fetchVirtualViewsAction(
+  tableId: string
+): Promise<{ views: Record<string, unknown>[]; error: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { views: [], error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { views: [], error: "Belum masuk" };
+
+  const { data, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .select("id, table_id, name, config, is_default, created_by, created_at, updated_at")
+    .eq("table_id", tableId)
+    .order("created_at", { ascending: true });
+
+  if (error) return { views: [], error: error.message };
+
+  return { views: (data ?? []) as Record<string, unknown>[], error: null };
+}
+
+// ---------------------------------------------------------------------------
+// Fetch organization members for user-type column picker
+// ---------------------------------------------------------------------------
+
+export async function fetchOrgMembersAction(
+  orgId: string
+): Promise<{ members: { id: string; label: string }[]; error: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { members: [], error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { members: [], error: "Belum masuk" };
+
+  // Get all user_ids from projects in this org
+  const { data: projects } = await supabase
+    .schema("core_pm")
+    .from("projects")
+    .select("id")
+    .eq("organization_id", orgId)
+    .is("deleted_at", null);
+
+  if (!projects || projects.length === 0) return { members: [], error: null };
+
+  const projectIds = (projects as { id: string }[]).map((p) => p.id);
+
+  const { data: members } = await supabase
+    .schema("core_pm")
+    .from("project_members")
+    .select("user_id")
+    .in("project_id", projectIds);
+
+  if (!members || members.length === 0) return { members: [], error: null };
+
+  const uniqueUserIds = [...new Set((members as { user_id: string }[]).map((m) => m.user_id))];
+
+  const { data: profiles } = await supabase
+    .schema("core_pm")
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", uniqueUserIds);
+
+  const result = uniqueUserIds.map((uid) => {
+    const profile = (profiles as { id: string; display_name: string | null }[] ?? [])
+      .find((p) => p.id === uid);
+    return {
+      id: uid,
+      label: profile?.display_name?.trim() || uid.slice(0, 8),
+    };
+  });
+
+  result.sort((a, b) => a.label.localeCompare(b.label));
+
+  return { members: result, error: null };
+}

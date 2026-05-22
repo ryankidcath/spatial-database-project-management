@@ -16,7 +16,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { ChevronRight, PanelLeft, Trash2 } from "lucide-react";
+import { ChevronRight, MapPin, PanelLeft, Trash2, Upload } from "lucide-react";
 import {
   addProjectMemberByEmailAction,
   createOrganizationProjectInlineAction,
@@ -142,8 +142,6 @@ import type {
   PengukuranSurveyorRow,
   PermohonanInfoSpasialRow,
 } from "./plm-pengukuran-types";
-import { KanbanBoard } from "./kanban-board";
-import { CalendarScheduleView, GanttScheduleView } from "./schedule-views";
 import { formatShortDate } from "./schedule-utils";
 import {
   effectiveEnabledModuleCodes,
@@ -154,7 +152,6 @@ import {
 } from "./workspace-modules";
 import { parseViewParam, viewToParam } from "./workspace-url";
 import { overlapDisplayLabelForIssueGeometryRow } from "./issue-geometry-overlap-label";
-import { SpatialAttributesPanel } from "./spatial-attributes-panel";
 import type {
   IssueGeometryFeatureMapRow,
   SpatialAttributeTableRow,
@@ -162,6 +159,81 @@ import type {
 import type { MapFootprint } from "./workspace-map";
 import { type ViewId } from "./workspace-views";
 import type { UserNotificationRow } from "./user-notification-types";
+import type { VirtualTableRow, VirtualColumnRow } from "./virtual-table-types";
+import {
+  VirtualTableCreateDialog,
+  VirtualTableGeoJsonImportDialog,
+} from "./virtual-table-view";
+import {
+  fetchVirtualRowsAction,
+  resolveRelationLabelsAction,
+} from "./virtual-table-actions";
+import {
+  buildVirtualTableMapPopupProperties,
+  collectRelationIdsFromVirtualPayloads,
+  pickMapRowTitle,
+  type VirtualColumnForMapPopup,
+} from "@/lib/virtual-table-map-popup";
+import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
+
+function TabViewLoading({ label }: { label: string }) {
+  return (
+    <div className="mt-5 flex items-center gap-2 text-sm text-muted-foreground">
+      <Spinner className="size-4" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+const VirtualDashboardView = dynamic(
+  () =>
+    import("./virtual-dashboard-view").then((m) => m.VirtualDashboardView),
+  {
+    loading: () => <TabViewLoading label="Memuat dashboard…" />,
+  }
+);
+
+const VirtualTableView = dynamic(
+  () => import("./virtual-table-view").then((m) => m.VirtualTableView),
+  {
+    loading: () => <TabViewLoading label="Memuat tabel…" />,
+  }
+);
+
+const KanbanBoard = dynamic(
+  () => import("./kanban-board").then((m) => m.KanbanBoard),
+  {
+    loading: () => <TabViewLoading label="Memuat kanban…" />,
+  }
+);
+
+const CalendarScheduleView = dynamic(
+  () => import("./schedule-views").then((m) => m.CalendarScheduleView),
+  {
+    loading: () => <TabViewLoading label="Memuat kalender…" />,
+  }
+);
+
+const GanttScheduleView = dynamic(
+  () => import("./schedule-views").then((m) => m.GanttScheduleView),
+  {
+    loading: () => <TabViewLoading label="Memuat gantt…" />,
+  }
+);
+
+/** Only mount tab body while active — avoids rendering Map, all VirtualTables, etc. at once. */
+function TabPanelMount({
+  view,
+  activeView,
+  children,
+}: {
+  view: ViewId;
+  activeView: ViewId;
+  children: ReactNode;
+}) {
+  if (activeView !== view) return null;
+  return children;
+}
 
 const WorkspaceMap = dynamic(
   () => import("./workspace-map").then((m) => m.WorkspaceMap),
@@ -309,6 +381,8 @@ type Props = {
   /** Untuk cek owner saat edit properti project. */
   userId?: string | null;
   userNotifications?: UserNotificationRow[];
+  virtualTables?: VirtualTableRow[];
+  virtualColumns?: VirtualColumnRow[];
   joinError?: string | null;
 };
 
@@ -1544,6 +1618,8 @@ export function WorkspaceClient({
   userEmail,
   userId = null,
   userNotifications = [],
+  virtualTables = [],
+  virtualColumns = [],
   joinError,
 }: Props) {
   const router = useRouter();
@@ -1594,6 +1670,11 @@ export function WorkspaceClient({
   const [mapGeomDeleteMsg, setMapGeomDeleteMsg] = useState<string | null>(null);
   const [mapGeomFormNonce, setMapGeomFormNonce] = useState(0);
   const [mapGeomPending, startMapGeomTransition] = useTransition();
+
+  // --- Virtual tables ---
+  const [activeVirtualTableSlug, setActiveVirtualTableSlug] = useState<string | null>(null);
+  const [vtableCreateDialogOpen, setVtableCreateDialogOpen] = useState(false);
+  const [vtableCreateScope, setVtableCreateScope] = useState<"project" | "organization">("project");
   const mapGeomDetectedKind = useMemo<
     "none" | "single" | "batch" | "invalid" | "unsupported"
   >(() => {
@@ -1757,19 +1838,14 @@ export function WorkspaceClient({
     setMapGeomDialogOpen(true);
   }, [resetMapDxfState]);
   const [memberPending, startMemberTransition] = useTransition();
-  const [scopeNavPending, startScopeNavTransition] = useTransition();
-  const [viewSwitchPending, startViewSwitchTransition] = useTransition();
+  const [, startScopeNavTransition] = useTransition();
+  const [, startViewSwitchTransition] = useTransition();
   const [scopeRoutePending, setScopeRoutePending] = useState(false);
-  const [delayedViewPending, setDelayedViewPending] = useState(false);
-  const viewPendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceActionPending =
     taskPending ||
     mapGeomPending ||
     memberPending ||
-    projectPropertiesPending ||
-    scopeNavPending ||
-    scopeRoutePending ||
-    delayedViewPending;
+    projectPropertiesPending;
   const [taskDeleteConfirm, setTaskDeleteConfirm] =
     useState<TaskDeleteConfirmState | null>(null);
   const [taskNoteEditor, setTaskNoteEditor] = useState<TaskNoteEditorState | null>(null);
@@ -1811,7 +1887,7 @@ export function WorkspaceClient({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [organizations, projects]);
 
-  const canonicalOrgId = useMemo(() => {
+  const orgIdFromSearchParams = useMemo(() => {
     const o = searchParams.get("org");
     if (
       o &&
@@ -1823,6 +1899,14 @@ export function WorkspaceClient({
     return projects[0]?.organization_id ?? null;
   }, [searchParams, orgsWithProjects, projects]);
 
+  /** State + URL: org di sidebar harus langsung ikut saat klik, tidak menunggu searchParams/RSC. */
+  const [canonicalOrgId, setCanonicalOrgId] = useState<string | null>(
+    orgIdFromSearchParams
+  );
+  useEffect(() => {
+    setCanonicalOrgId(orgIdFromSearchParams);
+  }, [orgIdFromSearchParams]);
+
   const projectsInOrg = useMemo(() => {
     if (!canonicalOrgId) return [];
     return projects
@@ -1830,11 +1914,18 @@ export function WorkspaceClient({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [projects, canonicalOrgId]);
 
-  const selectedProjectId = useMemo(() => {
+  const projectIdFromSearchParams = useMemo(() => {
     const q = searchParams.get("project");
     if (q && projectsInOrg.some((p) => p.id === q)) return q;
     return projectsInOrg[0]?.id ?? null;
   }, [searchParams, projectsInOrg]);
+
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    projectIdFromSearchParams
+  );
+  useEffect(() => {
+    setSelectedProjectId(projectIdFromSearchParams);
+  }, [projectIdFromSearchParams]);
 
   const taskIdFromSearchParams = useMemo(() => {
     const q = searchParams.get("task");
@@ -2231,17 +2322,30 @@ export function WorkspaceClient({
     const categoryByStatusId = new Map(
       statusesForProject.map((s) => [s.id, s.category])
     );
+    const projectIssues = issues.filter((i) => i.project_id === selectedProjectId);
+    const childByParent = new Map<string, IssueRow[]>();
+    for (const issue of projectIssues) {
+      if (!issue.parent_id) continue;
+      const arr = childByParent.get(issue.parent_id) ?? [];
+      arr.push(issue);
+      childByParent.set(issue.parent_id, arr);
+    }
+    const issueCategory = (issue: IssueRow): string =>
+      issue.status_id ? (categoryByStatusId.get(issue.status_id) ?? "todo") : "todo";
     const summaryByDepth = new Map<number, { count: number; doneCount: number }>();
-    for (const issue of issues) {
-      if (issue.project_id !== selectedProjectId) continue;
+    for (const issue of projectIssues) {
       const depth = projectIssueDepthById.get(issue.id);
       if (depth == null) continue;
       const current = summaryByDepth.get(depth) ?? { count: 0, doneCount: 0 };
       current.count += 1;
-      const category = issue.status_id
-        ? categoryByStatusId.get(issue.status_id)
-        : "todo";
-      if (category === "done") current.doneCount += 1;
+      if (depth === 1) {
+        const children = childByParent.get(issue.id) ?? [];
+        const doneByChildren =
+          children.length > 0 && children.every((child) => issueCategory(child) === "done");
+        if (doneByChildren) current.doneCount += 1;
+      } else if (issueCategory(issue) === "done") {
+        current.doneCount += 1;
+      }
       summaryByDepth.set(depth, current);
     }
     return [...summaryByDepth.entries()]
@@ -2282,11 +2386,28 @@ export function WorkspaceClient({
   }, [issueGeometryFeatureMap, selectedProjectId]);
   const geometrySummary = useMemo(() => {
     const geometryCount = issueGeometryForSelectedProject.length;
-    const issueCountWithGeometry = new Set(
-      issueGeometryForSelectedProject.map((g) => g.issue_id)
-    ).size;
-    return { geometryCount, issueCountWithGeometry };
-  }, [issueGeometryForSelectedProject]);
+    const uniqueIssueIds = [
+      ...new Set(issueGeometryForSelectedProject.map((g) => g.issue_id)),
+    ];
+    const issueCountWithGeometry = uniqueIssueIds.length;
+    const depthFrequency = new Map<number, number>();
+    for (const issueId of uniqueIssueIds) {
+      const depth = projectIssueDepthById.get(issueId);
+      if (depth == null) continue;
+      depthFrequency.set(depth, (depthFrequency.get(depth) ?? 0) + 1);
+    }
+    let dominantDepth: number | null = null;
+    let dominantCount = -1;
+    for (const [depth, count] of depthFrequency.entries()) {
+      if (count > dominantCount) {
+        dominantDepth = depth;
+        dominantCount = count;
+      }
+    }
+    const attachedLevelLabel =
+      dominantDepth != null ? labelForDepth(dominantDepth).toLowerCase() : "unit";
+    return { geometryCount, issueCountWithGeometry, attachedLevelLabel };
+  }, [issueGeometryForSelectedProject, labelForDepth, projectIssueDepthById]);
 
   const issueIdsInSelectedTaskSubtree = useMemo(() => {
     if (!selectedProjectId || !selectedTaskId) return null;
@@ -2477,6 +2598,25 @@ export function WorkspaceClient({
     ]
   );
 
+  // --- Virtual table geometry for map ---
+  const [mapShowVirtualTableGeometry, setMapShowVirtualTableGeometry] = useState(true);
+  const [vtableGeometryLayers, setVtableGeometryLayers] = useState<MapFootprint[]>([]);
+  const [mapTabEpoch, setMapTabEpoch] = useState(0);
+  const [mapImportTableId, setMapImportTableId] = useState<string>("");
+  const [mapGeoImportOpen, setMapGeoImportOpen] = useState(false);
+  const [mapImportPreviewLayers, setMapImportPreviewLayers] = useState<
+    MapFootprint[]
+  >([]);
+
+  useEffect(() => {
+    if (activeView === "Map") {
+      setMapTabEpoch((n) => n + 1);
+    } else {
+      setMapImportPreviewLayers([]);
+      setMapGeoImportOpen(false);
+    }
+  }, [activeView]);
+
   const mapLayersForSelectedProject = useMemo((): MapFootprint[] => {
     const issueGeom: MapFootprint[] = issueGeometryVisibleForMap.map(
       (g) => ({
@@ -2498,20 +2638,26 @@ export function WorkspaceClient({
         },
       })
     );
-    return issueGeom;
+    return [...issueGeom, ...vtableGeometryLayers];
   }, [
     issueGeometryVisibleForMap,
+    vtableGeometryLayers,
   ]);
 
   const visibleMapLayers = useMemo(() => {
-    return mapLayersForSelectedProject.filter((layer) => {
+    const combined = [...mapImportPreviewLayers, ...mapLayersForSelectedProject];
+    return combined.filter((layer) => {
       const k = layer.layerKind ?? "demo";
+      if (k === "import_preview") return true;
       if (k === "issue_geometry") return mapShowIssueGeometry;
+      if (k === "virtual_table") return mapShowVirtualTableGeometry;
       return true;
     });
   }, [
+    mapImportPreviewLayers,
     mapLayersForSelectedProject,
     mapShowIssueGeometry,
+    mapShowVirtualTableGeometry,
   ]);
 
   const berkasForSelectedProject = useMemo(() => {
@@ -2573,6 +2719,196 @@ export function WorkspaceClient({
       ),
     [financePembayaran, financeInvoiceIdsInProject]
   );
+
+  // --- Virtual tables: org-level + project-level ---
+  const vtablesForOrg = useMemo(
+    () =>
+      canonicalOrgId
+        ? virtualTables.filter((vt) => vt.organization_id === canonicalOrgId && !vt.project_id)
+        : [],
+    [virtualTables, canonicalOrgId]
+  );
+
+  const vtablesForProject = useMemo(
+    () =>
+      selectedProjectId
+        ? virtualTables.filter((vt) => vt.project_id === selectedProjectId)
+        : [],
+    [virtualTables, selectedProjectId]
+  );
+
+  const allAccessibleVtables = useMemo(
+    () => [...vtablesForOrg, ...vtablesForProject],
+    [vtablesForOrg, vtablesForProject]
+  );
+
+  const activeVirtualTable = useMemo(
+    () =>
+      activeVirtualTableSlug
+        ? allAccessibleVtables.find((vt) => vt.slug === activeVirtualTableSlug) ?? null
+        : null,
+    [allAccessibleVtables, activeVirtualTableSlug]
+  );
+
+  const activeVirtualTableColumns = useMemo(
+    () =>
+      activeVirtualTable
+        ? virtualColumns.filter((vc) => vc.table_id === activeVirtualTable.id)
+        : [],
+    [virtualColumns, activeVirtualTable]
+  );
+
+  // Identify virtual tables with geometry columns (org + project)
+  const vtablesWithGeometry = useMemo(() => {
+    const geoCols = virtualColumns.filter((c) => c.data_type === "geometry");
+    if (geoCols.length === 0) return [];
+    const tableIdsWithGeo = new Set(geoCols.map((c) => c.table_id));
+    return allAccessibleVtables.filter((vt) => tableIdsWithGeo.has(vt.id));
+  }, [virtualColumns, allAccessibleVtables]);
+
+  useEffect(() => {
+    if (vtablesWithGeometry.length === 0) {
+      setMapImportTableId("");
+      return;
+    }
+    setMapImportTableId((prev) => {
+      if (prev && vtablesWithGeometry.some((vt) => vt.id === prev)) return prev;
+      const preferred =
+        vtablesWithGeometry.find((vt) => {
+          const name = `${vt.display_name} ${vt.slug}`.toLowerCase();
+          return (
+            name.includes("daftar bidang") ||
+            name.includes("bidang tanah") ||
+            name.includes("bidang")
+          );
+        }) ?? vtablesWithGeometry[0];
+      return preferred?.id ?? "";
+    });
+  }, [vtablesWithGeometry]);
+
+  const mapImportTable = useMemo(
+    () =>
+      mapImportTableId
+        ? allAccessibleVtables.find((vt) => vt.id === mapImportTableId) ?? null
+        : null,
+    [mapImportTableId, allAccessibleVtables]
+  );
+
+  const mapImportTableColumns = useMemo(
+    () =>
+      mapImportTableId
+        ? virtualColumns.filter((c) => c.table_id === mapImportTableId)
+        : [],
+    [mapImportTableId, virtualColumns]
+  );
+
+  const handleMapImportPreviewChange = useCallback(
+    (layers: MapFootprint[] | null) => {
+      setMapImportPreviewLayers((prev) => {
+        const nextSig = mapPreviewLayersSignature(layers);
+        const prevSig = mapPreviewLayersSignature(prev);
+        if (nextSig === prevSig) return prev;
+        return layers ?? [];
+      });
+    },
+    []
+  );
+
+  const handleMapGeoImportOpenChange = useCallback((open: boolean) => {
+    setMapGeoImportOpen(open);
+    if (!open) setMapImportPreviewLayers([]);
+  }, []);
+
+  const handleMapGeoImported = useCallback(() => {
+    setMapImportPreviewLayers([]);
+    setMapGeoImportOpen(false);
+    setMapTabEpoch((n) => n + 1);
+    router.refresh();
+  }, [router]);
+
+  useEffect(() => {
+    if (activeView !== "Map") {
+      return;
+    }
+    if (vtablesWithGeometry.length === 0) {
+      setVtableGeometryLayers([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const layers: MapFootprint[] = [];
+      for (const vt of vtablesWithGeometry) {
+        const result = await fetchVirtualRowsAction(vt.id);
+        if (cancelled) return;
+        if (result.error || !result.rows) continue;
+
+        const tableCols: VirtualColumnForMapPopup[] = virtualColumns
+          .filter((c) => c.table_id === vt.id)
+          .map((c) => ({
+            slug: c.slug,
+            display_name: c.display_name,
+            data_type: c.data_type,
+            position: c.position,
+          }));
+
+        const geoCols = tableCols.filter((c) => c.data_type === "geometry");
+
+        const rowPayloads = result.rows.map((row) => ({
+          payload:
+            ((row as Record<string, unknown>).payload as Record<string, unknown> | null) ??
+            {},
+        }));
+        const relationIds = collectRelationIdsFromVirtualPayloads(
+          rowPayloads,
+          tableCols
+        );
+        let relationLabels: Record<string, string> = {};
+        if (relationIds.length > 0) {
+          const resolved = await resolveRelationLabelsAction(relationIds);
+          if (cancelled) return;
+          if (!resolved.error) relationLabels = resolved.labels;
+        }
+
+        for (const row of result.rows) {
+          const payload = (row as Record<string, unknown>).payload as Record<
+            string,
+            unknown
+          > | null;
+          if (!payload) continue;
+          const rowId = (row as Record<string, unknown>).id as string;
+          const rowTitle = pickMapRowTitle(
+            payload,
+            tableCols,
+            relationLabels,
+            rowId
+          );
+
+          for (const gc of geoCols) {
+            const geo = payload[gc.slug];
+            if (!geo || typeof geo !== "object") continue;
+            layers.push({
+              id: `vtable:${rowId}:${gc.slug}`,
+              label: `${vt.display_name}: ${rowTitle}`,
+              geojson: geo,
+              popupProperties: buildVirtualTableMapPopupProperties(
+                vt.display_name,
+                tableCols,
+                payload,
+                relationLabels,
+                memberNameByUserId,
+                { skipGeometrySlug: gc.slug, rowTitle }
+              ),
+              layerKind: "virtual_table",
+            });
+          }
+        }
+      }
+      if (!cancelled) setVtableGeometryLayers(layers);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, mapTabEpoch, vtablesWithGeometry, virtualColumns, memberNameByUserId]);
 
   const tableRows = useMemo((): TableRow[] => {
     if (!selectedProjectId) return [];
@@ -2890,19 +3226,145 @@ export function WorkspaceClient({
       .sort((a, b) => a.sort_order - b.sort_order);
   }, [issues, selectedProjectId, selectedTaskId]);
 
-  const replaceQuery = useCallback(
-    (mutate: (p: URLSearchParams) => void) => {
-      const currentQuery = searchParams.toString();
+  const sidebarProjectTrees = useMemo(() => {
+    const result = new Map<
+      string,
+      {
+        treeRowsForSidebar: { issue: IssueRow; depth: number }[];
+        parentByIssueId: Map<string, string | null>;
+        sidebarParentIdsWithVisibleChildren: Set<string>;
+      }
+    >();
+    for (const p of projectsInOrg) {
+      const treeRows = flattenIssuesWithDepth(p.id, issues);
+      const projectIssues = issues.filter((i) => i.project_id === p.id);
+      const parentByIssueId = new Map(
+        projectIssues.map((i) => [i.id, i.parent_id])
+      );
+      const issueIdsWithChildren = new Set(
+        projectIssues.filter((i) => i.parent_id).map((i) => i.parent_id as string)
+      );
+      const treeRowsForSidebar = treeRows.filter(({ issue, depth }) => {
+        const hasChildren = issueIdsWithChildren.has(issue.id);
+        if (hasChildren) return true;
+        return depth < 2;
+      });
+      const sidebarParentIdsWithVisibleChildren = new Set(
+        treeRowsForSidebar
+          .map(({ issue }) => issue.parent_id)
+          .filter((id): id is string => Boolean(id))
+      );
+      result.set(p.id, {
+        treeRowsForSidebar,
+        parentByIssueId,
+        sidebarParentIdsWithVisibleChildren,
+      });
+    }
+    return result;
+  }, [projectsInOrg, issues]);
+
+  const resolveProjectIdInParams = useCallback(
+    (p: URLSearchParams) => {
+      const orgParam = p.get("org");
+      const pool =
+        orgParam && orgsWithProjects.some((o) => o.id === orgParam)
+          ? projects.filter((x) => x.organization_id === orgParam)
+          : projectsInOrg;
+      const q = p.get("project");
+      if (q && pool.some((x) => x.id === q)) return q;
+      return [...pool].sort((a, b) => a.name.localeCompare(b.name))[0]?.id ?? null;
+    },
+    [orgsWithProjects, projects, projectsInOrg]
+  );
+
+  const resolveTaskIdInParams = useCallback(
+    (p: URLSearchParams, projectId: string | null) => {
+      const q = p.get("task");
+      if (!q || !projectId) return null;
+      return issues.some((i) => i.id === q && i.project_id === projectId) ? q : null;
+    },
+    [issues]
+  );
+
+  /**
+   * Perbarui scope di URL. Default: client-only (replaceState) — data org sudah di props.
+   * `refresh: true` untuk ganti organisasi / setelah buat org+project (butuh RSC).
+   */
+  const commitScopeInUrl = useCallback(
+    (
+      mutate: (p: URLSearchParams) => void,
+      options?: { refresh?: boolean; syncView?: boolean }
+    ) => {
+      const currentQuery =
+        typeof window !== "undefined"
+          ? window.location.search.slice(1)
+          : searchParams.toString();
       const p = new URLSearchParams(currentQuery);
       mutate(p);
       const nextQuery = p.toString();
-      if (nextQuery === currentQuery) return;
-      setScopeRoutePending(true);
-      startScopeNavTransition(() => {
-        void router.replace(`/?${p.toString()}`, { scroll: false });
-      });
+      if (nextQuery === currentQuery && !options?.refresh) return;
+
+      const orgParam = p.get("org");
+      if (
+        orgParam &&
+        orgsWithProjects.some((o) => o.id === orgParam) &&
+        projects.some((proj) => proj.organization_id === orgParam)
+      ) {
+        setCanonicalOrgId(orgParam);
+      }
+
+      const nextProjectId = resolveProjectIdInParams(p);
+      const nextTaskId = resolveTaskIdInParams(p, nextProjectId);
+      setSelectedProjectId(nextProjectId);
+      setSelectedTaskId(nextTaskId);
+
+      if (options?.syncView !== false) {
+        const orgForModules =
+          orgParam && orgsWithProjects.some((o) => o.id === orgParam)
+            ? orgParam
+            : canonicalOrgId;
+        const viewParsed = parseViewParam(p.get("view"));
+        if (
+          viewParsed &&
+          isViewAllowedForModules(
+            viewParsed,
+            effectiveEnabledModuleCodes(orgForModules, organizationModules)
+          )
+        ) {
+          startViewSwitchTransition(() => {
+            setActiveView(viewParsed);
+          });
+        }
+      }
+
+      if (options?.refresh) {
+        setScopeRoutePending(true);
+        startScopeNavTransition(() => {
+          void router.replace(`/?${nextQuery}`, { scroll: false });
+        });
+        return;
+      }
+
+      if (typeof window !== "undefined") {
+        window.history.replaceState(
+          window.history.state,
+          "",
+          `/?${nextQuery}`
+        );
+      }
     },
-    [router, searchParams, startScopeNavTransition]
+    [
+      canonicalOrgId,
+      organizationModules,
+      resolveProjectIdInParams,
+      resolveTaskIdInParams,
+      router,
+      searchParams,
+      orgsWithProjects,
+      projects,
+      startScopeNavTransition,
+      startViewSwitchTransition,
+    ]
   );
 
   useEffect(() => {
@@ -2910,46 +3372,19 @@ export function WorkspaceClient({
     setScopeRoutePending(false);
   }, [searchParams, scopeRoutePending]);
 
-  useEffect(() => {
-    if (viewSwitchPending) {
-      if (viewPendingTimerRef.current) clearTimeout(viewPendingTimerRef.current);
-      viewPendingTimerRef.current = setTimeout(() => {
-        setDelayedViewPending(true);
-        viewPendingTimerRef.current = null;
-      }, 250);
-      return;
-    }
-    if (viewPendingTimerRef.current) {
-      clearTimeout(viewPendingTimerRef.current);
-      viewPendingTimerRef.current = null;
-    }
-    setDelayedViewPending(false);
-  }, [viewSwitchPending]);
-
-  /** Hanya mengubah `task` — tidak memicu RSC; data server tidak bergantung pada query `task`. */
+  /** Ganti project/task dalam org — tidak memicu RSC. */
   const commitTaskSelection = useCallback(
     (issueId: string | null) => {
       if (!selectedProjectId) return;
       const proj = projects.find((p) => p.id === selectedProjectId);
-      setSelectedTaskId(issueId);
-      const q = new URLSearchParams(
-        typeof window !== "undefined"
-          ? window.location.search
-          : searchParams.toString()
-      );
-      if (proj) q.set("org", proj.organization_id);
-      q.set("project", selectedProjectId);
-      if (issueId) q.set("task", issueId);
-      else q.delete("task");
-      if (typeof window !== "undefined") {
-        window.history.replaceState(
-          window.history.state,
-          "",
-          `/?${q.toString()}`
-        );
-      }
+      commitScopeInUrl((q) => {
+        if (proj) q.set("org", proj.organization_id);
+        q.set("project", selectedProjectId);
+        if (issueId) q.set("task", issueId);
+        else q.delete("task");
+      }, { syncView: false });
     },
-    [selectedProjectId, projects, searchParams]
+    [commitScopeInUrl, projects, selectedProjectId]
   );
 
   const selectIssueInScope = (issueId: string) => {
@@ -3009,7 +3444,7 @@ export function WorkspaceClient({
   const openBerkasDetail = (berkasId: string) => {
     if (!selectedProjectId) return;
     const proj = projects.find((p) => p.id === selectedProjectId);
-    replaceQuery((q) => {
+    commitScopeInUrl((q) => {
       if (proj) q.set("org", proj.organization_id);
       q.set("project", selectedProjectId);
       q.set("view", viewToParam("Berkas"));
@@ -3021,7 +3456,7 @@ export function WorkspaceClient({
   const openMapForBerkas = (berkasId: string) => {
     if (!selectedProjectId) return;
     const proj = projects.find((p) => p.id === selectedProjectId);
-    replaceQuery((q) => {
+    commitScopeInUrl((q) => {
       if (proj) q.set("org", proj.organization_id);
       q.set("project", selectedProjectId);
       q.set("view", viewToParam("Map"));
@@ -3178,11 +3613,14 @@ export function WorkspaceClient({
                         return;
                       }
                       if (r.organizationId && r.projectId) {
-                        replaceQuery((q) => {
-                          q.set("org", r.organizationId as string);
-                          q.set("project", r.projectId as string);
-                          q.delete("task");
-                        });
+                        commitScopeInUrl(
+                          (q) => {
+                            q.set("org", r.organizationId as string);
+                            q.set("project", r.projectId as string);
+                            q.delete("task");
+                          },
+                          { refresh: true, syncView: false }
+                        );
                       }
                       setOrganizationDialogOpen(false);
                       router.refresh();
@@ -3244,14 +3682,17 @@ export function WorkspaceClient({
                   size="sm"
                   disabled={workspaceActionPending}
                   onClick={() => {
-                    replaceQuery((q) => {
-                      q.set("org", o.id);
-                      const first = projects
-                        .filter((p) => p.organization_id === o.id)
-                        .sort((a, b) => a.name.localeCompare(b.name))[0];
-                      if (first) q.set("project", first.id);
-                      q.delete("task");
-                    });
+                    commitScopeInUrl(
+                      (q) => {
+                        q.set("org", o.id);
+                        const first = projects
+                          .filter((p) => p.organization_id === o.id)
+                          .sort((a, b) => a.name.localeCompare(b.name))[0];
+                        if (first) q.set("project", first.id);
+                        q.delete("task");
+                      },
+                      { refresh: true, syncView: false }
+                    );
                   }}
                   className={`mb-1 h-8 w-full justify-start rounded-md px-3 text-left text-[0.95rem] font-medium ${
                     active
@@ -3412,24 +3853,13 @@ export function WorkspaceClient({
             </div>
           </div>
           {projectsInOrg.map((p) => {
-            const treeRows = flattenIssuesWithDepth(p.id, issues);
-            const projectIssues = issues.filter((i) => i.project_id === p.id);
-            const parentByIssueId = new Map(
-              projectIssues.map((i) => [i.id, i.parent_id])
-            );
-            const issueIdsWithChildren = new Set(
-              projectIssues.filter((i) => i.parent_id).map((i) => i.parent_id as string)
-            );
-            const treeRowsForSidebar = treeRows.filter(({ issue, depth }) => {
-              const hasChildren = issueIdsWithChildren.has(issue.id);
-              if (hasChildren) return true;
-              return depth < 2;
-            });
-            const sidebarParentIdsWithVisibleChildren = new Set(
-              treeRowsForSidebar
-                .map(({ issue }) => issue.parent_id)
-                .filter((id): id is string => Boolean(id))
-            );
+            const sidebarTree = sidebarProjectTrees.get(p.id);
+            if (!sidebarTree) return null;
+            const {
+              treeRowsForSidebar,
+              parentByIssueId,
+              sidebarParentIdsWithVisibleChildren,
+            } = sidebarTree;
             const isSelectedProject =
               selectedProjectId === p.id && !selectedTaskId;
 
@@ -3446,11 +3876,11 @@ export function WorkspaceClient({
                         commitTaskSelection(null);
                         return;
                       }
-                      replaceQuery((q) => {
+                      commitScopeInUrl((q) => {
                         q.set("org", p.organization_id);
                         q.set("project", p.id);
                         q.delete("task");
-                      });
+                      }, { syncView: false });
                     }}
                     className={`h-8 flex-1 justify-start gap-2 rounded-md px-3 text-left text-[0.95rem] font-medium ${
                       isSelectedProject
@@ -3534,11 +3964,11 @@ export function WorkspaceClient({
                             disabled={workspaceActionPending}
                             onClick={() => {
                               if (p.id !== selectedProjectId) {
-                                replaceQuery((q) => {
+                                commitScopeInUrl((q) => {
                                   q.set("org", p.organization_id);
                                   q.set("project", p.id);
                                   q.set("task", t.id);
-                                });
+                                }, { syncView: false });
                               } else {
                                 commitTaskSelection(t.id);
                               }
@@ -3640,6 +4070,100 @@ export function WorkspaceClient({
           </Dialog>
         </div>
         {/* Panel pengaturan modul organisasi disembunyikan sementara saat fase pilot. */}
+
+        {/* --- Virtual (Custom) Tables: Organization Level --- */}
+        {canonicalOrgId && (
+          <div className="mt-4 border-t border-border pt-3">
+            <div className="mb-1 flex items-center justify-between px-1">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Tabel Organisasi
+              </p>
+              <button
+                type="button"
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => { setVtableCreateScope("organization"); setVtableCreateDialogOpen(true); }}
+                title="Buat tabel organisasi baru"
+              >
+                + Baru
+              </button>
+            </div>
+            {vtablesForOrg.length === 0 ? (
+              <p className="px-1 text-xs text-muted-foreground italic">
+                Belum ada tabel organisasi.
+              </p>
+            ) : (
+              <ul className="space-y-0.5">
+                {vtablesForOrg.map((vt) => (
+                  <li key={vt.id}>
+                    <button
+                      type="button"
+                      className={`w-full rounded-md px-2 py-1 text-left text-sm transition-colors ${
+                        activeVirtualTableSlug === vt.slug
+                          ? "bg-primary/10 font-medium text-primary"
+                          : "text-foreground hover:bg-muted"
+                      }`}
+                      onClick={() => {
+                        setActiveVirtualTableSlug(
+                          activeVirtualTableSlug === vt.slug ? null : vt.slug
+                        );
+                      }}
+                    >
+                      {vt.icon ? `${vt.icon} ` : ""}
+                      {vt.display_name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* --- Virtual (Custom) Tables: Project Level --- */}
+        {selectedProjectId && (
+          <div className="mt-4 border-t border-border pt-3">
+            <div className="mb-1 flex items-center justify-between px-1">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Tabel Project
+              </p>
+              <button
+                type="button"
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => { setVtableCreateScope("project"); setVtableCreateDialogOpen(true); }}
+                title="Buat tabel project baru"
+              >
+                + Baru
+              </button>
+            </div>
+            {vtablesForProject.length === 0 ? (
+              <p className="px-1 text-xs text-muted-foreground italic">
+                Belum ada tabel project.
+              </p>
+            ) : (
+              <ul className="space-y-0.5">
+                {vtablesForProject.map((vt) => (
+                  <li key={vt.id}>
+                    <button
+                      type="button"
+                      className={`w-full rounded-md px-2 py-1 text-left text-sm transition-colors ${
+                        activeVirtualTableSlug === vt.slug
+                          ? "bg-primary/10 font-medium text-primary"
+                          : "text-foreground hover:bg-muted"
+                      }`}
+                      onClick={() => {
+                        setActiveVirtualTableSlug(
+                          activeVirtualTableSlug === vt.slug ? null : vt.slug
+                        );
+                      }}
+                    >
+                      {vt.icon ? `${vt.icon} ` : ""}
+                      {vt.display_name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
           </div>
         </ScrollArea>
       </aside>
@@ -3826,1016 +4350,82 @@ export function WorkspaceClient({
               ))}
             </TabsList>
             <TabsContent value="Dashboard" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <>
-                {selectedProjectId && (
-                  <>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <h2 className="text-xl font-semibold tracking-tight text-foreground">
-                        {selectedProject?.name ?? "—"}
-                      </h2>
-                      <div className="flex flex-wrap items-center justify-end gap-2">
-                        {!selectedTaskId && selectedProject ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={taskPending}
-                            onClick={() => {
-                              setTaskMsg(null);
-                              setMonitoringAddChildContext({
-                                parentId: null,
-                                parentTitle: selectedProject.name,
-                                parentHeader: "Project",
-                                rowHeader: labelForDepth(0),
-                                leafHeader: labelForDepth(1),
-                              });
-                              setMonitoringAddChildFormNonce((n) => n + 1);
-                              setMonitoringAddChildOpen(true);
-                            }}
-                          >
-                            + {labelForDepth(0)}
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setProjectPropertiesOpen(true)}
-                          disabled={!selectedProject}
-                        >
-                          Properti project
-                        </Button>
-                      </div>
-                    </div>
-                    <ProjectPropertiesDialog
-                      open={projectPropertiesOpen}
-                      onOpenChange={setProjectPropertiesOpen}
-                      project={selectedProject}
-                      hierarchyLabels={hierarchyLabels}
-                      canEditNameAndDescription={isOwnerOfSelectedProject}
-                      onSave={handleProjectPropertiesSave}
-                      savePending={projectPropertiesPending}
-                    />
-                    {hierarchySummaryRows.length === 0 ? (
-                      <>
-                        <p className="mt-2 text-sm text-muted-foreground">
-                          Belum ada data unit kerja pada project ini.
-                        </p>
-                        <div className="mt-6 flex min-h-0 min-w-0 flex-col gap-4 lg:min-w-0 lg:flex-row lg:items-stretch lg:gap-4">
-                          <div
-                            className={`${DASHBOARD_GRADIENT_CARD} flex min-h-0 min-w-0 flex-1 flex-col p-5 lg:min-w-0 lg:basis-0`}
-                          >
-                            <div className="mb-3 shrink-0">
-                              <p className="text-sm font-semibold text-foreground">
-                                {completionBars.title}
-                              </p>
-                              <p className="text-xs text-muted-foreground">{completionBars.subtitle}</p>
-                            </div>
-                            {completionBars.rows.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">
-                                Belum ada unit kerja pada scope terpilih.
-                              </p>
-                            ) : (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden lg:min-h-0">
-                                <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col lg:min-h-0">
-                                  <div className="relative flex min-h-0 flex-1 flex-col px-3 pt-3 pb-2 lg:min-h-0">
-                                    <div className="relative flex min-h-48 flex-1 flex-col">
-                                      <div className="pointer-events-none absolute inset-x-3 top-0 bottom-0">
-                                        <div className="flex h-full flex-col justify-between">
-                                          <div className="border-b border-border/60" />
-                                          <div className="border-b border-border/40" />
-                                          <div className="border-b border-border/40" />
-                                          <div className="border-b border-border/40" />
-                                        </div>
-                                      </div>
-                                      <div className="relative z-[1] flex flex-1 min-h-0 w-full min-w-0 items-stretch gap-1.5 sm:gap-2 md:gap-3">
-                                        {completionBars.rows.map((row, idx) => (
-                                          <div
-                                            key={`completion-slot-${idx}`}
-                                            className="relative flex h-full min-w-0 flex-1 basis-0 flex-col items-center"
-                                          >
-                                            <div className="flex min-h-0 w-full max-w-[64px] flex-1 flex-col justify-end">
-                                              <div className="flex min-h-0 w-full flex-1 flex-col justify-end">
-                                                <div
-                                                  className={`w-full max-w-[64px] rounded-md transition-[height,opacity,box-shadow] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none ${completionBarClass(row.percent)}`}
-                                                  style={{ height: `${Math.max(6, row.percent)}%` }}
-                                                />
-                                              </div>
-                                            </div>
-                                            <span
-                                              className="pointer-events-none absolute left-1/2 z-[2] max-w-[calc(100%-4px)] -translate-x-1/2 truncate text-center text-[11px] text-foreground tabular-nums transition-[color,opacity] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
-                                              style={{
-                                                bottom: `calc(${Math.max(6, row.percent)}% + 0.125rem)`,
-                                              }}
-                                            >
-                                              {row.percent.toFixed(1)}%
-                                            </span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                    <div className="mt-2 flex min-w-0 shrink-0 gap-1.5 sm:gap-2 md:gap-3">
-                                      {completionBars.rows.map((row, idx) => (
-                                        <span
-                                          key={`completion-slot-${idx}-label`}
-                                          className="min-w-0 flex-1 basis-0 truncate text-center text-[11px] text-foreground sm:text-xs"
-                                        >
-                                          {row.title}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          <div
-                            className={`${DASHBOARD_GRADIENT_CARD} flex min-h-0 min-w-0 flex-1 flex-col p-5 lg:min-w-0 lg:basis-0`}
-                          >
-                            <div className="flex min-h-0 flex-1 flex-col justify-center">
-                              <DashboardStatusPieBlock
-                                todo={completionStatusPie.todo}
-                                inProgress={completionStatusPie.inProgress}
-                                done={completionStatusPie.done}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="mt-2 space-y-4">
-                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                          {hierarchySummaryRows.map((row) => (
-                            <Card key={`h:${row.depth}`} className={DASHBOARD_GRADIENT_CARD}>
-                              <CardContent className="p-5">
-                                <div className="flex items-start justify-between gap-2">
-                                  <p className="font-sans text-sm font-medium leading-none tracking-normal text-muted-foreground/90">
-                                    {row.title}
-                                  </p>
-                                  <Badge className={`rounded-full px-2 py-0 font-sans text-[10px] font-semibold leading-5 ${completionBadgeClass(row.completionPct)}`}>
-                                    {row.completionPct.toFixed(1)}% selesai
-                                  </Badge>
-                                </div>
-                                <p className="mt-2 font-sans text-4xl font-bold leading-none tracking-normal text-foreground tabular-nums">
-                                  {row.count.toLocaleString("id-ID")}
-                                </p>
-                                <p className="mt-5 font-sans text-base font-semibold leading-snug tracking-normal text-foreground">
-                                  {row.doneCount.toLocaleString("id-ID")} dari{" "}
-                                  {row.count.toLocaleString("id-ID")}{" "}
-                                  {row.countLabel.toLowerCase()} selesai
-                                </p>
-                              </CardContent>
-                            </Card>
-                          ))}
-                          <Card className={DASHBOARD_GRADIENT_CARD}>
-                            <CardContent className="p-5">
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="font-sans text-sm font-medium leading-none tracking-normal text-muted-foreground/90">
-                                  Geometri
-                                </p>
-                                <Badge className="rounded-full px-2 py-0 font-sans text-[10px] font-semibold leading-5 border border-sky-500/25 bg-gradient-to-b from-sky-500/20 to-sky-500/8 text-sky-700/95 dark:text-sky-300">
-                                  tersimpan
-                                </Badge>
-                              </div>
-                              <p className="mt-2 font-sans text-4xl font-bold leading-none tracking-normal text-foreground tabular-nums">
-                                {geometrySummary.geometryCount.toLocaleString("id-ID")}
-                              </p>
-                              <p className="mt-5 font-sans text-base font-semibold leading-snug tracking-normal text-foreground">
-                                pada{" "}
-                                {geometrySummary.issueCountWithGeometry.toLocaleString("id-ID")}{" "}
-                                unit kerja
-                              </p>
-                            </CardContent>
-                          </Card>
-                        </div>
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:min-w-0 lg:flex-row lg:items-stretch lg:gap-4">
-                          <div
-                            className={`${DASHBOARD_GRADIENT_CARD} flex min-h-0 min-w-0 flex-1 flex-col p-5 lg:min-w-0 lg:basis-0`}
-                          >
-                            <div className="mb-3 shrink-0">
-                              <p className="text-sm font-semibold text-foreground">
-                                {completionBars.title}
-                              </p>
-                              <p className="text-xs text-muted-foreground">{completionBars.subtitle}</p>
-                            </div>
-                            {completionBars.rows.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">
-                                Belum ada unit kerja pada scope terpilih.
-                              </p>
-                            ) : (
-                              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:min-h-0">
-                                <div className="flex min-h-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-hidden lg:min-h-0">
-                                  <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col lg:min-h-0">
-                                    <div className="relative flex min-h-0 flex-1 flex-col px-3 pt-1 lg:min-h-0">
-                                      <div className="relative flex min-h-48 flex-1 flex-col">
-                                        <div className="pointer-events-none absolute inset-x-3 top-0 bottom-0">
-                                          <div className="flex h-full flex-col justify-between">
-                                            <div className="border-b border-border/60" />
-                                            <div className="border-b border-border/40" />
-                                            <div className="border-b border-border/40" />
-                                            <div className="border-b border-border/40" />
-                                          </div>
-                                        </div>
-                                        <div className="relative z-[1] flex flex-1 min-h-0 w-full min-w-0 items-stretch gap-1.5 sm:gap-2 md:gap-3">
-                                          {completionBars.rows.map((row, idx) => (
-                                            <div
-                                              key={`completion-slot-${idx}`}
-                                              className="relative flex h-full min-w-0 flex-1 basis-0 flex-col items-center"
-                                            >
-                                              <div className="flex min-h-0 w-full max-w-[64px] flex-1 flex-col justify-end">
-                                                <div className="flex min-h-0 w-full flex-1 flex-col justify-end">
-                                                  <div
-                                                    className={`w-full max-w-[64px] rounded-md transition-[height,opacity,box-shadow] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none ${completionBarClass(row.percent)}`}
-                                                    style={{ height: `${Math.max(6, row.percent)}%` }}
-                                                  />
-                                                </div>
-                                              </div>
-                                              <span
-                                                className="pointer-events-none absolute left-1/2 z-[2] max-w-[calc(100%-4px)] -translate-x-1/2 truncate text-center text-[11px] text-foreground tabular-nums transition-[color,opacity] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
-                                                style={{
-                                                  bottom: `calc(${Math.max(6, row.percent)}% + 0.125rem)`,
-                                                }}
-                                              >
-                                                {row.percent.toFixed(1)}%
-                                              </span>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                      <div className="mt-2 flex min-w-0 shrink-0 gap-1.5 pb-1 sm:gap-2 md:gap-3">
-                                        {completionBars.rows.map((row, idx) => (
-                                          <span
-                                            key={`completion-slot-${idx}-label`}
-                                            className="min-w-0 flex-1 basis-0 truncate text-center text-[11px] text-foreground sm:text-xs"
-                                          >
-                                            {row.title}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          <div
-                            className={`${DASHBOARD_GRADIENT_CARD} flex min-h-0 min-w-0 flex-1 flex-col p-5 lg:min-w-0 lg:basis-0`}
-                          >
-                            <div className="flex min-h-0 flex-1 flex-col justify-center">
-                              <DashboardStatusPieBlock
-                                todo={completionStatusPie.todo}
-                                inProgress={completionStatusPie.inProgress}
-                                done={completionStatusPie.done}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-                {monitoringView && (
-                  <MonitoringMatrixCard
-                    blockTitle={monitoringView.title}
-                    rowHeader={monitoringView.rowHeader}
-                    leafHeader={monitoringView.leafHeader}
-                    milestoneTitles={monitoringView.milestoneTitles}
-                    rows={monitoringView.rows}
-                    onAddChild={() => {
-                      if (!selectedTaskId) return;
-                      setTaskMsg(null);
-                      setMonitoringAddChildContext({
-                        parentId: selectedTaskId,
-                        parentTitle: monitoringView.title,
-                        parentHeader: monitoringView.parentHeader,
-                        rowHeader: monitoringView.rowHeader,
-                        leafHeader: monitoringView.leafHeader,
-                      });
-                      setMonitoringAddChildFormNonce((n) => n + 1);
-                      setMonitoringAddChildOpen(true);
-                    }}
-                    addChildDisabled={
-                      taskPending || !selectedProjectId || !selectedTaskId
-                    }
-                    selectedProjectId={selectedProjectId}
-                    taskPending={taskPending}
-                    memberNameByUserId={memberNameByUserId}
-                    taskCloneDialog={taskCloneDialog}
-                    setTaskCloneDialog={setTaskCloneDialog}
-                    setTaskMsg={setTaskMsg}
-                    startTaskTransition={startTaskTransition}
-                    firstStatusIdByCategory={firstStatusIdByCategory}
-                    queueStatusCommit={queueStatusCommit}
-                    onAfterMutation={() => router.refresh()}
-                    setTaskNoteEditor={setTaskNoteEditor}
-                    taskMsg={taskMsg}
-                  />
-                )}
-                {/* Eksperimen performa: sembunyikan matriks project-wide di Dashboard level project. */}
-                {selectedProjectId && (
-                  <div className="mt-8 rounded-xl border border-border bg-card shadow-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-                      <p className="text-sm font-semibold text-foreground">Aktivitas terbaru</p>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant={activityLogFilter === "all" ? "secondary" : "outline"}
-                          onClick={() => setActivityLogFilter("all")}
-                        >
-                          Semua
-                        </Button>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant={activityLogFilter === "session" ? "secondary" : "outline"}
-                          onClick={() => setActivityLogFilter("session")}
-                        >
-                          Sesi user
-                        </Button>
-                      </div>
-                    </div>
-                    {filteredActivityLogsInScope.length === 0 ? (
-                      <p className="px-4 py-3 text-xs text-muted-foreground">
-                        {activityLogFilter === "session"
-                          ? "Belum ada aktivitas sesi user pada scope ini."
-                          : "Belum ada aktivitas tercatat pada scope ini."}
-                      </p>
-                    ) : (
-                      <ul className="divide-y divide-border/70">
-                        {filteredActivityLogsInScope.map((log) => (
-                          <li key={log.id} className="px-4 py-2.5 text-xs">
-                            <p className="text-foreground">
-                              <span className="font-medium">
-                                {log.actor_display_name ?? log.actor_user_id}
-                              </span>{" "}
-                              • {formatAuditActionLabel(log.action)}
-                            </p>
-                            <p className="mt-0.5 text-muted-foreground">
-                              {formatDateTime(log.created_at)} • {log.entity}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-                <Dialog
-                  open={monitoringAddChildOpen && monitoringAddChildContext != null}
-                  onOpenChange={(open) => {
-                    setMonitoringAddChildOpen(open);
-                    if (!open) setMonitoringAddChildContext(null);
-                  }}
-                >
-                  {monitoringAddChildContext ? (
-                    <DialogContent className="sm:max-w-md">
-                      <DialogHeader>
-                        <DialogTitle>
-                          Tambah {monitoringAddChildContext.rowHeader}
-                        </DialogTitle>
-                        <DialogDescription>
-                          {monitoringAddChildContext.parentId == null ? (
-                            <>
-                              {monitoringAddChildContext.rowHeader} baru ditambahkan sebagai unit kerja
-                              tingkat atas pada project{" "}
-                              <span className="font-medium text-foreground">
-                                {monitoringAddChildContext.parentTitle}
-                              </span>
-                              . Turunan ({monitoringAddChildContext.leafHeader}) dapat ditambahkan lewat
-                              tabel di bawah atau tab Tabel.
-                            </>
-                          ) : (
-                            <>
-                              {monitoringAddChildContext.rowHeader} baru menjadi turunan langsung dari{" "}
-                              <span className="font-medium text-foreground">
-                                {monitoringAddChildContext.parentTitle}
-                              </span>{" "}
-                              ({monitoringAddChildContext.parentHeader}). Kolom{" "}
-                              {monitoringAddChildContext.leafHeader} mengikuti data yang sudah ada.
-                            </>
-                          )}
-                        </DialogDescription>
-                      </DialogHeader>
-                      <form
-                        key={monitoringAddChildFormNonce}
-                        className="grid gap-3"
-                        action={(fd) => {
-                          if (!selectedProjectId || !monitoringAddChildContext) return;
-                          setTaskMsg(null);
-                          fd.set("project_id", selectedProjectId);
-                          if (monitoringAddChildContext.parentId) {
-                            fd.set("parent_id", monitoringAddChildContext.parentId);
-                          }
-                          if (defaultStatusId) fd.set("status_id", defaultStatusId);
-                          startTaskTransition(async () => {
-                            const r = await createProjectTaskAction(fd);
-                            if (r.error) {
-                              setTaskMsg(r.error);
-                              return;
-                            }
-                            setMonitoringAddChildOpen(false);
-                            setMonitoringAddChildContext(null);
-                            router.refresh();
-                          });
-                        }}
-                      >
-                        <div className="space-y-1">
-                          <Label>{monitoringAddChildContext.parentHeader}</Label>
-                          <Input value={monitoringAddChildContext.parentTitle} disabled />
-                        </div>
-                        <div className="space-y-1">
-                          <Label>Judul {monitoringAddChildContext.rowHeader} *</Label>
-                          <Input
-                            name="title"
-                            required
-                            placeholder={`Nama ${monitoringAddChildContext.rowHeader}`}
-                          />
-                        </div>
-                            <div className="space-y-1">
-                              <Label>Posisi urutan (opsional)</Label>
-                              <select
-                                name="before_issue_id"
-                                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                defaultValue=""
-                              >
-                                <option value="">Taruh di paling akhir</option>
-                                {addChildSiblingOptions.map((opt) => (
-                                  <option key={opt.id} value={opt.id}>
-                                    Sebelum: {opt.title}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                        <div className="space-y-1">
-                          <Label>Mulai</Label>
-                          <Input name="starts_at" type="date" />
-                        </div>
-                        <div className="grid grid-cols-3 gap-3">
-                          <div className="space-y-1">
-                            <Label>Target</Label>
-                            <Input name="progress_target" type="number" min="0" step="0.01" />
-                          </div>
-                          <div className="space-y-1">
-                            <Label>Realisasi</Label>
-                            <Input name="progress_actual" type="number" min="0" step="0.01" />
-                          </div>
-                          <div className="space-y-1">
-                            <Label>Bobot</Label>
-                            <Input
-                              name="issue_weight"
-                              type="number"
-                              min="0.01"
-                              step="0.01"
-                              defaultValue="1"
-                            />
-                          </div>
-                        </div>
-                        <Button type="submit" disabled={taskPending}>
-                          Simpan
-                        </Button>
-                        {taskMsg ? (
-                          <p className="text-xs text-red-600" role="alert">
-                            {taskMsg}
-                          </p>
-                        ) : null}
-                      </form>
-                    </DialogContent>
-                  ) : null}
-                </Dialog>
-                {enabledModulesForOrg.has("plm") && selectedProjectId && (
-                  <div className="mt-6">
-                    <BerkasListPanel
-                      rows={berkasForSelectedProject}
-                      title="Ringkasan berkas PLM"
-                      description={
-                        <>
-                          Project{" "}
-                          <span className="font-medium text-foreground">
-                            {selectedProject?.name ?? "—"}
-                          </span>
-                          . Klik baris atau buka tab{" "}
-                          <strong>Berkas</strong> untuk detail + alur status.
-                        </>
-                      }
-                      onRowClick={openBerkasDetail}
-                      berkasIdsWithBidang={
-                        showBerkasBidangColumn
-                          ? berkasIdsWithBidangInProject
-                          : undefined
-                      }
-                      onOpenBerkasInMap={openMapForBerkas}
-                    />
-                  </div>
-                )}
-              </>
+              <TabPanelMount view="Dashboard" activeView={activeView}>
+              {!selectedProjectId ? (
+                <p className="mt-5 text-sm text-muted-foreground">
+                  Pilih project di sidebar untuk melihat dashboard.
+                </p>
+              ) : (
+                <VirtualDashboardView
+                  projectId={selectedProjectId}
+                  projectName={selectedProject?.name ?? "Project"}
+                  virtualTables={allAccessibleVtables}
+                  virtualColumns={virtualColumns}
+                />
+              )}
+              </TabPanelMount>
             </TabsContent>
             <TabsContent value="Tabel" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <div className="mt-5 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
-                <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-                  <p className="text-sm font-semibold text-foreground">{tabelViewUi.panelTitle}</p>
-                  {selectedProjectId && (
-                    <div className="flex items-center gap-2">
-                      <Dialog open={tableTaskDialogOpen} onOpenChange={setTableTaskDialogOpen}>
-                        <DialogTrigger render={<Button size="sm" variant="outline" />}>
-                          + {tabelViewUi.addTargetLabel}
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Tambah {tabelViewUi.addTargetLabel}</DialogTitle>
-                            <DialogDescription>
-                              Tambahkan {tabelViewUi.addTargetLabel} baru dari view tabel. Data baru
-                              menjadi turunan langsung dari {tabelViewUi.indukFieldLabel}{" "}
-                              <span className="font-medium text-foreground">
-                                {tabelViewUi.indukDisplay}
-                              </span>
-                              .
-                            </DialogDescription>
-                          </DialogHeader>
-                          <form
-                            className="grid gap-3"
-                            action={(fd) => {
-                              setTaskMsg(null);
-                              fd.set("project_id", selectedProjectId);
-                              if (selectedTaskId) fd.set("parent_id", selectedTaskId);
-                              if (defaultStatusId) fd.set("status_id", defaultStatusId);
-                              startTaskTransition(async () => {
-                                const r = await createProjectTaskAction(fd);
-                                if (r.error) {
-                                  setTaskMsg(r.error);
-                                  return;
-                                }
-                                setTableTaskDialogOpen(false);
-                                router.refresh();
-                              });
-                            }}
-                          >
-                            <div className="space-y-1">
-                              <Label>{tabelViewUi.indukFieldLabel}</Label>
-                              <Input value={tabelViewUi.indukDisplay} disabled />
-                            </div>
-                            <div className="space-y-1">
-                              <Label>Judul {tabelViewUi.addTargetLabel} *</Label>
-                              <Input
-                                name="title"
-                                required
-                                placeholder={`Nama ${tabelViewUi.addTargetLabel}`}
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label>Posisi urutan (opsional)</Label>
-                              <select
-                                name="before_issue_id"
-                                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                defaultValue=""
-                              >
-                                <option value="">Taruh di paling akhir</option>
-                                {tableAddSiblingOptions.map((opt) => (
-                                  <option key={opt.id} value={opt.id}>
-                                    Sebelum: {opt.title}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="space-y-1">
-                              <Label>Mulai</Label>
-                              <Input name="starts_at" type="date" />
-                            </div>
-                            <div className="grid grid-cols-3 gap-3">
-                              <div className="space-y-1">
-                                <Label>Target</Label>
-                                <Input name="progress_target" type="number" min="0" step="0.01" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label>Realisasi</Label>
-                                <Input name="progress_actual" type="number" min="0" step="0.01" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label>Bobot</Label>
-                                <Input
-                                  name="issue_weight"
-                                  type="number"
-                                  min="0.01"
-                                  step="0.01"
-                                  defaultValue="1"
-                                />
-                              </div>
-                            </div>
-                            <Button type="submit" disabled={taskPending}>
-                              Simpan {tabelViewUi.addTargetLabel}
-                            </Button>
-                            {taskMsg && (
-                              <p className="text-xs text-red-600" role="alert">
-                                {taskMsg}
-                              </p>
-                            )}
-                          </form>
-                        </DialogContent>
-                      </Dialog>
-                    </div>
-                  )}
-                </div>
-                <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Judul</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Status</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Mulai</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Tenggat</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">
-                        {tabelViewUi.parentColumnHeader}
-                      </th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Catatan Terakhir</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Oleh</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Kapan</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Umur</th>
-                      <th className="px-4 py-3 text-left align-middle font-medium whitespace-nowrap">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableRows.map(({ issue, depth }) => {
-                      const rowLevelLabel = labelForDepth(
-                        projectIssueDepthById.get(issue.id) ?? 0
-                      );
-                      const effectiveStatusId =
-                        optimisticStatusByIssueId[issue.id] ?? issue.status_id;
-                      const st = effectiveStatusId ? statusById.get(effectiveStatusId) : null;
-                      const isSelectedRootRow =
-                        selectedTaskId != null && issue.id === selectedTaskId;
-                      return (
-                        <tr
-                          key={issue.id}
-                          className={`border-b border-border/70 ${
-                            selectedTaskId === issue.id ? "bg-primary/10 font-semibold" : ""
-                          }`}
-                        >
-                          <td
-                            className={`px-4 py-3 align-middle ${
-                              isSelectedRootRow ? "font-semibold text-primary" : ""
-                            }`}
-                          >
-                            <span className="block" style={{ paddingLeft: depth * 12 }}>
-                              {issue.title}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 align-middle">
-                            {selectedProjectId ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-auto p-0 hover:bg-transparent"
-                                title="Klik untuk rotasi status"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  if (!selectedProjectId) return;
-                                  setTaskMsg(null);
-                                  const currentCategory = st?.category ?? "todo";
-                                  const nextCategory =
-                                    currentCategory === "todo"
-                                      ? "in_progress"
-                                      : currentCategory === "in_progress"
-                                        ? "done"
-                                        : "todo";
-                                  const nextStatusId = firstStatusIdByCategory.get(nextCategory);
-                                  if (!nextStatusId) {
-                                    setTaskMsg(
-                                      `Status ${nextCategory} belum tersedia di project ini`
-                                    );
-                                    return;
-                                  }
-                                  setOptimisticStatusByIssueId((prev) => ({
-                                    ...prev,
-                                    [issue.id]: nextStatusId,
-                                  }));
-                                  queueStatusCommit(issue.id, nextStatusId);
-                                }}
-                              >
-                                <Badge className={statusBadgeClass(st?.category)}>
-                                  {statusLabelEn(st?.category)}
-                                </Badge>
-                              </Button>
-                            ) : (
-                              <Badge className={statusBadgeClass(st?.category)}>
-                                {statusLabelEn(st?.category)}
-                              </Badge>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {formatShortDate(issue.starts_at)}
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {formatShortDate(issue.due_at)}
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {issue.parent_id
-                              ? (issueTitleById.get(issue.parent_id) ?? "—")
-                              : "—"}
-                          </td>
-                          <td className="max-w-[20rem] px-4 py-3 align-middle text-muted-foreground">
-                            <span className="line-clamp-2">{issue.last_note?.trim() || "—"}</span>
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {issue.last_note_by
-                              ? (memberNameByUserId.get(issue.last_note_by) ?? issue.last_note_by)
-                              : "—"}
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {formatDateTime(issue.last_note_at)}
-                          </td>
-                          <td className="px-4 py-3 align-middle text-muted-foreground whitespace-nowrap">
-                            {formatRelativeAge(issue.last_note_at)}
-                          </td>
-                          <td className="px-4 py-3 align-middle whitespace-nowrap">
-                            {selectedProjectId ? (
-                              <div
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => e.stopPropagation()}
-                              >
-                                <div className="flex items-center gap-1">
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={taskPending}
-                                    className="h-auto px-2 py-0.5 text-xs font-medium"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      setTaskEditState({
-                                        issueId: issue.id,
-                                        title: issue.title,
-                                        startsAt: issue.starts_at
-                                          ? issue.starts_at.slice(0, 10)
-                                          : "",
-                                        dueAt: issue.due_at ? issue.due_at.slice(0, 10) : "",
-                                      });
-                                    }}
-                                  >
-                                    Edit
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={taskPending}
-                                    className="h-auto px-2 py-0.5 text-xs font-medium"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      setTaskNoteEditor({
-                                        issueId: issue.id,
-                                        title: issue.title,
-                                        initialNote: issue.last_note ?? "",
-                                      });
-                                    }}
-                                  >
-                                    Catatan
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={taskPending}
-                                    className="h-auto px-2 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/10"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      setTaskDeleteConfirm({
-                                        issueId: issue.id,
-                                        title: issue.title,
-                                      });
-                                    }}
-                                  >
-                                    Hapus
-                                  </Button>
-                                </div>
-                                <Dialog
-                                  open={taskEditState?.issueId === issue.id}
-                                  onOpenChange={(open) => {
-                                    if (!open) setTaskEditState(null);
-                                  }}
-                                >
-                                  <DialogContent>
-                                    <DialogHeader>
-                                      <DialogTitle>Edit {rowLevelLabel}</DialogTitle>
-                                      <DialogDescription>
-                                        Perbarui judul dan jadwal untuk {rowLevelLabel} ini.
-                                      </DialogDescription>
-                                    </DialogHeader>
-                                    <form
-                                      className="grid gap-3"
-                                      action={(fd) => {
-                                        const current = taskEditState;
-                                        if (!current || !selectedProjectId) return;
-                                        setTaskMsg(null);
-                                        fd.set("issue_id", current.issueId);
-                                        fd.set("project_id", selectedProjectId);
-                                        startTaskTransition(async () => {
-                                          const r = await updateTaskBasicAction(fd);
-                                          if (r.error) {
-                                            setTaskMsg(r.error);
-                                            return;
-                                          }
-                                          setTaskEditState(null);
-                                          router.refresh();
-                                        });
-                                      }}
-                                    >
-                                      <div className="space-y-1">
-                                        <Label>Judul {rowLevelLabel} *</Label>
-                                        <Input
-                                          name="title"
-                                          required
-                                          value={taskEditState?.title ?? ""}
-                                          onChange={(e) =>
-                                            setTaskEditState((prev) =>
-                                              prev && prev.issueId === issue.id
-                                                ? { ...prev, title: e.target.value }
-                                                : prev
-                                            )
-                                          }
-                                        />
-                                      </div>
-                                      <div className="grid grid-cols-2 gap-3">
-                                        <div className="space-y-1">
-                                          <Label>Mulai</Label>
-                                          <Input
-                                            name="starts_at"
-                                            type="date"
-                                            value={taskEditState?.startsAt ?? ""}
-                                            onChange={(e) =>
-                                              setTaskEditState((prev) =>
-                                                prev && prev.issueId === issue.id
-                                                  ? { ...prev, startsAt: e.target.value }
-                                                  : prev
-                                              )
-                                            }
-                                          />
-                                        </div>
-                                        <div className="space-y-1">
-                                          <Label>Tenggat</Label>
-                                          <Input
-                                            name="due_at"
-                                            type="date"
-                                            value={taskEditState?.dueAt ?? ""}
-                                            onChange={(e) =>
-                                              setTaskEditState((prev) =>
-                                                prev && prev.issueId === issue.id
-                                                  ? { ...prev, dueAt: e.target.value }
-                                                  : prev
-                                              )
-                                            }
-                                          />
-                                        </div>
-                                      </div>
-                                      <div className="flex justify-end gap-2">
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          onClick={() => setTaskEditState(null)}
-                                        >
-                                          Batal
-                                        </Button>
-                                        <Button type="submit" disabled={taskPending}>
-                                          Simpan perubahan
-                                        </Button>
-                                      </div>
-                                      {taskMsg && (
-                                        <p className="text-xs text-red-600" role="alert">
-                                          {taskMsg}
-                                        </p>
-                                      )}
-                                    </form>
-                                  </DialogContent>
-                                </Dialog>
-                                <Dialog
-                                  open={taskDeleteConfirm?.issueId === issue.id}
-                                  onOpenChange={(open) => {
-                                    if (!open) setTaskDeleteConfirm(null);
-                                  }}
-                                >
-                                  <DialogContent>
-                                    <DialogHeader>
-                                      <DialogTitle>Hapus {rowLevelLabel}</DialogTitle>
-                                      <DialogDescription>
-                                        {rowLevelLabel} &quot;{taskDeleteConfirm?.title ?? issue.title}
-                                        &quot; akan dihapus (soft delete), termasuk seluruh turunannya.
-                                      </DialogDescription>
-                                    </DialogHeader>
-                                    <div className="flex justify-end gap-2">
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        onClick={() => setTaskDeleteConfirm(null)}
-                                      >
-                                        Batal
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="destructive"
-                                        disabled={taskPending}
-                                        onClick={() => {
-                                          const current = taskDeleteConfirm;
-                                          if (!current || !selectedProjectId) return;
-                                          setTaskMsg(null);
-                                          const fd = new FormData();
-                                          fd.set("issue_id", current.issueId);
-                                          fd.set("project_id", selectedProjectId);
-                                          startTaskTransition(async () => {
-                                            const r = await deleteTaskAction(fd);
-                                            if (r.error) {
-                                              setTaskMsg(r.error);
-                                              return;
-                                            }
-                                            setTaskDeleteConfirm(null);
-                                            router.refresh();
-                                          });
-                                        }}
-                                      >
-                                        Ya, hapus
-                                      </Button>
-                                    </div>
-                                    {taskMsg && (
-                                      <p className="text-xs text-red-600" role="alert">
-                                        {taskMsg}
-                                      </p>
-                                    )}
-                                  </DialogContent>
-                                </Dialog>
-                              </div>
-                            ) : null}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {tableRows.length === 0 && (
-                  <p className="m-4 text-sm text-muted-foreground">
-                    Tidak ada baris untuk scope ini.
+              <TabPanelMount view="Tabel" activeView={activeView}>
+              {canonicalOrgId && vtablesForOrg.length > 0 ? (
+                <div className="mt-5 space-y-4">
+                  <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Tabel Organisasi
                   </p>
-                )}
-              </div>
-              <div className="mt-4 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-                  <p className="text-sm font-semibold text-foreground">Project Members</p>
-                  {selectedProjectId ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="shrink-0"
-                      onClick={() => {
-                        setMemberMsg(null);
-                        setMemberDialogOpen(true);
-                      }}
+                  {vtablesForOrg.map((vt) => (
+                    <div
+                      key={vt.id}
+                      id={`vtable-${vt.slug}`}
+                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
                     >
-                      + Anggota
-                    </Button>
-                  ) : null}
+                        <VirtualTableView
+                          key={vt.id}
+                          table={vt}
+                          columns={virtualColumns.filter((c) => c.table_id === vt.id)}
+                          projectId={selectedProjectId}
+                          memberNameByUserId={memberNameByUserId}
+                          allVirtualTables={allAccessibleVtables}
+                        />
+                    </div>
+                  ))}
                 </div>
-                <table className="w-full min-w-[26rem] border-collapse text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                      <th className="px-4 py-3 font-medium whitespace-nowrap">Nama</th>
-                      <th className="px-4 py-3 font-medium whitespace-nowrap">Peran</th>
-                      <th className="px-4 py-3 font-medium whitespace-nowrap">User ID</th>
-                      <th className="px-4 py-3 font-medium whitespace-nowrap">Bergabung</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projectMembersForSelectedProject.map((member) => (
-                      <tr key={`${member.project_id}:${member.user_id}`} className="border-b border-border/70">
-                        <td className="px-4 py-3 align-middle">
-                          {member.display_name?.trim() || "Tanpa nama"}
-                        </td>
-                        <td className="px-4 py-3 align-middle text-muted-foreground">
-                          {member.role}
-                        </td>
-                        <td className="px-4 py-3 align-middle font-mono text-xs text-muted-foreground">
-                          {member.user_id}
-                        </td>
-                        <td className="px-4 py-3 align-middle text-muted-foreground">
-                          {formatShortDate(member.joined_at)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {projectMembersForSelectedProject.length === 0 && (
-                  <p className="m-4 text-sm text-muted-foreground">
-                    Belum ada anggota pada project ini.
+              ) : null}
+
+              {selectedProjectId && vtablesForProject.length > 0 ? (
+                <div className="mt-6 space-y-4">
+                  <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Tabel Project
                   </p>
-                )}
-              </div>
-              <SpatialAttributesPanel
-                rows={issueGeometryRowsForTableView}
-                issueTitleById={issueTitleById}
-                issueGeometryFeatureMap={issueGeometryFeatureMap}
-                selectedProjectId={selectedProjectId}
-                selectedTaskId={selectedTaskId}
-                selectedTaskTitle={selectedTask?.title ?? null}
-                unitKerjaColumnLabel={labelForDepth(0)}
-              />
+                  {vtablesForProject.map((vt) => (
+                    <div
+                      key={vt.id}
+                      id={`vtable-${vt.slug}`}
+                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
+                    >
+                        <VirtualTableView
+                          key={vt.id}
+                          table={vt}
+                          columns={virtualColumns.filter((c) => c.table_id === vt.id)}
+                          projectId={selectedProjectId}
+                          memberNameByUserId={memberNameByUserId}
+                          allVirtualTables={allAccessibleVtables}
+                        />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {allAccessibleVtables.length === 0 ? (
+                <p className="mt-5 text-sm text-muted-foreground">
+                  {!selectedProjectId && !canonicalOrgId
+                    ? "Pilih organisasi dan project untuk melihat tabel custom."
+                    : "Belum ada tabel custom pada scope ini."}
+                </p>
+              ) : null}
+              </TabPanelMount>
             </TabsContent>
             <TabsContent value="Berkas" className="min-h-0 w-full min-w-0 flex-none outline-none">
+              <TabPanelMount view="Berkas" activeView={activeView}>
               <div className="mt-4 space-y-3">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
@@ -4871,7 +4461,7 @@ export function WorkspaceClient({
                         pengukuranDokumen={pengukuranDokumen}
                         alatUkur={alatUkur}
                         onBack={() =>
-                          replaceQuery((q) => {
+                          commitScopeInUrl((q) => {
                             q.delete("berkas");
                           })
                         }
@@ -4894,8 +4484,10 @@ export function WorkspaceClient({
                   </>
                 )}
               </div>
+              </TabPanelMount>
             </TabsContent>
             <TabsContent value="Laporan" className="min-h-0 w-full min-w-0 flex-none outline-none">
+              <TabPanelMount view="Laporan" activeView={activeView}>
               <div className="mt-4">
                 <p className="mb-3 text-sm text-muted-foreground">
                   Agregat dari view SQL schema{" "}
@@ -4909,8 +4501,10 @@ export function WorkspaceClient({
                   pengukuranByStatus={plmPengukuranStatusSummary}
                 />
               </div>
+              </TabPanelMount>
             </TabsContent>
             <TabsContent value="Keuangan" className="min-h-0 w-full min-w-0 flex-none outline-none">
+              <TabPanelMount view="Keuangan" activeView={activeView}>
               <div className="mt-4">
                 <FinancePanel
                   projectId={selectedProjectId}
@@ -4925,11 +4519,13 @@ export function WorkspaceClient({
                   pembayaran={financePembayaranInProject}
                 />
               </div>
+              </TabPanelMount>
             </TabsContent>
             <TabsContent
               value="Map"
               className="flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col overflow-hidden outline-none"
             >
+              <TabPanelMount view="Map" activeView={activeView}>
               <div className="flex h-0 min-h-0 flex-1 basis-0 flex-col">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
@@ -6279,11 +5875,73 @@ export function WorkspaceClient({
                           </DialogContent>
                         </Dialog>
                     )}
+                    {mapImportTable ? (
+                      <VirtualTableGeoJsonImportDialog
+                        open={mapGeoImportOpen}
+                        onOpenChange={handleMapGeoImportOpenChange}
+                        table={mapImportTable}
+                        columns={mapImportTableColumns}
+                        allVirtualTables={allAccessibleVtables}
+                        mapPreviewEnabled
+                        onPreviewChange={handleMapImportPreviewChange}
+                        onImported={handleMapGeoImported}
+                      />
+                    ) : null}
                     <div className="grid min-h-0 min-w-0 flex-1 basis-0 grid-rows-[auto_minmax(0,1fr)] gap-y-3">
                       <div className="flex min-w-0 shrink-0 flex-col gap-2">
-                        {mapLayersForSelectedProject.length === 0 && (
+                        {vtablesWithGeometry.length > 0 ? (
+                          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+                            <div className="min-w-[10rem] flex-1 sm:max-w-xs">
+                              <label
+                                htmlFor="map-vtable-import-select"
+                                className="text-xs font-medium text-muted-foreground"
+                              >
+                                Tabel impor
+                              </label>
+                              <select
+                                id="map-vtable-import-select"
+                                value={mapImportTableId}
+                                onChange={(e) => {
+                                  setMapImportTableId(e.target.value);
+                                  setMapImportPreviewLayers([]);
+                                }}
+                                className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                              >
+                                {vtablesWithGeometry.map((vt) => (
+                                  <option key={vt.id} value={vt.id}>
+                                    {vt.display_name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              disabled={!mapImportTableId}
+                              onClick={() => setMapGeoImportOpen(true)}
+                            >
+                              <Upload className="mr-1 size-3.5" />
+                              Impor GeoJSON ke tabel
+                            </Button>
+                            {mapImportPreviewLayers.length > 0 ? (
+                              <p
+                                className="flex items-center gap-1 text-xs text-teal-800 dark:text-teal-300"
+                                role="status"
+                              >
+                                <MapPin className="size-3.5 shrink-0" />
+                                Pratinjau {mapImportPreviewLayers.length} poligon di
+                                peta
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {mapLayersForSelectedProject.length === 0 &&
+                          mapImportPreviewLayers.length === 0 && (
                           <p className="text-sm text-muted-foreground">
-                            Belum ada geometri unit kerja di peta untuk project ini.
+                            Belum ada geometri di peta untuk project ini. Impor
+                            GeoJSON ke tabel virtual di atas, atau pilih unit kerja
+                            untuk geometri issue (legacy).
                           </p>
                         )}
                         {mapLayersForSelectedProject.length > 0 &&
@@ -6315,6 +5973,19 @@ export function WorkspaceClient({
                               />
                               Geometri
                             </label>
+                            {vtableGeometryLayers.length > 0 && (
+                              <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-border"
+                                  checked={mapShowVirtualTableGeometry}
+                                  onChange={(e) =>
+                                    setMapShowVirtualTableGeometry(e.target.checked)
+                                  }
+                                />
+                                Tabel Custom ({vtableGeometryLayers.length})
+                              </label>
+                            )}
                           </div>
                         )}
                       </div>
@@ -6334,6 +6005,27 @@ export function WorkspaceClient({
                               />{" "}
                               Geometri
                             </span>
+                            {vtableGeometryLayers.length > 0 && (
+                              <span>
+                                <span
+                                  className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
+                                  style={{ background: "#fbbf24" }}
+                                />{" "}
+                                Tabel Custom
+                              </span>
+                            )}
+                            {mapImportPreviewLayers.length > 0 && (
+                              <span>
+                                <span
+                                  className="mr-1 inline-block h-2 w-2 rounded-sm align-middle border border-teal-700"
+                                  style={{
+                                    background: "#5eead4",
+                                    borderStyle: "dashed",
+                                  }}
+                                />{" "}
+                                Pratinjau impor
+                              </span>
+                            )}
                           </p>
                           {selectedTaskId ? (
                             <div className="flex shrink-0 items-center gap-2">
@@ -6366,8 +6058,10 @@ export function WorkspaceClient({
                   </div>
                 )}
               </div>
+              </TabPanelMount>
             </TabsContent>
             <TabsContent value="Kanban" className="min-h-0 w-full min-w-0 flex-none outline-none">
+              <TabPanelMount view="Kanban" activeView={activeView}>
               {selectedProjectId ? (
               <div className="mt-4">
                 {selectedTaskId && (
@@ -6393,8 +6087,10 @@ export function WorkspaceClient({
                 )}
               </div>
               ) : null}
+              </TabPanelMount>
             </TabsContent>
             <TabsContent value="Kalender" className="min-h-0 w-full min-w-0 flex-none outline-none">
+              <TabPanelMount view="Kalender" activeView={activeView}>
               {selectedProjectId ? (
               <div className="mt-4">
                 <CalendarScheduleView
@@ -6406,8 +6102,10 @@ export function WorkspaceClient({
                 />
               </div>
               ) : null}
+              </TabPanelMount>
             </TabsContent>
             <TabsContent value="Gantt" className="min-h-0 w-full min-w-0 flex-none outline-none">
+              <TabPanelMount view="Gantt" activeView={activeView}>
               {selectedProjectId ? (
               <div className="mt-4">
                 <GanttScheduleView
@@ -6419,6 +6117,7 @@ export function WorkspaceClient({
                 />
               </div>
               ) : null}
+              </TabPanelMount>
             </TabsContent>
             <Dialog
               open={Boolean(taskNoteEditor)}
@@ -6495,7 +6194,46 @@ export function WorkspaceClient({
           </ScrollArea>
         </section>
         </Tabs>
+
+        {/* Virtual table overlay — shown when a custom table is selected in sidebar */}
+        {activeVirtualTable && (
+          <div className="absolute inset-0 z-20 flex flex-col overflow-auto bg-background">
+            <div className="shrink-0 border-b border-border bg-card/90 px-6 py-2">
+              <button
+                type="button"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => setActiveVirtualTableSlug(null)}
+              >
+                ← Kembali
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-6">
+              <VirtualTableView
+                key={activeVirtualTable.id}
+                table={activeVirtualTable}
+                columns={activeVirtualTableColumns}
+                projectId={selectedProjectId}
+                memberNameByUserId={memberNameByUserId}
+                allVirtualTables={allAccessibleVtables}
+                onTableDeleted={() => setActiveVirtualTableSlug(null)}
+              />
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* Create virtual table dialog */}
+      <VirtualTableCreateDialog
+        projectId={selectedProjectId}
+        organizationId={canonicalOrgId}
+        scope={vtableCreateScope}
+        open={vtableCreateDialogOpen}
+        onOpenChange={setVtableCreateDialogOpen}
+        onCreated={(tableId) => {
+          const created = virtualTables.find((vt) => vt.id === tableId);
+          if (created) setActiveVirtualTableSlug(created.slug);
+        }}
+      />
       </div>
       </div>
     </div>

@@ -43,6 +43,10 @@ import type {
   FinanceInvoiceRow,
   FinancePembayaranRow,
 } from "./finance-types";
+import type {
+  VirtualTableRow,
+  VirtualColumnRow,
+} from "./virtual-table-types";
 
 type HomeProps = {
   searchParams: Promise<{ joinError?: string; org?: string; project?: string; view?: string }>;
@@ -98,8 +102,6 @@ export default async function Home({ searchParams }: HomeProps) {
     : null;
   const selectedOrgIdFromQuery = String(qp.org ?? "").trim();
   const selectedProjectIdFromQuery = String(qp.project ?? "").trim();
-  const activeViewParam = String(qp.view ?? "").trim().toLowerCase();
-
   const supabase = await createServerSupabaseClient();
 
   if (!supabase) {
@@ -137,13 +139,12 @@ export default async function Home({ searchParams }: HomeProps) {
   const selectedProjectId = projectList.some((p) => p.id === selectedProjectIdFromQuery)
     ? selectedProjectIdFromQuery
     : null;
-  const scopedProjectIds = selectedProjectId
-    ? [selectedProjectId]
-    : selectedOrgId
-      ? projectList
-          .filter((p) => p.organization_id === selectedOrgId)
-          .map((p) => p.id)
-      : projectList.map((p) => p.id);
+  /** Muat data seluruh project di org aktif agar ganti project di client tidak perlu RSC round-trip. */
+  const scopedProjectIds = selectedOrgId
+    ? projectList
+        .filter((p) => p.organization_id === selectedOrgId)
+        .map((p) => p.id)
+    : projectList.map((p) => p.id);
   const orgIds = [
     ...new Set(projectList.map((p) => p.organization_id).filter(Boolean)),
   ];
@@ -320,7 +321,7 @@ export default async function Home({ searchParams }: HomeProps) {
         m.organization_id != null &&
         orgIdsForScopedProjects.has(m.organization_id)
     );
-  const needsPlmData = ["berkas", "laporan", "map"].includes(activeViewParam);
+  const needsPlmData = plmEnabledForSelectedOrg;
 
   const [
     { data: bidangMapRaw, error: bidangMapError },
@@ -532,7 +533,7 @@ export default async function Home({ searchParams }: HomeProps) {
       m.module_code === "finance" &&
       m.organization_id === selectedOrgId
   );
-  const needsFinanceData = activeViewParam === "keuangan";
+  const needsFinanceData = financeEnabledForSelectedOrg;
 
   const { data: finInvRaw, error: finInvErr } =
     scopedProjectIds.length > 0 && financeEnabledForSelectedOrg && needsFinanceData
@@ -597,6 +598,60 @@ export default async function Home({ searchParams }: HomeProps) {
 
   const userNotifications = (notifRaw ?? []) as UserNotificationRow[];
 
+  // --- Virtual tables + columns (project-level + org-level) ---
+  const vtableResults = await Promise.all([
+    scopedProjectIds.length > 0
+      ? supabase
+          .schema("core_pm")
+          .from("virtual_tables")
+          .select(
+            "id, project_id, organization_id, slug, display_name, description, icon, sort_order, created_by, created_at"
+          )
+          .in("project_id", scopedProjectIds)
+          .is("deleted_at", null)
+          .order("sort_order")
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [] as VirtualTableRow[], error: null }),
+    orgIds.length > 0
+      ? supabase
+          .schema("core_pm")
+          .from("virtual_tables")
+          .select(
+            "id, project_id, organization_id, slug, display_name, description, icon, sort_order, created_by, created_at"
+          )
+          .in("organization_id", orgIds)
+          .is("deleted_at", null)
+          .is("project_id", null)
+          .order("sort_order")
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [] as VirtualTableRow[], error: null }),
+  ]);
+  const vtablesRaw = vtableResults.flatMap((r) => (r.data ?? []) as VirtualTableRow[]);
+  const vtablesErr = vtableResults.find((r) => r.error)?.error ?? null;
+
+  // Deduplicate (in case of overlap)
+  const vtableSeenIds = new Set<string>();
+  const virtualTables: VirtualTableRow[] = [];
+  for (const vt of vtablesRaw) {
+    if (!vtableSeenIds.has(vt.id)) {
+      vtableSeenIds.add(vt.id);
+      virtualTables.push(vt);
+    }
+  }
+
+  const vtableIds = virtualTables.map((t) => t.id);
+
+  const { data: vcolsRaw, error: vcolsErr } = vtableIds.length > 0
+    ? await supabase
+        .schema("core_pm")
+        .from("virtual_columns")
+        .select("id, table_id, slug, display_name, data_type, position, is_required, config")
+        .in("table_id", vtableIds)
+        .order("position")
+    : { data: [] as VirtualColumnRow[], error: null };
+
+  const virtualColumns = (vcolsRaw ?? []) as VirtualColumnRow[];
+
   const fetchError =
     projectsError?.message ??
     orgsError?.message ??
@@ -629,6 +684,8 @@ export default async function Home({ searchParams }: HomeProps) {
     finItemErr?.message ??
     finPayErr?.message ??
     (presenceMissingTable ? null : presenceError?.message) ??
+    vtablesErr?.message ??
+    vcolsErr?.message ??
     null;
 
   return (
@@ -673,6 +730,8 @@ export default async function Home({ searchParams }: HomeProps) {
         userEmail={user?.email ?? null}
         userId={user?.id ?? null}
         userNotifications={userNotifications}
+        virtualTables={virtualTables}
+        virtualColumns={virtualColumns}
         joinError={joinError}
       />
     </Suspense>
