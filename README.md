@@ -35,6 +35,7 @@ Lihat `docs/fase-0-eksekusi.md` untuk checklist detail eksekusi Fase 0.
 - Kode app: folder `app/` — di Vercel set **Root Directory** = `app` (lihat `DEPLOY.md`)
 - Env lokal: salin `app/.env.example` → `app/.env.local` (isi `NEXT_PUBLIC_SUPABASE_*` dan `NEXT_PUBLIC_SITE_URL`)
 - Dev: `cd app` lalu `npm install` lalu `npm run dev`
+- **GitHub Codespaces (branch `dev`):** lihat [`docs/codespaces-setup.md`](docs/codespaces-setup.md)
 - Kanban (inc 6): drag memakai `@dnd-kit/core` — pastikan dependency terpasang setelah `git pull`
 - Auth + RLS (inc 7): wajib login di `/login`; migration `0005` + `0006_rls_project_member_helper.sql` (hindari rekursi policy) + panduan `docs/supabase-auth-increment-7.md`
 - Migration DB: dari root, `npx supabase db push` (termasuk jadwal issue `0003_issues_schedule` + demo peta `0004_spatial_demo_footprints`)

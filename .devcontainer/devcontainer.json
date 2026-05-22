@@ -1,0 +1,26 @@
+{
+  "name": "Spatial PM — Next.js (app)",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "workspaceFolder": "/workspaces/spatial-database-project-management",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Next.js dev server",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.cwd": "${containerWorkspaceFolder}/app"
+      },
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  },
+  "remoteUser": "node"
+}
