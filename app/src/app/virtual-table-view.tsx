@@ -90,6 +90,7 @@ import {
 } from "@/lib/virtual-table-import-limits";
 import { relationLookupSlugFromConfig } from "@/lib/virtual-table-relation-import";
 import { parseFeatureCollectionForVirtualImport } from "@/lib/virtual-table-geojson-import";
+import { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
 import {
   buildVirtualTableImportPreviewFootprints,
   mapPreviewLayersSignature,
@@ -866,6 +867,7 @@ export function VirtualTableView({
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [showGeoJsonImport, setShowGeoJsonImport] = useState(false);
+  const [showDxfImport, setShowDxfImport] = useState(false);
 
   const geometryColumns = useMemo(
     () => columns.filter((c) => c.data_type === "geometry"),
@@ -1743,16 +1745,28 @@ export function VirtualTableView({
             Impor CSV
           </Button>
           {geometryColumns.length > 0 ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setShowGeoJsonImport(true)}
-              disabled={pending || initialLoading}
-            >
-              <MapPin className="mr-1 size-3.5" />
-              Impor GeoJSON
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowGeoJsonImport(true)}
+                disabled={pending || initialLoading}
+              >
+                <MapPin className="mr-1 size-3.5" />
+                Impor GeoJSON
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowDxfImport(true)}
+                disabled={pending || initialLoading}
+              >
+                <Upload className="mr-1 size-3.5" />
+                Impor DXF
+              </Button>
+            </>
           ) : null}
           <Button
             type="button"
@@ -2994,6 +3008,19 @@ export function VirtualTableView({
         table={table}
         columns={sortedColumns}
         allVirtualTables={allVirtualTables}
+        onImported={() => {
+          void loadRows();
+          router.refresh();
+        }}
+      />
+
+      <VirtualTableDxfImportDialog
+        open={showDxfImport}
+        onOpenChange={setShowDxfImport}
+        table={table}
+        columns={sortedColumns}
+        allVirtualTables={allVirtualTables}
+        rows={rows}
         onImported={() => {
           void loadRows();
           router.refresh();

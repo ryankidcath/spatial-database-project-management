@@ -30,6 +30,15 @@ import {
   type CompositeKecamatanTitleIndex,
   type RelationLookupIndex,
 } from "@/lib/virtual-table-relation-import";
+import {
+  extractClosedPolygonRingsFromDxfLayer,
+  parseDxfDocument,
+} from "@/lib/dxf-import-utils";
+import { isPreviewSourceSridSupported } from "@/lib/crs-reproject";
+import {
+  buildVirtualTableDxfFeatureCollection,
+  parseVirtualTableDxfSourceSrid,
+} from "@/lib/virtual-table-dxf-import";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog } from "./audit-log-actions";
 
@@ -2093,6 +2102,197 @@ export async function importVirtualRowsGeoJsonBatchAction(
     skippedExisting,
     failureSamples,
   };
+}
+
+const VIRTUAL_IMPORT_FORM_FIELD_KEYS = [
+  "table_id",
+  "geometry_column_slug",
+  "match_column_slug",
+  "upsert_mode",
+  "feature_key_prefix",
+  "desa_source_mode",
+  "desa_relation_column_slug",
+  "desa_target_row_id",
+  "geo_desa_lookup",
+  "geo_code_prop",
+  "target_code_slug",
+  "geo_kecamatan_prop",
+  "geo_nama_desa_prop",
+  "target_kecamatan_slug",
+  "target_title_slug",
+] as const;
+
+function copyVirtualImportFormFields(source: FormData, target: FormData): void {
+  for (const key of VIRTUAL_IMPORT_FORM_FIELD_KEYS) {
+    const v = source.get(key);
+    if (v != null && String(v).trim() !== "") {
+      target.set(key, String(v));
+    }
+  }
+}
+
+export type ImportVirtualRowsDxfResult = ImportVirtualRowsGeoJsonResult;
+
+/** Impor poligon tertutup dari layer DXF → virtual_rows (WGS84, upsert sama GeoJSON). */
+export async function importVirtualRowsDxfBatchAction(
+  formData: FormData
+): Promise<ImportVirtualRowsDxfResult> {
+  const empty = {
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+  };
+
+  const dxfText = String(formData.get("dxf_text") ?? "");
+  const layerName = String(formData.get("layer_name") ?? "").trim();
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
+  const keysJsonRaw = String(formData.get("match_keys_json") ?? "").trim();
+  const labelsJsonRaw = String(formData.get("match_labels_json") ?? "").trim();
+  const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+
+  if (!dxfText.trim() || !layerName) {
+    return {
+      error: "dxf_text dan layer_name wajib diisi",
+      ...empty,
+    };
+  }
+  if (!matchColumnSlug) {
+    return {
+      error: "match_column_slug wajib (mis. no_bidang)",
+      ...empty,
+    };
+  }
+  if (!keysJsonRaw) {
+    return {
+      error: "match_keys_json wajib (satu kunci per poligon)",
+      ...empty,
+    };
+  }
+  if (dxfText.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("DXF"),
+      ...empty,
+    };
+  }
+
+  const sridParsed = parseVirtualTableDxfSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) {
+    return { error: sridParsed.error, ...empty };
+  }
+  if (!isPreviewSourceSridSupported(sridParsed.srid)) {
+    return {
+      error: `EPSG:${sridParsed.srid} belum didukung untuk impor DXF. Gunakan SRID dari daftar (UTM/TM-3/WGS84).`,
+      ...empty,
+    };
+  }
+
+  let matchKeys: string[];
+  let labelPerIndex: (string | null)[] = [];
+  try {
+    const parsed = JSON.parse(keysJsonRaw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return {
+        error: "match_keys_json harus berupa JSON array string yang valid.",
+        ...empty,
+      };
+    }
+    matchKeys = parsed.map((x) => String(x ?? "").trim());
+    if (matchKeys.some((k) => !k)) {
+      return {
+        error: "Setiap kunci pencocokan pada match_keys_json tidak boleh kosong.",
+        ...empty,
+      };
+    }
+  } catch {
+    return {
+      error: "match_keys_json harus berupa JSON array string yang valid.",
+      ...empty,
+    };
+  }
+
+  if (labelsJsonRaw) {
+    try {
+      const labelsParsed = JSON.parse(labelsJsonRaw) as unknown;
+      if (!Array.isArray(labelsParsed)) {
+        return {
+          error: "match_labels_json harus berupa JSON array yang valid.",
+          ...empty,
+        };
+      }
+      labelPerIndex = labelsParsed.map((x) => {
+        const t = String(x ?? "").trim();
+        return t.length > 0 ? t : null;
+      });
+    } catch {
+      return {
+        error: "match_labels_json harus berupa JSON array yang valid.",
+        ...empty,
+      };
+    }
+  }
+
+  let dxf: ReturnType<typeof parseDxfDocument>;
+  try {
+    dxf = parseDxfDocument(dxfText);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Gagal membaca DXF.";
+    return { error: msg, ...empty };
+  }
+
+  const rings = extractClosedPolygonRingsFromDxfLayer(dxf, layerName, dxfText);
+  if (rings.length === 0) {
+    return {
+      error:
+        "Tidak ada poligon tertutup di layer ini. Pastikan LWPOLYLINE/POLYLINE tertutup, INSERT blok, atau HATCH boundary valid.",
+      ...empty,
+    };
+  }
+  if (matchKeys.length !== rings.length) {
+    return {
+      error: `match_keys_json harus ${rings.length} elemen (sama dengan jumlah poligon tertutup).`,
+      ...empty,
+    };
+  }
+  if (labelPerIndex.length > 0 && labelPerIndex.length !== rings.length) {
+    return {
+      error: `match_labels_json harus ${rings.length} elemen bila diisi.`,
+      ...empty,
+    };
+  }
+  while (labelPerIndex.length < rings.length) {
+    labelPerIndex.push(null);
+  }
+
+  let fc: GeoJSON.FeatureCollection;
+  try {
+    fc = buildVirtualTableDxfFeatureCollection(
+      rings,
+      matchKeys,
+      labelPerIndex,
+      matchColumnSlug,
+      layerName,
+      sridParsed.srid
+    );
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : "Gagal membangun geometri dari DXF.";
+    return { error: msg, ...empty };
+  }
+
+  const geojsonJson = JSON.stringify(fc);
+  if (geojsonJson.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("GeoJSON hasil konversi DXF"),
+      ...empty,
+    };
+  }
+
+  const inner = new FormData();
+  copyVirtualImportFormFields(formData, inner);
+  inner.set("geojson_json", geojsonJson);
+  return importVirtualRowsGeoJsonBatchAction(inner);
 }
 
 export async function updateVirtualRowCellAction(
