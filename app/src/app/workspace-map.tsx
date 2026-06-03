@@ -38,6 +38,13 @@ export type MapFootprint = {
 
 const DEFAULT_CENTER: L.LatLngExpression = [-6.74, 108.55];
 const DEFAULT_ZOOM = 12;
+
+function mapFootprintsBoundsKey(
+  footprints: MapFootprint[],
+  highlightBerkasId: string | null | undefined
+): string {
+  return `${highlightBerkasId ?? ""}|${footprints.map((f) => f.id).join(",")}`;
+}
 const MAX_PROPERTY_VALUE_CHARS = 1200;
 const POPUP_OPTIONS: L.PopupOptions = { className: "workspace-map-popup" };
 
@@ -562,6 +569,8 @@ export function WorkspaceMap({
   const mapRef = useRef<L.Map | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
   const reopenPopupForFootprintIdRef = useRef<string | null>(null);
+  const lastAutoFitBoundsKeyRef = useRef<string | null>(null);
+  const userAdjustedViewRef = useRef(false);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -578,14 +587,24 @@ export function WorkspaceMap({
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(map);
 
+    const markUserAdjusted = () => {
+      userAdjustedViewRef.current = true;
+    };
+    map.on("zoomend", markUserAdjusted);
+    map.on("moveend", markUserAdjusted);
+
     const group = L.layerGroup().addTo(map);
     mapRef.current = map;
     layerGroupRef.current = group;
 
     return () => {
+      map.off("zoomend", markUserAdjusted);
+      map.off("moveend", markUserAdjusted);
       map.remove();
       mapRef.current = null;
       layerGroupRef.current = null;
+      lastAutoFitBoundsKeyRef.current = null;
+      userAdjustedViewRef.current = false;
     };
   }, []);
 
@@ -607,7 +626,14 @@ export function WorkspaceMap({
     group.clearLayers();
 
     if (footprints.length === 0) {
-      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+      const emptyKey = mapFootprintsBoundsKey(footprints, highlightBerkasId);
+      if (
+        lastAutoFitBoundsKeyRef.current !== emptyKey &&
+        !userAdjustedViewRef.current
+      ) {
+        map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+        lastAutoFitBoundsKeyRef.current = emptyKey;
+      }
       return;
     }
 
@@ -675,12 +701,22 @@ export function WorkspaceMap({
     }
 
     fg.addTo(group);
-    const b = fg.getBounds();
-    if (b.isValid()) {
-      map.fitBounds(b, { padding: [28, 28], maxZoom: 16 });
-    } else {
-      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+
+    const boundsKey = mapFootprintsBoundsKey(footprints, highlightBerkasId);
+    const boundsKeyChanged = lastAutoFitBoundsKeyRef.current !== boundsKey;
+    const shouldAutoFit =
+      boundsKeyChanged && !userAdjustedViewRef.current;
+
+    if (shouldAutoFit) {
+      const b = fg.getBounds();
+      if (b.isValid()) {
+        map.fitBounds(b, { padding: [28, 28], maxZoom: 16 });
+      } else if (footprints.length === 0) {
+        map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+      }
+      lastAutoFitBoundsKeyRef.current = boundsKey;
     }
+
     if (layerToReopen) {
       openLayerPopup(layerToReopen);
     }

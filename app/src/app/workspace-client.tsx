@@ -1948,7 +1948,6 @@ export function WorkspaceClient({
   }, [resetMapDxfState]);
   const [memberPending, startMemberTransition] = useTransition();
   const [, startScopeNavTransition] = useTransition();
-  const [, startViewSwitchTransition] = useTransition();
   const [scopeRoutePending, setScopeRoutePending] = useState(false);
   const workspaceActionPending =
     taskPending ||
@@ -2150,25 +2149,25 @@ export function WorkspaceClient({
     return raw;
   }, [searchParams, canonicalOrgId, organizationModules]);
   const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
+  /** Sinkron dari URL hanya saat navigasi eksternal (back/forward, notifikasi, RSC). */
   useEffect(() => {
+    const enabled = effectiveEnabledModuleCodes(
+      canonicalOrgId,
+      organizationModules
+    );
     if (typeof window !== "undefined") {
       const winView = parseViewParam(
         new URLSearchParams(window.location.search).get("view")
       );
-      const enabled = effectiveEnabledModuleCodes(
-        canonicalOrgId,
-        organizationModules
-      );
-      if (
-        winView &&
-        isViewAllowedForModules(winView, enabled) &&
-        winView === activeView
-      ) {
+      if (winView && isViewAllowedForModules(winView, enabled)) {
+        setActiveView((current) => (current === winView ? current : winView));
         return;
       }
     }
-    setActiveView(activeViewFromUrl);
-  }, [activeViewFromUrl, activeView, canonicalOrgId, organizationModules]);
+    setActiveView((current) =>
+      current === activeViewFromUrl ? current : activeViewFromUrl
+    );
+  }, [activeViewFromUrl, canonicalOrgId, organizationModules]);
 
   const enabledModulesForOrg = useMemo(
     () => effectiveEnabledModuleCodes(canonicalOrgId, organizationModules),
@@ -3207,9 +3206,6 @@ export function WorkspaceClient({
   }, [mapDxfImportOpen, mapImportTableId]);
 
   useEffect(() => {
-    if (activeView !== "Map") {
-      return;
-    }
     if (vtablesWithGeometry.length === 0) {
       setVtableGeometryLayers([]);
       return;
@@ -3300,7 +3296,6 @@ export function WorkspaceClient({
       cancelled = true;
     };
   }, [
-    activeView,
     mapTabEpoch,
     vtablesWithGeometry,
     vtablesWithGeometrySig,
@@ -3709,6 +3704,15 @@ export function WorkspaceClient({
       const viewOnlyNav =
         !options?.refresh && urlScopeKey(prevParams) === urlScopeKey(p);
 
+      if (viewOnlyNav) {
+        window.history.replaceState(
+          null,
+          "",
+          nextQuery ? `/?${nextQuery}` : "/"
+        );
+        return;
+      }
+
       if (options?.syncView !== false) {
         const orgForModules = canonicalOrgId;
         const viewParsed = parseViewParam(p.get("view"));
@@ -3719,19 +3723,8 @@ export function WorkspaceClient({
             effectiveEnabledModuleCodes(orgForModules, organizationModules)
           )
         ) {
-          startViewSwitchTransition(() => {
-            setActiveView(viewParsed);
-          });
+          setActiveView(viewParsed);
         }
-      }
-
-      if (viewOnlyNav) {
-        window.history.replaceState(
-          null,
-          "",
-          nextQuery ? `/?${nextQuery}` : "/"
-        );
-        return;
       }
 
       const orgParam = p.get("org");
@@ -3769,7 +3762,6 @@ export function WorkspaceClient({
       orgsWithProjects,
       projects,
       startScopeNavTransition,
-      startViewSwitchTransition,
     ]
   );
 
@@ -4843,17 +4835,18 @@ export function WorkspaceClient({
           value={activeView}
           onValueChange={(value) => {
             const v = value as ViewId;
-            if (
-              isViewAllowedForModules(v, enabledModulesForOrg)
-            ) {
-              startViewSwitchTransition(() => setActiveView(v));
+            if (isViewAllowedForModules(v, enabledModulesForOrg)) {
+              setActiveView(v);
             }
-            commitScopeInUrl((q) => {
-              q.set("view", viewToParam(v));
-              if (v !== "Berkas" && v !== "Map") {
-                q.delete("berkas");
-              }
-            });
+            commitScopeInUrl(
+              (q) => {
+                q.set("view", viewToParam(v));
+                if (v !== "Berkas" && v !== "Map") {
+                  q.delete("berkas");
+                }
+              },
+              { syncView: false }
+            );
           }}
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
         >
