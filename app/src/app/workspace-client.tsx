@@ -3050,6 +3050,18 @@ export function WorkspaceClient({
     [allAccessibleVtables, activeVirtualTableSlug]
   );
 
+  /** Header: Organisasi › Project › Tabel (overlay). */
+  const workspaceHeaderBreadcrumb = useMemo((): string[] => {
+    const segments: string[] = [];
+    const orgName = selectedOrganization?.name?.trim();
+    if (orgName) segments.push(orgName);
+    const projectName = selectedProject?.name?.trim();
+    if (projectName) segments.push(projectName);
+    const tableName = activeVirtualTable?.display_name?.trim();
+    if (tableName) segments.push(tableName);
+    return segments.length > 0 ? segments : ["—"];
+  }, [selectedOrganization, selectedProject, activeVirtualTable]);
+
   const virtualColumnsByTableId = useMemo(() => {
     const map = new Map<string, typeof virtualColumns>();
     for (const col of virtualColumns) {
@@ -4858,21 +4870,34 @@ export function WorkspaceClient({
                 <PanelLeft className="h-4 w-4" />
               </button>
               <div className="h-6 w-px bg-border" aria-hidden="true" />
-              <div>
-          <p className="text-sm text-muted-foreground">
-            {selectedScopePath
-              .split(" > ")
-              .filter(Boolean)
-              .map((segment, idx, arr) => (
-                <span key={`${segment}-${idx}`}>
-                  <span className={idx === arr.length - 1 ? "text-foreground" : ""}>
-                    {segment}
-                  </span>
-                  {idx < arr.length - 1 ? <span className="mx-1">›</span> : null}
-                </span>
-              ))}
-          </p>
-              </div>
+              <nav aria-label="Lokasi workspace" className="min-w-0">
+                <ol className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm">
+                  {workspaceHeaderBreadcrumb.map((segment, idx) => (
+                    <li
+                      key={`${segment}-${idx}`}
+                      className="flex min-w-0 max-w-full items-center gap-x-1.5"
+                    >
+                      {idx > 0 ? (
+                        <span
+                          className="shrink-0 text-muted-foreground"
+                          aria-hidden="true"
+                        >
+                          &gt;
+                        </span>
+                      ) : null}
+                      <span
+                        className={
+                          idx === workspaceHeaderBreadcrumb.length - 1
+                            ? "truncate font-medium text-foreground"
+                            : "truncate text-muted-foreground"
+                        }
+                      >
+                        {segment}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </nav>
             </div>
             {userEmail && (
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
