@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Plus, Trash2, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +34,7 @@ import {
   saveVirtualDashboardWidgetsAction,
 } from "./virtual-dashboard-actions";
 import { fetchVirtualRowsAction } from "./virtual-table-actions";
+import { VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE } from "@/lib/virtual-table-import-limits";
 import {
   barByGroupCounts,
   countRows,
@@ -274,6 +282,9 @@ export function VirtualDashboardView({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadedProjectIdRef = useRef<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [dashboard, setDashboard] = useState<VirtualDashboardRow | null>(null);
   const [widgets, setWidgets] = useState<DashboardWidget[]>([]);
   const [editing, setEditing] = useState(false);
@@ -315,36 +326,70 @@ export function VirtualDashboardView({
   }, [virtualTables]);
 
   const loadDashboard = useCallback(() => {
-    setLoading(true);
-    ensureVirtualDashboardAction(projectId).then(async (res) => {
-      if (res.error) {
-        toast.error(res.error);
-        setLoading(false);
-        return;
-      }
-      const d = res.dashboard;
-      setDashboard(d);
-      setWidgets(d?.widgets ?? []);
+    if (!projectId) {
       setLoading(false);
+      setLoadError(null);
+      setDashboard(null);
+      setWidgets([]);
+      loadedProjectIdRef.current = null;
+      return () => undefined;
+    }
 
-      const tableIds = new Set<string>();
-      for (const w of d?.widgets ?? []) {
-        const c = w.config as { table_id?: string };
-        if (c.table_id) tableIds.add(c.table_id);
-      }
-      const next = new Map<string, VirtualDataRow[]>();
-      await Promise.all(
-        [...tableIds].map(async (tid) => {
-          const r = await fetchVirtualRowsAction(tid);
-          if (!r.error) next.set(tid, r.rows as VirtualDataRow[]);
-        })
-      );
-      setRowsByTable(next);
-    });
-  }, [projectId]);
+    const showSpinner = loadedProjectIdRef.current !== projectId;
+    if (showSpinner) {
+      setLoading(true);
+      setLoadError(null);
+    }
+
+    let cancelled = false;
+    void ensureVirtualDashboardAction(projectId)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (res.error) {
+          setLoadError(res.error);
+          toast.error(res.error);
+          return;
+        }
+        const d = res.dashboard;
+        setDashboard(d);
+        setWidgets(d?.widgets ?? []);
+        setLoadError(null);
+        loadedProjectIdRef.current = projectId;
+
+        const tableIds = new Set<string>();
+        for (const w of d?.widgets ?? []) {
+          const c = w.config as { table_id?: string };
+          if (c.table_id) tableIds.add(c.table_id);
+        }
+        const next = new Map<string, VirtualDataRow[]>();
+        await Promise.all(
+          [...tableIds].map(async (tid) => {
+            const r = await fetchVirtualRowsAction(tid, {
+              limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+              offset: 0,
+            });
+            if (!r.error) next.set(tid, r.rows as VirtualDataRow[]);
+          })
+        );
+        if (!cancelled) setRowsByTable(next);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const msg = "Gagal memuat dashboard";
+        setLoadError(msg);
+        toast.error(msg);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, reloadToken]);
 
   useEffect(() => {
-    loadDashboard();
+    return loadDashboard();
   }, [loadDashboard]);
 
   const refreshRowsForWidgets = useCallback(async (list: DashboardWidget[]) => {
@@ -357,7 +402,10 @@ export function VirtualDashboardView({
     await Promise.all(
       [...tableIds].map(async (tid) => {
         if (next.has(tid)) return;
-        const r = await fetchVirtualRowsAction(tid);
+        const r = await fetchVirtualRowsAction(tid, {
+          limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+          offset: 0,
+        });
         if (!r.error) next.set(tid, r.rows as VirtualDataRow[]);
       })
     );
@@ -445,6 +493,25 @@ export function VirtualDashboardView({
     return (
       <div className="mt-6 flex items-center justify-center gap-2 py-16 text-muted-foreground">
         <Spinner className="size-5" /> Memuat dashboard…
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="mt-6 space-y-3 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-6 text-sm">
+        <p className="font-medium text-destructive">Gagal memuat dashboard</p>
+        <p className="text-muted-foreground">{loadError}</p>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            loadedProjectIdRef.current = null;
+            setReloadToken((t) => t + 1);
+          }}
+        >
+          Coba lagi
+        </Button>
       </div>
     );
   }

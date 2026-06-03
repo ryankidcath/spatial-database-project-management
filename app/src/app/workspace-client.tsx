@@ -182,6 +182,7 @@ import {
   fetchVirtualRowsAction,
   resolveRelationLabelsAction,
 } from "./virtual-table-actions";
+import { VirtualDashboardView } from "./virtual-dashboard-view";
 
 const EMPTY_VIRTUAL_COLUMNS: VirtualColumnRow[] = [];
 import {
@@ -222,14 +223,6 @@ function TabViewLoading({ label }: { label: string }) {
     </div>
   );
 }
-
-const VirtualDashboardView = dynamic(
-  () =>
-    import("./virtual-dashboard-view").then((m) => m.VirtualDashboardView),
-  {
-    loading: () => <TabViewLoading label="Memuat dashboard…" />,
-  }
-);
 
 const VirtualTableView = dynamic(
   () => import("./virtual-table-view").then((m) => m.VirtualTableView),
@@ -272,7 +265,7 @@ function TabPanelKeepAlive({
   className?: string;
 }) {
   const active = activeView === view;
-  const [mounted, setMounted] = useState(active);
+  const [mounted, setMounted] = useState(active || view === "Dashboard");
 
   useEffect(() => {
     if (active) setMounted(true);
