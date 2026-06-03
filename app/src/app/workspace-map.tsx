@@ -9,6 +9,7 @@ import {
   deleteIssueGeometryFeatureByIdAction,
   updateIssueGeometryFeaturePropertiesAction,
 } from "./issue-geometry-feature-actions";
+import { buildChatRowPathSegments } from "@/lib/chat-row-context";
 
 export type MapFootprintLayerKind =
   | "demo"
@@ -220,9 +221,18 @@ function popupHtmlWithGeoJson(
   const layerKind = fp.layerKind ?? "demo";
   const properties = mergedPopupProperties(value, fp.popupProperties, layerKind);
   const title = escapePopupText(popupTitle(fp.label, layerKind, properties));
+  const virtualRowId =
+    typeof properties._virtual_row_id === "string"
+      ? properties._virtual_row_id.trim()
+      : "";
   const visibleProperties = Object.fromEntries(
     Object.entries(properties).filter(
-      ([key]) => key !== "_row_id" && key !== "_popup_row_title"
+      ([key]) =>
+        key !== "_row_id" &&
+        key !== "_popup_row_title" &&
+        key !== "_virtual_row_id" &&
+        key !== "_chat_path_segments" &&
+        key !== "_popup_project_name"
     )
   );
   const hasProperties = Object.keys(visibleProperties).length > 0;
@@ -236,6 +246,24 @@ function popupHtmlWithGeoJson(
       : layerKind === "issue_geometry"
         ? `<div style="margin-top:10px;font-size:11px;color:var(--muted-foreground)">Properti geometri unit kerja hanya bisa diedit jika data terhubung ke server.</div>`
         : "";
+  const chatPathJson =
+    typeof properties._chat_path_segments === "string"
+      ? properties._chat_path_segments
+      : "";
+  const chatTable =
+    typeof properties.Tabel === "string" ? properties.Tabel.trim() : "";
+  const chatRowTitle =
+    typeof properties._popup_row_title === "string"
+      ? properties._popup_row_title.trim()
+      : "";
+  const chatProject =
+    typeof properties._popup_project_name === "string"
+      ? properties._popup_project_name.trim()
+      : "";
+  const chatBtnHtml =
+    layerKind === "virtual_table" && virtualRowId
+      ? `<div style="margin-top:10px"><button type="button" data-vt-chat-row-id="${escapePopupText(virtualRowId)}" data-vt-chat-path="${escapePopupText(chatPathJson)}" data-vt-chat-row-title="${escapePopupText(chatRowTitle || title)}" data-vt-chat-table="${escapePopupText(chatTable)}" data-vt-chat-project="${escapePopupText(chatProject)}" style="font-size:12px;padding:6px 12px;border-radius:6px;border:1px solid var(--primary);background:var(--primary);cursor:pointer;color:var(--primary-foreground)">Chat baris</button></div>`
+      : "";
   return `<div style="min-width:260px;max-width:520px;color:var(--foreground)">
 <div style="font-weight:600;margin-bottom:6px;color:var(--foreground)">${title}</div>
 <div data-igm-view>
@@ -246,6 +274,7 @@ ${
 }
 </div>
 ${editorHtml}
+${chatBtnHtml}
 </div>`;
 }
 
@@ -520,10 +549,13 @@ function polygonStyle(
 export function WorkspaceMap({
   footprints,
   highlightBerkasId = null,
+  onVirtualRowChat,
 }: {
   footprints: MapFootprint[];
   /** Sorot poligon hasil ukur yang terikat `berkas_id` ini. */
   highlightBerkasId?: string | null;
+  /** Buka chat virtual row dari popup peta. */
+  onVirtualRowChat?: (rowId: string, pathSegments: string[]) => void;
 }) {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -653,6 +685,50 @@ export function WorkspaceMap({
       openLayerPopup(layerToReopen);
     }
   }, [footprints, highlightBerkasId, router]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !onVirtualRowChat) return;
+    const onClick = (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement | null)?.closest?.(
+        "[data-vt-chat-row-id]"
+      );
+      if (!btn) return;
+      e.preventDefault();
+      const rowId = btn.getAttribute("data-vt-chat-row-id")?.trim();
+      if (!rowId) return;
+      const pathRaw = btn.getAttribute("data-vt-chat-path")?.trim();
+      let pathSegments: string[] | null = null;
+      if (pathRaw) {
+        try {
+          const parsed = JSON.parse(pathRaw) as unknown;
+          if (Array.isArray(parsed)) {
+            pathSegments = parsed
+              .map((x) => (typeof x === "string" ? x.trim() : ""))
+              .filter(Boolean);
+          }
+        } catch {
+          pathSegments = null;
+        }
+      }
+      if (!pathSegments?.length) {
+        const rowTitle =
+          btn.getAttribute("data-vt-chat-row-title")?.trim() ??
+          rowId.slice(0, 8);
+        const table =
+          btn.getAttribute("data-vt-chat-table")?.trim() ?? "Tabel";
+        const project = btn.getAttribute("data-vt-chat-project")?.trim();
+        pathSegments = buildChatRowPathSegments({
+          projectName: project || null,
+          tableDisplayName: table,
+          rowLabel: rowTitle,
+        });
+      }
+      onVirtualRowChat(rowId, pathSegments);
+    };
+    el.addEventListener("click", onClick);
+    return () => el.removeEventListener("click", onClick);
+  }, [onVirtualRowChat]);
 
   return (
     <div

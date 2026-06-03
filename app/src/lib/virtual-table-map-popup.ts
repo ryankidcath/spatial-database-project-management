@@ -1,3 +1,4 @@
+import { CHAT_PATH_SEGMENTS_PROP } from "@/lib/chat-row-context";
 import type { VirtualColumnDataType } from "@/app/virtual-table-types";
 
 export type VirtualColumnForMapPopup = {
@@ -79,7 +80,13 @@ export function buildVirtualTableMapPopupProperties(
   payload: Record<string, unknown>,
   relationLabels: Record<string, string>,
   memberNameByUserId: Map<string, string>,
-  options?: { skipGeometrySlug?: string; rowTitle?: string }
+  options?: {
+    skipGeometrySlug?: string;
+    rowTitle?: string;
+    virtualRowId?: string;
+    projectName?: string | null;
+    chatPathSegments?: string[];
+  }
 ): Record<string, string> {
   const sorted = [...columns].sort((a, b) => a.position - b.position);
   const out: Record<string, string> = {
@@ -87,6 +94,15 @@ export function buildVirtualTableMapPopupProperties(
   };
   if (options?.rowTitle) {
     out._popup_row_title = options.rowTitle;
+  }
+  if (options?.virtualRowId) {
+    out._virtual_row_id = options.virtualRowId;
+  }
+  if (options?.projectName?.trim()) {
+    out._popup_project_name = options.projectName.trim();
+  }
+  if (options?.chatPathSegments && options.chatPathSegments.length > 0) {
+    out[CHAT_PATH_SEGMENTS_PROP] = JSON.stringify(options.chatPathSegments);
   }
 
   for (const col of sorted) {

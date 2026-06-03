@@ -9,6 +9,7 @@ import {
   type DemoFootprintRow,
   type IssueRow,
   type OrganizationRow,
+  type OrganizationMemberRow,
   type ProjectMemberRow,
   type ProjectRow,
   type StatusRow,
@@ -123,6 +124,25 @@ export default async function Home({ searchParams }: HomeProps) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  if (user?.id) {
+    const [{ count: membershipCount }, { count: orgMembershipCount }] =
+      await Promise.all([
+        supabase
+          .schema("core_pm")
+          .from("project_members")
+          .select("project_id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+        supabase
+          .schema("core_pm")
+          .from("organization_members")
+          .select("organization_id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+      ]);
+    if ((membershipCount ?? 0) === 0 && (orgMembershipCount ?? 0) === 0) {
+      await supabase.schema("core_pm").rpc("join_demo_org_projects");
+    }
+  }
+
   // Jangan filter server by ?org=: anggota bisa tanpa project di org itu; RLS tetap membatasi baris.
   const { data: projects, error: projectsError } = await supabase
     .schema("core_pm")
@@ -148,6 +168,25 @@ export default async function Home({ searchParams }: HomeProps) {
   const orgIds = [
     ...new Set(projectList.map((p) => p.organization_id).filter(Boolean)),
   ];
+
+  const { data: myOrgMembershipsRaw, error: orgMembersError } = user?.id
+    ? await supabase
+        .schema("core_pm")
+        .from("organization_members")
+        .select("organization_id, user_id, role, joined_at")
+        .eq("user_id", user.id)
+    : { data: [] as OrganizationMemberRow[], error: null };
+
+  const organizationMembers = (myOrgMembershipsRaw ??
+    []) as OrganizationMemberRow[];
+
+  const hasOrgStaffInSelectedOrg =
+    selectedOrgId != null &&
+    organizationMembers.some(
+      (m) =>
+        m.organization_id === selectedOrgId &&
+        (m.role === "owner" || m.role === "admin" || m.role === "staff")
+    );
 
   const { data: organizations, error: orgsError } =
     orgIds.length > 0
@@ -323,6 +362,16 @@ export default async function Home({ searchParams }: HomeProps) {
     );
   const needsPlmData = plmEnabledForSelectedOrg;
 
+  /** Hire project: hanya muat berkas (dan turunannya) untuk project aktif di URL. */
+  const berkasScopeProjectIds =
+    scopedProjectIds.length === 0
+      ? []
+      : hasOrgStaffInSelectedOrg
+        ? scopedProjectIds
+        : selectedProjectId && scopedProjectIds.includes(selectedProjectId)
+          ? [selectedProjectId]
+          : [];
+
   const [
     { data: bidangMapRaw, error: bidangMapError },
     { data: berkasRaw, error: berkasError },
@@ -332,14 +381,14 @@ export default async function Home({ searchParams }: HomeProps) {
     { data: alatUkurRaw, error: alatUkurError },
     { data: issueGeomRaw, error: issueGeomError },
   ] = await Promise.all([
-    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
+    berkasScopeProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("spatial")
           .from("v_bidang_hasil_ukur_map")
           .select("id, project_id, berkas_id, label, geojson")
-          .in("project_id", scopedProjectIds)
+          .in("project_id", berkasScopeProjectIds)
       : Promise.resolve({ data: [] as BidangHasilUkurMapRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
+    berkasScopeProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("berkas_permohonan")
@@ -347,38 +396,41 @@ export default async function Home({ searchParams }: HomeProps) {
             `id, project_id, nomor_berkas, tanggal_berkas, status, catatan,
              berkas_pemilik ( urutan, pemilik_tanah ( id, nama_lengkap ) )`
           )
-          .in("project_id", scopedProjectIds)
+          .in("project_id", berkasScopeProjectIds)
           .is("deleted_at", null)
           .order("tanggal_berkas", { ascending: false })
       : Promise.resolve({ data: [] as BerkasPermohonanRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
+    berkasScopeProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_berkas_permohonan_summary_by_status")
           .select("project_id, status, jumlah, tanggal_berkas_terbaru")
-          .in("project_id", scopedProjectIds)
+          .in("project_id", berkasScopeProjectIds)
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmBerkasStatusSummaryRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
+    berkasScopeProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_legalisasi_gu_summary_by_tahap")
           .select("project_id, status_tahap, jumlah")
-          .in("project_id", scopedProjectIds)
+          .in("project_id", berkasScopeProjectIds)
           .order("project_id")
           .order("status_tahap")
       : Promise.resolve({ data: [] as PlmLegalisasiTahapSummaryRow[], error: null }),
-    scopedProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
+    berkasScopeProjectIds.length > 0 && plmEnabledForSelectedOrg && needsPlmData
       ? supabase
           .schema("plm")
           .from("v_pengukuran_lapangan_summary_by_status")
           .select("project_id, status, jumlah")
-          .in("project_id", scopedProjectIds)
+          .in("project_id", berkasScopeProjectIds)
           .order("project_id")
           .order("status")
       : Promise.resolve({ data: [] as PlmPengukuranStatusSummaryRow[], error: null }),
-    selectedOrgId != null && plmEnabledForSelectedOrg && needsPlmData
+    selectedOrgId != null &&
+    plmEnabledForSelectedOrg &&
+    needsPlmData &&
+    hasOrgStaffInSelectedOrg
       ? supabase
           .schema("plm")
           .from("alat_ukur")
@@ -686,6 +738,7 @@ export default async function Home({ searchParams }: HomeProps) {
     (presenceMissingTable ? null : presenceError?.message) ??
     vtablesErr?.message ??
     vcolsErr?.message ??
+    orgMembersError?.message ??
     null;
 
   return (
@@ -702,6 +755,7 @@ export default async function Home({ searchParams }: HomeProps) {
         statuses={(statuses ?? []) as StatusRow[]}
         issues={(issues ?? []) as IssueRow[]}
         projectMembers={projectMembers}
+        organizationMembers={organizationMembers}
         footprints={footprints}
         bidangHasilUkurMap={bidangHasilUkurMap}
         issueGeometryFeatureMap={issueGeometryFeatureMap}

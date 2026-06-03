@@ -25,3 +25,6 @@ Thumbs.db
 supabase/.branches
 supabase/.temp
 
+# Local data / generated bundles (jangan di-commit)
+Daftar Desa.txt
+repomix-output.xml

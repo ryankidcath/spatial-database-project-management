@@ -343,3 +343,47 @@ export async function addProjectMemberByEmailAction(
   revalidatePath("/", "layout");
   return { error: null };
 }
+
+export type AddOrganizationStaffResult = { error: string | null };
+
+export async function addOrganizationStaffByEmailAction(
+  formData: FormData
+): Promise<AddOrganizationStaffResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { error: "Supabase tidak dikonfigurasi" };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Belum masuk" };
+  }
+
+  const organizationId = String(formData.get("organization_id") ?? "").trim();
+  const email = String(formData.get("email") ?? "").trim();
+  const role = String(formData.get("role") ?? "staff").trim().toLowerCase();
+
+  if (!organizationId || !email) {
+    return { error: "Organisasi dan email wajib diisi" };
+  }
+  if (role !== "owner" && role !== "admin" && role !== "staff") {
+    return { error: "Role organisasi tidak valid" };
+  }
+
+  const { error } = await supabase.schema("core_pm").rpc(
+    "add_organization_staff_by_email",
+    {
+      p_organization_id: organizationId,
+      p_email: email,
+      p_role: role,
+    }
+  );
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}

@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
 import {
   markAllNotificationsReadAction,
   markNotificationReadAction,
@@ -10,33 +9,202 @@ import {
 import type { UserNotificationRow } from "./user-notification-types";
 import { formatShortDate } from "./schedule-utils";
 import { viewToParam } from "./workspace-url";
+import { getBrowserSupabaseClient } from "@/lib/supabase/client";
+
+const MAX_NOTIFICATIONS = 50;
 
 type Props = {
+  userId: string | null;
   notifications: UserNotificationRow[];
+  /** Sinkron scope + tab dengan workspace (hindari Link yang tidak memicu state). */
+  onNavigate?: (n: UserNotificationRow) => void;
 };
 
-export function NotificationsBell({ notifications }: Props) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+function rowFromRealtimeRecord(
+  record: Record<string, unknown>
+): UserNotificationRow | null {
+  const id = String(record.id ?? "");
+  if (!id) return null;
+  return {
+    id,
+    user_id: String(record.user_id ?? ""),
+    organization_id: String(record.organization_id ?? ""),
+    project_id: record.project_id != null ? String(record.project_id) : null,
+    kind: String(record.kind ?? "system"),
+    severity: String(record.severity ?? "info"),
+    title: String(record.title ?? ""),
+    body: record.body != null ? String(record.body) : null,
+    payload: record.payload ?? {},
+    read_at: record.read_at != null ? String(record.read_at) : null,
+    created_at: String(record.created_at ?? new Date().toISOString()),
+  };
+}
+
+function mergeNotification(
+  list: UserNotificationRow[],
+  row: UserNotificationRow
+): UserNotificationRow[] {
+  const without = list.filter((n) => n.id !== row.id);
+  return [row, ...without]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, MAX_NOTIFICATIONS);
+}
+
+function projectIdForNotification(n: UserNotificationRow): string | null {
+  if (n.project_id) return n.project_id;
+  const payload = n.payload as Record<string, unknown> | null;
+  const fromPayload = payload?.project_id;
+  return typeof fromPayload === "string" ? fromPayload : null;
+}
+
+export function NotificationsBell({ userId, notifications, onNavigate }: Props) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
+  const [items, setItems] = useState<UserNotificationRow[]>(notifications);
+
+  useEffect(() => {
+    setItems(notifications);
+  }, [notifications]);
+
+  const fetchNotifications = useCallback(async () => {
+    if (!userId) return;
+    const supabase = getBrowserSupabaseClient();
+    if (!supabase) return;
+
+    const { data, error } = await supabase
+      .schema("core_pm")
+      .from("user_notifications")
+      .select(
+        "id, user_id, organization_id, project_id, kind, severity, title, body, payload, read_at, created_at"
+      )
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(MAX_NOTIFICATIONS);
+
+    if (!error && data) {
+      setItems(data as UserNotificationRow[]);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const supabase = getBrowserSupabaseClient();
+    if (!supabase) return;
+
+    void fetchNotifications();
+
+    const onFocus = () => {
+      void fetchNotifications();
+    };
+    window.addEventListener("focus", onFocus);
+
+    const pollId = window.setInterval(() => {
+      void fetchNotifications();
+    }, 4000);
+
+    const channel = supabase
+      .channel(`user-notifications:${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "core_pm",
+          table: "user_notifications",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const row = rowFromRealtimeRecord(
+            payload.new as Record<string, unknown>
+          );
+          if (row) setItems((prev) => mergeNotification(prev, row));
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "core_pm",
+          table: "user_notifications",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const row = rowFromRealtimeRecord(
+            payload.new as Record<string, unknown>
+          );
+          if (row) setItems((prev) => mergeNotification(prev, row));
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") return;
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          void fetchNotifications();
+        }
+      });
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(pollId);
+      void supabase.removeChannel(channel);
+    };
+  }, [userId, fetchNotifications]);
+
+  useEffect(() => {
+    if (open) void fetchNotifications();
+  }, [open, fetchNotifications]);
+
   const unread = useMemo(
-    () => notifications.filter((n) => n.read_at == null),
-    [notifications]
-  );
-  const sorted = useMemo(
-    () =>
-      [...notifications].sort((a, b) =>
-        b.created_at.localeCompare(a.created_at)
-      ),
-    [notifications]
+    () => items.filter((n) => n.read_at == null),
+    [items]
   );
 
-  const mapHref = useMemo(() => {
-    const q = new URLSearchParams(searchParams.toString());
-    q.set("view", viewToParam("Map"));
+  const sorted = useMemo(
+    () =>
+      [...items].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [items]
+  );
+
+  const hrefForNotification = useCallback((n: UserNotificationRow) => {
+    const q = new URLSearchParams();
+    if (n.organization_id) q.set("org", n.organization_id);
+    const projectId = projectIdForNotification(n);
+    if (projectId) q.set("project", projectId);
+    if (n.kind === "chat_mention") {
+      const payload = n.payload as Record<string, unknown> | null;
+      if (payload?.virtual_row_id) {
+        q.set("view", viewToParam("Map"));
+      }
+    } else {
+      q.set("view", viewToParam("Map"));
+    }
     return `/?${q.toString()}`;
-  }, [searchParams]);
+  }, []);
+
+  const markOneRead = (notificationId: string) => {
+    const fd = new FormData();
+    fd.set("notification_id", notificationId);
+    startTransition(async () => {
+      const res = await markNotificationReadAction(fd);
+      if (!res.error) {
+        setItems((prev) =>
+          prev.map((n) =>
+            n.id === notificationId
+              ? { ...n, read_at: new Date().toISOString() }
+              : n
+          )
+        );
+      }
+    });
+  };
+
+  const markAllRead = () => {
+    startTransition(async () => {
+      const res = await markAllNotificationsReadAction();
+      if (!res.error) {
+        const now = new Date().toISOString();
+        setItems((prev) => prev.map((n) => ({ ...n, read_at: n.read_at ?? now })));
+      }
+    });
+  };
 
   return (
     <div className="relative">
@@ -45,7 +213,13 @@ export function NotificationsBell({ notifications }: Props) {
         aria-expanded={open}
         aria-haspopup="true"
         aria-label="Notifikasi"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => {
+            const next = !v;
+            if (next) void fetchNotifications();
+            return next;
+          });
+        }}
         className="relative rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-950 hover:bg-amber-100"
       >
         Notifikasi
@@ -68,17 +242,17 @@ export function NotificationsBell({ notifications }: Props) {
             <div className="flex items-center justify-between border-b border-slate-100 px-3 pb-2">
               <span className="text-xs font-semibold text-slate-700">
                 Kotak masuk
+                {unread.length > 0 ? (
+                  <span className="ml-1 font-normal text-amber-700">
+                    ({unread.length} baru)
+                  </span>
+                ) : null}
               </span>
               {unread.length > 0 ? (
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() => {
-                    startTransition(async () => {
-                      await markAllNotificationsReadAction();
-                      router.refresh();
-                    });
-                  }}
+                  onClick={markAllRead}
                   className="text-[10px] text-blue-600 hover:underline disabled:opacity-50"
                 >
                   Tandai semua dibaca
@@ -91,6 +265,7 @@ export function NotificationsBell({ notifications }: Props) {
               ) : (
                 sorted.map((n) => {
                   const isUnread = n.read_at == null;
+                  const isChat = n.kind === "chat_mention";
                   return (
                     <li
                       key={n.id}
@@ -99,28 +274,44 @@ export function NotificationsBell({ notifications }: Props) {
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-slate-900">{n.title}</p>
+                        <Link
+                          href={hrefForNotification(n)}
+                          className="min-w-0 flex-1 hover:underline"
+                          onClick={(e) => {
+                            if (onNavigate) {
+                              e.preventDefault();
+                              onNavigate(n);
+                            }
+                            if (isUnread) markOneRead(n.id);
+                            setOpen(false);
+                          }}
+                        >
+                          <p className="font-medium text-slate-900">
+                            {n.title}
+                            {isChat ? (
+                              <span className="ml-1 font-normal text-slate-500">
+                                · chat
+                              </span>
+                            ) : null}
+                          </p>
                           {n.body ? (
-                            <p className="mt-0.5 text-slate-600">{n.body}</p>
+                            <p className="mt-0.5 line-clamp-3 text-slate-600">
+                              {n.body}
+                            </p>
                           ) : null}
                           <p className="mt-1 text-[10px] text-slate-400">
                             {formatShortDate(n.created_at)}
                             {n.severity === "warning" ? " · peringatan" : null}
                           </p>
-                        </div>
+                        </Link>
                         {isUnread ? (
                           <button
                             type="button"
                             disabled={pending}
                             className="shrink-0 text-[10px] text-blue-600 hover:underline disabled:opacity-50"
-                            onClick={() => {
-                              const fd = new FormData();
-                              fd.set("notification_id", n.id);
-                              startTransition(async () => {
-                                const res = await markNotificationReadAction(fd);
-                                if (!res.error) router.refresh();
-                              });
+                            onClick={(e) => {
+                              e.preventDefault();
+                              markOneRead(n.id);
                             }}
                           >
                             Dibaca
@@ -132,15 +323,6 @@ export function NotificationsBell({ notifications }: Props) {
                 })
               )}
             </ul>
-            <div className="border-t border-slate-100 px-3 pt-2">
-              <Link
-                href={mapHref}
-                className="text-[11px] font-medium text-blue-700 hover:underline"
-                onClick={() => setOpen(false)}
-              >
-                Buka tab Map →
-              </Link>
-            </div>
           </div>
         </>
       ) : null}

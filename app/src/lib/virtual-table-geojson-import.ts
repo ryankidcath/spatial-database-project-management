@@ -15,6 +15,48 @@ export function normalizeVirtualTableMatchKey(value: unknown): string | null {
   return s.toLowerCase();
 }
 
+/** Kolom teks/angka yang cocok untuk upsert impor GeoJSON/DXF. */
+export type VirtualTableMatchColumnPick = {
+  slug: string;
+  display_name: string;
+  data_type: string;
+};
+
+/** Pilih kolom kunci upsert: utamakan nib / no_bidang, hindari slug `title` bila ada alternatif. */
+export function pickDefaultVirtualTableMatchColumn(
+  columns: VirtualTableMatchColumnPick[]
+): VirtualTableMatchColumnPick | undefined {
+  if (columns.length === 0) return undefined;
+  const preferSlugs = [
+    "nib",
+    "no_bidang",
+    "nomor_bidang",
+    "no_bidang_tanah",
+    "nomor_bidang_tanah",
+  ];
+  for (const slug of preferSlugs) {
+    const hit = columns.find((c) => c.slug === slug);
+    if (hit) return hit;
+  }
+  const byDisplayNib = columns.find((c) => {
+    const name = c.display_name.trim();
+    if (/^nib$/i.test(name)) return true;
+    return /\bnib\b/i.test(name) && !/tanggal/i.test(name);
+  });
+  if (byDisplayNib) return byDisplayNib;
+
+  const nibLike = columns.find(
+    (c) =>
+      c.slug !== "title" &&
+      (/nib|bidang|nomor/i.test(c.slug) ||
+        /nomor\s*bidang/i.test(c.display_name))
+  );
+  if (nibLike) return nibLike;
+  return (
+    columns.find((c) => c.slug !== "title") ?? columns[0]
+  );
+}
+
 /** Ambil kunci pencocokan dari properties feature (slug kolom + alias umum). */
 export function extractMatchKeyFromProperties(
   props: Record<string, unknown>,
@@ -32,6 +74,9 @@ export function extractMatchKeyFromProperties(
     if (lower !== slug) candidates.push(props[lower]);
   }
   candidates.push(
+    props.nib,
+    props.NIB,
+    props.Nib,
     props.no_bidang,
     props.NO_BIDANG,
     props.No_Bidang,

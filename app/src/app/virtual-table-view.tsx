@@ -25,6 +25,10 @@ import {
   GitBranch,
   MapPin,
   Upload,
+  MessageSquare,
+  Maximize2,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,18 +88,38 @@ import {
   MAX_VIRTUAL_TABLE_CSV_CHARS,
   MAX_VIRTUAL_TABLE_CSV_ROWS,
   VIRTUAL_TABLE_CSV_IMPORTABLE_TYPES,
+  VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
   virtualTableCsvTooLargeMessage,
   virtualTableImportTemplateCsv,
   type VirtualTableImportColumnHint,
 } from "@/lib/virtual-table-import-limits";
 import { relationLookupSlugFromConfig } from "@/lib/virtual-table-relation-import";
-import { parseFeatureCollectionForVirtualImport } from "@/lib/virtual-table-geojson-import";
+import {
+  parseFeatureCollectionForVirtualImport,
+  pickDefaultVirtualTableMatchColumn,
+} from "@/lib/virtual-table-geojson-import";
 import { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
+import {
+  VirtualTableLayerUploadDialog,
+  type LayerUploadCreated,
+} from "./virtual-table-layer-upload-dialog";
 import {
   buildVirtualTableImportPreviewFootprints,
   mapPreviewLayersSignature,
 } from "@/lib/virtual-table-map-preview";
 import type { MapFootprint } from "./workspace-map";
+import { pickMapRowTitle } from "@/lib/virtual-table-map-popup";
+import {
+  buildChatRowPathSegments,
+  buildChatTablePathSegments,
+} from "@/lib/chat-row-context";
+import { fetchVirtualTableChatUnreadRowsAction } from "./chat-actions";
+import {
+  useVirtualTableChatUnread,
+  VirtualTableRoomChatUnreadBadge,
+} from "./virtual-table-chat-unread-context";
+import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
+import type { ChatAttachmentRef, ChatMentionOption } from "./chat-types";
 import {
   MAX_SPATIAL_GEOMETRY_TEXT_CHARS,
   spatialGeometryTextTooLargeMessage,
@@ -109,11 +133,22 @@ type Props = {
   table: VirtualTableRow;
   columns: VirtualColumnRow[];
   projectId: string | null;
+  organizationId: string | null;
+  organizationName?: string | null;
+  userId?: string | null;
+  isOrgAdmin?: boolean;
+  projectsForMention?: { id: string; name: string; key?: string }[];
   /** Member display names keyed by user_id. */
   memberNameByUserId: Map<string, string>;
   /** All accessible virtual tables (org + project) — needed for relation column target picker. */
   allVirtualTables: VirtualTableRow[];
   onTableDeleted?: () => void;
+  /** Setelah layer baru dari file (pindah ke tabel yang dibuat). */
+  onLayerCreated?: (result: LayerUploadCreated) => void;
+  /** `overlay` = sidebar full-screen; grid mengisi tinggi tanpa kotak max-h. */
+  layout?: "embedded" | "overlay";
+  /** Tab Tabel: buka overlay sidebar untuk tabel lengkap (tanpa batas halaman). */
+  onOpenInOverlay?: () => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -376,6 +411,8 @@ type DataRowProps = {
   } | null) => void;
   setGeometryEditor: (v: { rowId: string; colSlug: string; currentGeoJSON: string } | null) => void;
   setUserPicker: (v: { rowId: string; colSlug: string; currentUserId: string | null } | null) => void;
+  onOpenRowChat: (rowId: string, rowTitle: string) => void;
+  hasUnreadChat?: boolean;
 };
 
 function MultiSelectCell({
@@ -501,9 +538,19 @@ function DataRow({
   setRelationPicker,
   setGeometryEditor,
   setUserPicker,
+  onOpenRowChat,
+  hasUnreadChat = false,
 }: DataRowProps) {
   return (
-    <tr className="group border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors">
+    <tr
+      data-vrow-id={row.id}
+      className={cn(
+        "group border-b border-border last:border-b-0 transition-colors",
+        hasUnreadChat
+          ? "bg-amber-50/80 hover:bg-amber-50 border-l-4 border-l-amber-500"
+          : "hover:bg-muted/30"
+      )}
+    >
       <td
         className={bodyStickyClass(
           "rowNum",
@@ -756,17 +803,44 @@ function DataRow({
         );
       })}
       <td className="px-1 py-1 text-center">
-        <button
-          type="button"
-          className="inline-flex items-center justify-center rounded p-1"
-          style={{ color: "var(--muted-foreground)", opacity: 0.2 }}
-          onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--destructive)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.2"; e.currentTarget.style.color = "var(--muted-foreground)"; }}
-          onClick={(e) => { e.stopPropagation(); setDeleteRowConfirm(row.id); }}
-          title="Hapus baris"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center justify-center gap-0.5">
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded p-1 opacity-20 group-hover:opacity-100"
+            style={{ color: "var(--muted-foreground)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--primary)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--muted-foreground)"; }}
+            onClick={(e) => {
+              e.stopPropagation();
+              const title = pickMapRowTitle(
+                row.payload ?? {},
+                visibleColumns.map((c) => ({
+                  slug: c.slug,
+                  display_name: c.display_name,
+                  data_type: c.data_type,
+                  position: c.position,
+                })),
+                relationLabels,
+                row.id
+              );
+              onOpenRowChat(row.id, title);
+            }}
+            title="Chat baris"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded p-1 opacity-20 group-hover:opacity-100"
+            style={{ color: "var(--muted-foreground)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--destructive)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.2"; e.currentTarget.style.color = "var(--muted-foreground)"; }}
+            onClick={(e) => { e.stopPropagation(); setDeleteRowConfirm(row.id); }}
+            title="Hapus baris"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </td>
     </tr>
   );
@@ -780,30 +854,133 @@ export function VirtualTableView({
   table,
   columns,
   projectId,
+  organizationId,
+  organizationName = null,
+  userId = null,
+  isOrgAdmin = false,
+  projectsForMention = [],
   memberNameByUserId,
   allVirtualTables,
   onTableDeleted,
+  onLayerCreated,
+  layout = "embedded",
+  onOpenInOverlay,
 }: Props) {
+  const isOverlayLayout = layout === "overlay";
+  const isPaginatedEmbedded = layout === "embedded";
   const router = useRouter();
+  const { refreshEpoch } = useVirtualTableChatUnread();
+  const {
+    openTableChat,
+    openRowPanel,
+    closePanel,
+    isTableChatOpen,
+  } = useWorkspaceRightPanel();
   const [pending, startTransition] = useTransition();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const [isInView, setIsInView] = useState(false);
+  const [unreadChatRowIds, setUnreadChatRowIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  /** `${tableId}:${rowId}` setelah scroll berhasil — cegah scroll ulang. */
+  const scrolledUnreadLockRef = useRef<string | null>(null);
+  const unreadScrollInProgressRef = useRef<string | null>(null);
+  const [pinnedUnreadScrollRowId, setPinnedUnreadScrollRowId] = useState<
+    string | null
+  >(null);
+
+  const scrollUnreadRowIntoView = useCallback((rowId: string) => {
+    const container = tableScrollRef.current;
+    if (!container) return false;
+    const rowEl = container.querySelector(
+      `[data-vrow-id="${rowId}"]`
+    ) as HTMLElement | null;
+    if (!rowEl) return false;
+
+    const containerRect = container.getBoundingClientRect();
+    const rowRect = rowEl.getBoundingClientRect();
+    const targetTop =
+      rowRect.top -
+      containerRect.top +
+      container.scrollTop -
+      (container.clientHeight - rowRect.height) / 2;
+
+    container.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
+    return true;
+  }, []);
 
   // --- Row data (lazy-loaded) ---
   const [rows, setRows] = useState<VirtualDataRow[]>([]);
+  const [totalRowCount, setTotalRowCount] = useState(0);
+  const [pageIndex, setPageIndex] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
 
   const loadRows = useCallback(async () => {
-    const result = await fetchVirtualRowsAction(table.id);
+    setInitialLoading(true);
+    const result = await fetchVirtualRowsAction(
+      table.id,
+      isPaginatedEmbedded
+        ? {
+            limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+            offset: pageIndex * VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+          }
+        : undefined
+    );
     if (result.error) {
       toast.error(result.error);
+      setRows([]);
+      setTotalRowCount(0);
     } else {
       setRows(result.rows as VirtualDataRow[]);
+      setTotalRowCount(result.totalCount);
     }
     setInitialLoading(false);
+  }, [table.id, isPaginatedEmbedded, pageIndex]);
+
+  const totalPages = isPaginatedEmbedded
+    ? Math.max(1, Math.ceil(totalRowCount / VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE))
+    : 1;
+
+  const pageRowStart =
+    totalRowCount === 0
+      ? 0
+      : pageIndex * VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE + 1;
+  const pageRowEnd = isPaginatedEmbedded
+    ? Math.min(totalRowCount, (pageIndex + 1) * VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE)
+    : totalRowCount;
+
+  useEffect(() => {
+    setPageIndex(0);
   }, [table.id]);
 
   useEffect(() => {
-    loadRows();
-  }, [loadRows]);
+    if (pageIndex > totalPages - 1) {
+      setPageIndex(Math.max(0, totalPages - 1));
+    }
+  }, [pageIndex, totalPages]);
+
+  useEffect(() => {
+    if (isOverlayLayout) {
+      setIsInView(true);
+      return;
+    }
+    const el = rootRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) setIsInView(true);
+      },
+      { rootMargin: "120px", threshold: 0 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [isOverlayLayout]);
+
+  useEffect(() => {
+    if (!isInView) return;
+    void loadRows();
+  }, [isInView, loadRows]);
 
   // --- Inline editing ---
   const [editingCell, setEditingCell] = useState<{
@@ -868,10 +1045,103 @@ export function VirtualTableView({
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [showGeoJsonImport, setShowGeoJsonImport] = useState(false);
   const [showDxfImport, setShowDxfImport] = useState(false);
+  const [showLayerUpload, setShowLayerUpload] = useState(false);
 
   const geometryColumns = useMemo(
     () => columns.filter((c) => c.data_type === "geometry"),
     [columns]
+  );
+
+  const resolvedOrganizationId =
+    organizationId ?? table.organization_id ?? null;
+
+  const refreshUnreadChatRows = useCallback(async () => {
+    if (!userId) {
+      setUnreadChatRowIds(new Set());
+      return;
+    }
+    const res = await fetchVirtualTableChatUnreadRowsAction(table.id);
+    if (res.error || !res.data) return;
+    setUnreadChatRowIds(new Set(res.data.map((r) => r.virtualRowId)));
+  }, [table.id, userId]);
+
+  const buildBaseMentionOptions = useCallback((): ChatMentionOption[] => {
+    const opts: ChatMentionOption[] = [];
+    for (const [uid, name] of memberNameByUserId) {
+      opts.push({
+        id: uid,
+        label: name,
+        kind: "user",
+        searchText: name.toLowerCase(),
+      });
+    }
+    for (const p of projectsForMention) {
+      opts.push({
+        id: p.id,
+        label: p.name,
+        kind: "project",
+        searchText: `${p.name} ${p.key ?? ""}`.toLowerCase(),
+      });
+    }
+    return opts;
+  }, [memberNameByUserId, projectsForMention]);
+
+  const buildRowFileOptions = useCallback(
+    (rowId: string): ChatAttachmentRef[] => {
+      const row = rows.find((r) => r.id === rowId);
+      if (!row?.payload) return [];
+      const out: ChatAttachmentRef[] = [];
+      for (const col of columns) {
+        if (col.data_type !== "file") continue;
+        const val = row.payload[col.slug];
+        if (typeof val === "string" && val.trim()) {
+          out.push({ label: col.display_name, url: val.trim() });
+        } else if (val && typeof val === "object" && "url" in val) {
+          const url = String((val as { url?: unknown }).url ?? "").trim();
+          if (url) out.push({ label: col.display_name, url });
+        }
+      }
+      return out;
+    },
+    [rows, columns]
+  );
+
+  const openRowChat = useCallback(
+    (rowId: string, rowTitle: string) => {
+      const pathSegments = buildChatRowPathSegments({
+        projectName: table.project_id
+          ? (projectsForMention.find((p) => p.id === table.project_id)?.name ??
+            null)
+          : null,
+        organizationName: table.project_id ? null : organizationName,
+        tableDisplayName: table.display_name,
+        rowLabel: rowTitle,
+      });
+      const row = rows.find((r) => r.id === rowId);
+      openRowPanel({
+        tableId: table.id,
+        rowId,
+        pathSegments,
+        tab: "chat",
+        mentionOptions: [
+          ...buildBaseMentionOptions(),
+          { id: rowId, label: rowTitle, kind: "row" },
+        ],
+        fileAttachmentOptions: buildRowFileOptions(rowId),
+        rowPayload: row?.payload as Record<string, unknown> | undefined,
+      });
+    },
+    [
+      projectsForMention,
+      table.project_id,
+      table.display_name,
+      table.id,
+      organizationName,
+      rows,
+      openRowPanel,
+      buildBaseMentionOptions,
+      buildRowFileOptions,
+    ]
   );
 
   const deleteRow = useCallback(
@@ -883,10 +1153,9 @@ export function VirtualTableView({
         const r = await deleteVirtualRowAction(fd);
         if (r.error) toast.error(r.error);
         await loadRows();
-        router.refresh();
       });
     },
-    [loadRows, router]
+    [loadRows]
   );
 
   // --- Column management ---
@@ -1225,12 +1494,12 @@ export function VirtualTableView({
 
   // --- Relation labels (resolved display names for related rows) ---
   const [relationLabels, setRelationLabels] = useState<Record<string, string>>({});
+  /** Hindari loop: ID yang sudah dicoba resolve (termasuk yang tidak ketemu di DB). */
+  const relationResolveAttemptedRef = useRef<Set<string>>(new Set());
 
-  // Collect all relation row IDs from current rows and resolve their labels
-  useEffect(() => {
+  const relationIdsInRowsSig = useMemo(() => {
     const relationCols = columns.filter((c) => c.data_type === "relation");
-    if (relationCols.length === 0 || rows.length === 0) return;
-
+    if (relationCols.length === 0 || rows.length === 0) return "";
     const ids = new Set<string>();
     for (const row of rows) {
       for (const col of relationCols) {
@@ -1243,16 +1512,46 @@ export function VirtualTableView({
         }
       }
     }
+    return [...ids].sort().join(",");
+  }, [rows, columns]);
 
-    const toResolve = [...ids].filter((id) => !(id in relationLabels));
+  useEffect(() => {
+    if (!relationIdsInRowsSig) return;
+
+    const ids = relationIdsInRowsSig.split(",").filter(Boolean);
+    const toResolve = ids.filter(
+      (id) => !relationResolveAttemptedRef.current.has(id)
+    );
     if (toResolve.length === 0) return;
 
+    for (const id of toResolve) {
+      relationResolveAttemptedRef.current.add(id);
+    }
+
+    let cancelled = false;
     resolveRelationLabelsAction(toResolve).then((result) => {
-      if (!result.error && result.labels) {
-        setRelationLabels((prev) => ({ ...prev, ...result.labels }));
-      }
+      if (cancelled) return;
+      setRelationLabels((prev) => {
+        const next = { ...prev };
+        for (const id of toResolve) {
+          if (result.labels?.[id]) {
+            next[id] = result.labels[id]!;
+          } else {
+            next[id] = id.slice(0, 8);
+          }
+        }
+        return next;
+      });
     });
-  }, [rows, columns, relationLabels]);
+    return () => {
+      cancelled = true;
+    };
+  }, [relationIdsInRowsSig]);
+
+  useEffect(() => {
+    relationResolveAttemptedRef.current = new Set();
+    setRelationLabels({});
+  }, [table.id]);
 
   // --- Relation picker state ---
   const [relationPicker, setRelationPicker] = useState<{
@@ -1313,13 +1612,22 @@ export function VirtualTableView({
   const [userPickerLoading, setUserPickerLoading] = useState(false);
   const [userPickerSearch, setUserPickerSearch] = useState("");
 
+  const memberNamesKey = useMemo(
+    () =>
+      [...memberNameByUserId.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, name]) => `${id}:${name}`)
+        .join("|"),
+    [memberNameByUserId]
+  );
+
   useEffect(() => {
     if (!userPicker) return;
     const orgId = table.organization_id;
     if (!orgId) {
-      // Project-level: use memberNameByUserId
-      const members = Array.from(memberNameByUserId.entries()).map(([id, label]) => ({ id, label }));
-      members.sort((a, b) => a.label.localeCompare(b.label));
+      const members = [...memberNameByUserId.entries()]
+        .map(([id, label]) => ({ id, label }))
+        .sort((a, b) => a.label.localeCompare(b.label));
       setUserPickerMembers(members);
       return;
     }
@@ -1331,7 +1639,7 @@ export function VirtualTableView({
         setUserPickerLoading(false);
       })
     );
-  }, [userPicker !== null, table.organization_id, memberNameByUserId]);
+  }, [userPicker, table.organization_id, memberNamesKey]);
 
   const filteredUserPickerMembers = useMemo(() => {
     if (!userPickerSearch.trim()) return userPickerMembers;
@@ -1391,21 +1699,25 @@ export function VirtualTableView({
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const viewSessionHydratedRef = useRef(false);
 
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
+
   const applyViewConfig = useCallback((config: VirtualViewConfig) => {
     setFilters(config.filters ?? []);
     setSorts(config.sorts ?? []);
     setGroupBy(config.groupBy ?? null);
-    const allSlugs = columns.map((c) => c.slug);
+    const allSlugs = columnsRef.current.map((c) => c.slug);
     if (config.visibleColumns && config.visibleColumns.length > 0) {
       const visible = new Set(config.visibleColumns);
       setHiddenColumns(new Set(allSlugs.filter((s) => !visible.has(s))));
     } else {
       setHiddenColumns(new Set());
     }
-  }, [columns]);
+  }, []);
 
-  // Restore last session from localStorage, else DB default view
+  // Restore last session from localStorage, else DB default view (sekali per table.id, saat terlihat)
   useEffect(() => {
+    if (!isInView) return;
     viewSessionHydratedRef.current = false;
     let cancelled = false;
 
@@ -1440,7 +1752,7 @@ export function VirtualTableView({
     return () => {
       cancelled = true;
     };
-  }, [table.id, applyViewConfig]);
+  }, [table.id, isInView]);
 
   const currentViewConfig = useMemo((): VirtualViewConfig => ({
     filters,
@@ -1562,6 +1874,93 @@ export function VirtualTableView({
     return result;
   }, [rows, filters, sorts, labelResolvers]);
 
+  useEffect(() => {
+    scrolledUnreadLockRef.current = null;
+    unreadScrollInProgressRef.current = null;
+    setPinnedUnreadScrollRowId(null);
+    closePanel();
+  }, [table.id, closePanel]);
+
+  useEffect(() => {
+    if (!isInView) return;
+    void refreshUnreadChatRows();
+  }, [isInView, refreshUnreadChatRows, refreshEpoch]);
+
+
+  const relationLabelsReady = useMemo(() => {
+    if (!relationIdsInRowsSig) return true;
+    const ids = relationIdsInRowsSig.split(",").filter(Boolean);
+    if (ids.length === 0) return true;
+    return ids.every((id) =>
+      Object.prototype.hasOwnProperty.call(relationLabels, id)
+    );
+  }, [relationIdsInRowsSig, relationLabels]);
+
+  // Kunci baris target sekali (urutan processedRows bisa berubah setelah label relasi).
+  useEffect(() => {
+    if (initialLoading || pinnedUnreadScrollRowId) return;
+    if (unreadChatRowIds.size === 0 || processedRows.length === 0) return;
+    const first = processedRows.find((r) => unreadChatRowIds.has(r.id));
+    if (first) setPinnedUnreadScrollRowId(first.id);
+  }, [
+    initialLoading,
+    pinnedUnreadScrollRowId,
+    unreadChatRowIds,
+    processedRows,
+  ]);
+
+  useEffect(() => {
+    if (
+      initialLoading ||
+      !relationLabelsReady ||
+      !pinnedUnreadScrollRowId
+    ) {
+      return;
+    }
+
+    const lockKey = `${table.id}:${pinnedUnreadScrollRowId}`;
+    if (scrolledUnreadLockRef.current === lockKey) return;
+    if (unreadScrollInProgressRef.current === lockKey) return;
+    unreadScrollInProgressRef.current = lockKey;
+
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tryScroll = () => {
+      if (cancelled) return;
+      if (scrollUnreadRowIntoView(pinnedUnreadScrollRowId)) {
+        scrolledUnreadLockRef.current = lockKey;
+        unreadScrollInProgressRef.current = null;
+        return;
+      }
+      attempts += 1;
+      if (attempts < 16) {
+        retryTimer = setTimeout(tryScroll, 50);
+      } else {
+        unreadScrollInProgressRef.current = null;
+      }
+    };
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(tryScroll);
+    });
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (scrolledUnreadLockRef.current !== lockKey) {
+        unreadScrollInProgressRef.current = null;
+      }
+    };
+  }, [
+    table.id,
+    pinnedUnreadScrollRowId,
+    relationLabelsReady,
+    initialLoading,
+    scrollUnreadRowIntoView,
+  ]);
+
   // Group rows if groupBy is set
   const groupedRows = useMemo(() => {
     if (!groupBy) return null;
@@ -1596,12 +1995,15 @@ export function VirtualTableView({
   const hasActiveFilters = filters.length > 0 || sorts.length > 0 || groupBy || hiddenColumns.size > 0;
 
   const canBulkDeleteFiltered =
+    !isPaginatedEmbedded &&
     filters.length > 0 &&
     processedRows.length > 0 &&
     processedRows.length <= MAX_VIRTUAL_TABLE_BULK_DELETE_ROWS;
 
   const bulkDeleteOverLimit =
-    filters.length > 0 && processedRows.length > MAX_VIRTUAL_TABLE_BULK_DELETE_ROWS;
+    !isPaginatedEmbedded &&
+    filters.length > 0 &&
+    processedRows.length > MAX_VIRTUAL_TABLE_BULK_DELETE_ROWS;
 
   const bulkDeleteFiltered = useCallback(() => {
     setShowBulkDeleteConfirm(false);
@@ -1617,7 +2019,6 @@ export function VirtualTableView({
       }
       toast.success(`${r.deleted} baris dihapus.`);
       await loadRows();
-      router.refresh();
     });
   }, [processedRows, table.id, loadRows, router]);
 
@@ -1674,11 +2075,89 @@ export function VirtualTableView({
     }
   }, [geometryEditor, geoEditorText, loadRows, saveCell]);
 
+  const tableChatMentionOptions = useMemo((): ChatMentionOption[] => {
+    const opts: ChatMentionOption[] = [];
+    for (const [uid, name] of memberNameByUserId) {
+      opts.push({
+        id: uid,
+        label: name,
+        kind: "user",
+        searchText: name.toLowerCase(),
+      });
+    }
+    for (const p of projectsForMention) {
+      opts.push({
+        id: p.id,
+        label: p.name,
+        kind: "project",
+        searchText: `${p.name} ${p.key ?? ""}`.toLowerCase(),
+      });
+    }
+    opts.push({
+      id: table.id,
+      label: table.display_name,
+      kind: "table",
+      searchText: table.display_name.toLowerCase(),
+    });
+    for (const row of rows.slice(0, 200)) {
+      const label = pickMapRowTitle(
+        row.payload ?? {},
+        columns.map((c) => ({
+          slug: c.slug,
+          display_name: c.display_name,
+          data_type: c.data_type,
+          position: c.position,
+        })),
+        relationLabels,
+        row.id
+      );
+      opts.push({ id: row.id, label, kind: "row" });
+    }
+    return opts;
+  }, [
+    memberNameByUserId,
+    projectsForMention,
+    table.id,
+    table.display_name,
+    rows,
+    columns,
+    relationLabels,
+  ]);
+
   // --- Render ---
   return (
-    <div className="space-y-3">
+    <div
+      ref={rootRef}
+      className={cn(
+        isOverlayLayout
+          ? "flex min-h-0 flex-1 flex-col gap-3 px-4 pb-4 pt-3"
+          : "space-y-3"
+      )}
+    >
+      {isPaginatedEmbedded && totalRowCount > VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE ? (
+        <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Preview tab: menampilkan{" "}
+          <strong className="text-foreground">
+            {VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE}
+          </strong>{" "}
+          baris per halaman dari{" "}
+          <strong className="text-foreground">{totalRowCount}</strong> total.
+          Filter dan sort hanya pada baris halaman ini.{" "}
+          {onOpenInOverlay ? (
+            <button
+              type="button"
+              className="font-medium text-primary underline-offset-2 hover:underline"
+              onClick={onOpenInOverlay}
+            >
+              Buka tabel lengkap
+            </button>
+          ) : null}{" "}
+          untuk seluruh data tanpa batas halaman.
+        </p>
+      ) : null}
+
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           {table.icon && <span className="text-lg">{table.icon}</span>}
           <h2 className="text-xl font-semibold tracking-tight text-foreground">
@@ -1690,12 +2169,51 @@ export function VirtualTableView({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {pending && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Spinner className="size-3" /> Menyimpan…
             </div>
           )}
+          {isPaginatedEmbedded && onOpenInOverlay ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              className="gap-1.5"
+              onClick={onOpenInOverlay}
+              title="Buka seluruh data tabel di panel overlay"
+            >
+              <Maximize2 className="size-3.5 shrink-0" />
+              Tabel lengkap
+            </Button>
+          ) : null}
+          {resolvedOrganizationId && userId ? (
+            <Button
+              type="button"
+              variant={isTableChatOpen(table.id) ? "default" : "outline"}
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                if (isTableChatOpen(table.id)) {
+                  closePanel();
+                } else {
+                  openTableChat({
+                    tableId: table.id,
+                    mentionOptions: tableChatMentionOptions,
+                  });
+                }
+              }}
+              title="Chat diskusi tingkat tabel"
+            >
+              <MessageSquare className="size-3.5 shrink-0" />
+              Chat tabel
+              <VirtualTableRoomChatUnreadBadge
+                tableId={table.id}
+                className="!ml-0"
+              />
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant={showViewToolbar ? "default" : "outline"}
@@ -1744,6 +2262,18 @@ export function VirtualTableView({
             <Upload className="mr-1 size-3.5" />
             Impor CSV
           </Button>
+          {projectId ? (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={() => setShowLayerUpload(true)}
+              disabled={pending || initialLoading}
+            >
+              <Upload className="mr-1 size-3.5" />
+              Layer baru dari file
+            </Button>
+          ) : null}
           {geometryColumns.length > 0 ? (
             <>
               <Button
@@ -1785,7 +2315,7 @@ export function VirtualTableView({
 
       {/* View Toolbar */}
       {showViewToolbar && (
-        <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+        <div className="shrink-0 space-y-2 rounded-lg border border-border bg-muted/30 p-3">
           {/* Saved views row */}
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground">View:</span>
@@ -2013,8 +2543,16 @@ export function VirtualTableView({
         </div>
       )}
 
-      {/* Table — scroll viewport with sticky header + frozen # and first column */}
-      <div className="max-h-[min(70vh,calc(100dvh-14rem))] overflow-auto rounded-xl border border-border bg-card shadow-sm">
+      {/* Table scroll viewport */}
+      <div
+        ref={tableScrollRef}
+        className={cn(
+          "min-h-0 overflow-auto bg-card",
+          isOverlayLayout
+            ? "min-h-0 flex-1"
+            : "max-h-[min(70vh,calc(100dvh-14rem))] rounded-xl border border-border shadow-sm"
+        )}
+      >
         <table className="w-full border-separate border-spacing-0 text-sm">
           <thead className="sticky top-0 z-30 bg-muted shadow-[0_1px_0_0_hsl(var(--border))]">
             <tr className="border-b border-border bg-muted">
@@ -2237,6 +2775,8 @@ export function VirtualTableView({
                       setRelationPicker={setRelationPicker}
                       setGeometryEditor={setGeometryEditor}
                       setUserPicker={setUserPicker}
+                      onOpenRowChat={openRowChat}
+                      hasUnreadChat={unreadChatRowIds.has(row.id)}
                     />
                   ))}
                 </React.Fragment>
@@ -2260,6 +2800,8 @@ export function VirtualTableView({
                   setRelationPicker={setRelationPicker}
                   setGeometryEditor={setGeometryEditor}
                   setUserPicker={setUserPicker}
+                  onOpenRowChat={openRowChat}
+                  hasUnreadChat={unreadChatRowIds.has(row.id)}
                 />
               ))
             )}
@@ -2267,10 +2809,58 @@ export function VirtualTableView({
         </table>
       </div>
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
-          {processedRows.length}{filters.length > 0 ? ` / ${rows.length}` : ""} baris · {visibleColumns.length}{hiddenColumns.size > 0 ? ` / ${sortedColumns.length}` : ""} kolom
+          {isPaginatedEmbedded && totalRowCount > 0 ? (
+            <>
+              Baris {pageRowStart}–{pageRowEnd} dari {totalRowCount}
+              {filters.length > 0
+                ? ` · ${processedRows.length} setelah filter (halaman ini)`
+                : null}
+            </>
+          ) : (
+            <>
+              {processedRows.length}
+              {filters.length > 0 ? ` / ${rows.length}` : ""} baris
+            </>
+          )}
+          {" · "}
+          {visibleColumns.length}
+          {hiddenColumns.size > 0 ? ` / ${sortedColumns.length}` : ""} kolom
         </span>
+        {isPaginatedEmbedded && totalPages > 1 ? (
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-xs"
+              className="h-7 w-7"
+              disabled={pending || initialLoading || pageIndex <= 0}
+              onClick={() => setPageIndex((p) => Math.max(0, p - 1))}
+              aria-label="Halaman sebelumnya"
+            >
+              <ChevronLeft className="size-4" />
+            </Button>
+            <span className="min-w-[5rem] text-center tabular-nums">
+              {pageIndex + 1} / {totalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-xs"
+              className="h-7 w-7"
+              disabled={
+                pending || initialLoading || pageIndex >= totalPages - 1
+              }
+              onClick={() =>
+                setPageIndex((p) => Math.min(totalPages - 1, p + 1))
+              }
+              aria-label="Halaman berikutnya"
+            >
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       {/* Dialog: Add Column */}
@@ -3010,7 +3600,6 @@ export function VirtualTableView({
         allVirtualTables={allVirtualTables}
         onImported={() => {
           void loadRows();
-          router.refresh();
         }}
       />
 
@@ -3023,9 +3612,20 @@ export function VirtualTableView({
         rows={rows}
         onImported={() => {
           void loadRows();
-          router.refresh();
         }}
       />
+
+      {projectId ? (
+        <VirtualTableLayerUploadDialog
+          open={showLayerUpload}
+          onOpenChange={setShowLayerUpload}
+          projectId={projectId}
+          onCreated={(result) => {
+            onLayerCreated?.(result);
+            router.refresh();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -3378,6 +3978,12 @@ function VirtualTableCsvImportDialog({
 // GeoJSON batch import (FeatureCollection → satu baris per poligon)
 // ---------------------------------------------------------------------------
 
+export { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
+export {
+  VirtualTableLayerUploadDialog,
+  type LayerUploadCreated,
+} from "./virtual-table-layer-upload-dialog";
+
 export function VirtualTableGeoJsonImportDialog({
   open,
   onOpenChange,
@@ -3532,13 +4138,10 @@ export function VirtualTableGeoJsonImportDialog({
       geometryColumns.find((c) => c.slug === "geom" || c.slug === "geometry") ??
       geometryColumns[0];
     setGeometrySlug(geom?.slug ?? "");
-    const match =
-      matchColumns.find((c) => c.slug === "no_bidang") ??
-      matchColumns.find((c) => c.slug !== "title") ??
-      matchColumns[0];
+    const match = pickDefaultVirtualTableMatchColumn(matchColumns);
     setMatchSlug(match?.slug ?? "");
-    const relCol = relationColumns[0];
-    setDesaRelationSlug(relCol?.slug ?? "");
+    const requiredRel = relationColumns.find((c) => c.is_required);
+    setDesaRelationSlug(requiredRel?.slug ?? "");
   }, [open, geometryColumns, matchColumns, relationColumns]);
 
   const runImport = useCallback(() => {

@@ -60,7 +60,13 @@ export function defaultGeoJsonBatchFeatureKey(
 
 /** Aturan label sama server batch. */
 export function defaultGeoJsonBatchLabel(props: Record<string, unknown>): string {
-  const labelCandidate = props.label ?? props.Label ?? props.Nama ?? props.nama;
+  const labelCandidate =
+    props.label ??
+    props.Label ??
+    props.Nama ??
+    props.nama ??
+    props.judul ??
+    props.Judul;
   if (labelCandidate == null) return "";
   return String(labelCandidate).trim();
 }

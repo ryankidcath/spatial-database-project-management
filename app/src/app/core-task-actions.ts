@@ -843,20 +843,6 @@ export async function deleteProjectAction(
     return { error: "project_id kosong" };
   }
 
-  const { data: myMembership, error: membershipErr } = await supabase
-    .schema("core_pm")
-    .from("project_members")
-    .select("role")
-    .eq("project_id", projectId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (membershipErr) {
-    return { error: membershipErr.message };
-  }
-  if (!myMembership || myMembership.role !== "owner") {
-    return { error: "Hanya owner project yang bisa menghapus project." };
-  }
-
   const { error } = await supabase
     .schema("core_pm")
     .rpc("delete_project_soft", { p_project_id: projectId });

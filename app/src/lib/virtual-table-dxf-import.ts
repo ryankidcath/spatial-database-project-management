@@ -72,19 +72,22 @@ export function buildVirtualTableDxfFeatureCollection(
       );
     }
     const customLabel = labels[i];
-    const title =
+    const displayLabel =
       customLabel != null && customLabel.trim() !== ""
         ? customLabel.trim()
         : `DXF ${layerName} #${i + 1}`;
+    // Jangan pakai dua kali key `title` bila kolom kunci slug-nya "title" — nilai kedua
+    // menimpa NIB/kunci yang user isi (geometri jadi baris baru "DXF layer #n").
+    const properties: Record<string, unknown> = {
+      [slug]: matchKey,
+      label: displayLabel,
+      source: "dxf",
+      dxf_layer: layerName,
+      dxf_polygon_index: i + 1,
+    };
     features.push({
       type: "Feature",
-      properties: {
-        [slug]: matchKey,
-        title,
-        source: "dxf",
-        dxf_layer: layerName,
-        dxf_polygon_index: i + 1,
-      },
+      properties,
       geometry: {
         type: "Polygon",
         coordinates: [ll.map(([lng, lat]) => [lng, lat])],

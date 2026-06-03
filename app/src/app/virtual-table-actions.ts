@@ -39,6 +39,11 @@ import {
   buildVirtualTableDxfFeatureCollection,
   parseVirtualTableDxfSourceSrid,
 } from "@/lib/virtual-table-dxf-import";
+import {
+  LAYER_COLUMN_DEFS,
+  LAYER_GEOMETRY_COLUMN_SLUG,
+  LAYER_MATCH_COLUMN_SLUG,
+} from "@/lib/virtual-table-layer-bootstrap";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog } from "./audit-log-actions";
 
@@ -864,7 +869,6 @@ export async function createVirtualRowAction(
 
   if (error) return { error: error.message, rowId: null };
 
-  revalidatePath("/", "layout");
   return { error: null, rowId: (inserted as { id: string } | null)?.id ?? null };
 }
 
@@ -1867,12 +1871,18 @@ export async function importVirtualRowsGeoJsonBatchAction(
   let nextSort =
     ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
 
-  const skipSlugs = new Set([
-    geometryColumnSlug,
-    matchColumnSlug,
-    "title",
-    desaRelationColumnSlug,
-  ].filter(Boolean));
+  const skipSlugs = new Set(
+    [
+      geometryColumnSlug,
+      matchColumnSlug,
+      "title",
+      "label",
+      "source",
+      "dxf_layer",
+      "dxf_polygon_index",
+      desaRelationColumnSlug,
+    ].filter(Boolean)
+  );
 
   const mapColumns = columns.filter((c) =>
     ["text", "number", "select", "url"].includes(c.data_type)
@@ -1984,14 +1994,19 @@ export async function importVirtualRowsGeoJsonBatchAction(
       skipSlugs,
       skipGeoPropertyLower
     );
-    const title = defaultTitleFromFeature(props, matchKeyRaw);
     const patch: Record<string, unknown> = {
       ...mapped,
-      title,
       [matchColumnSlug]:
         matchCol.data_type === "number" ? Number(matchKeyRaw) : matchKeyRaw,
       [geometryColumnSlug]: storedGeom,
     };
+    // Jangan timpa kolom kunci bila slug-nya "title" (NIB sering pakai slug ini).
+    if (
+      columns.some((c) => c.slug === "title") &&
+      matchColumnSlug !== "title"
+    ) {
+      patch.title = defaultTitleFromFeature(props, matchKeyRaw);
+    }
     if (desaRelationColumnSlug && desaIdForFeature) {
       patch[desaRelationColumnSlug] = desaIdForFeature;
     }
@@ -2295,6 +2310,291 @@ export async function importVirtualRowsDxfBatchAction(
   return importVirtualRowsGeoJsonBatchAction(inner);
 }
 
+export type BootstrapVirtualTableLayerResult = {
+  error: string | null;
+  tableId: string | null;
+  tableSlug: string | null;
+  displayName: string | null;
+  inserted: number;
+  failed: number;
+  failureSamples: string[];
+};
+
+type LayerShellResult =
+  | { ok: true; tableId: string; slug: string }
+  | { ok: false; error: string };
+
+async function softDeleteVirtualTableById(
+  supabase: NonNullable<Awaited<ReturnType<typeof createServerSupabaseClient>>>,
+  tableId: string
+): Promise<void> {
+  await supabase.schema("core_pm").rpc("soft_delete_virtual_table", {
+    p_table_id: tableId,
+  });
+}
+
+async function createVirtualTableLayerShell(
+  supabase: NonNullable<Awaited<ReturnType<typeof createServerSupabaseClient>>>,
+  userId: string,
+  projectId: string,
+  displayName: string,
+  description: string | null
+): Promise<LayerShellResult> {
+  const baseSlug = slugify(displayName);
+  if (!baseSlug) {
+    return { ok: false, error: "Nama layer tidak valid untuk slug" };
+  }
+
+  const { data: existing } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("slug")
+    .eq("project_id", projectId)
+    .is("deleted_at", null)
+    .like("slug", `${baseSlug}%`);
+
+  const existingSlugs = new Set(
+    (existing ?? []).map((r: { slug: string }) => r.slug)
+  );
+  let slug = baseSlug;
+  let suffix = 2;
+  while (existingSlugs.has(slug)) {
+    slug = `${baseSlug}_${suffix}`;
+    suffix++;
+  }
+
+  const { data: maxSort } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("sort_order")
+    .eq("project_id", projectId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const nextSortOrder =
+    ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  const { data: table, error: tableErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .insert({
+      project_id: projectId,
+      slug,
+      display_name: displayName,
+      description,
+      icon: "🗺️",
+      sort_order: nextSortOrder,
+      created_by: userId,
+    })
+    .select("id")
+    .single();
+
+  if (tableErr) return { ok: false, error: tableErr.message };
+  const tableId = (table as { id: string }).id;
+
+  const { error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .insert(
+      LAYER_COLUMN_DEFS.map((c) => ({
+        table_id: tableId,
+        slug: c.slug,
+        display_name: c.display_name,
+        data_type: c.data_type,
+        position: c.position,
+        is_required: c.is_required,
+        config: {},
+      }))
+    );
+
+  if (colErr) {
+    await softDeleteVirtualTableById(supabase, tableId);
+    return { ok: false, error: colErr.message };
+  }
+
+  return { ok: true, tableId, slug };
+}
+
+/**
+ * Surveyor: unggah GeoJSON/DXF → tabel virtual baru (no_bidang + geom + title).
+ * Admin dapat menambah kolom / impor CSV nanti di tabel yang sama.
+ */
+export async function bootstrapVirtualTableLayerFromSpatialAction(
+  formData: FormData
+): Promise<BootstrapVirtualTableLayerResult> {
+  const empty = {
+    tableId: null as string | null,
+    tableSlug: null as string | null,
+    displayName: null as string | null,
+    inserted: 0,
+    failed: 0,
+    failureSamples: [] as string[],
+  };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", ...empty };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", ...empty };
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const displayName = String(formData.get("display_name") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim() || null;
+  const sourceFormat = String(formData.get("source_format") ?? "geojson")
+    .trim()
+    .toLowerCase();
+  const featureKeyPrefix = String(formData.get("feature_key_prefix") ?? "").trim();
+
+  if (!projectId) return { error: "project_id wajib", ...empty };
+  if (!displayName) return { error: "Nama layer/tabel wajib diisi", ...empty };
+  if (sourceFormat !== "geojson" && sourceFormat !== "dxf") {
+    return { error: "source_format harus geojson atau dxf", ...empty };
+  }
+
+  let expectedPolygonCount = 0;
+
+  if (sourceFormat === "geojson") {
+    const geojsonRaw = String(formData.get("geojson_json") ?? "");
+    if (!geojsonRaw.trim()) {
+      return { error: "geojson_json kosong", ...empty };
+    }
+    if (geojsonRaw.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+      return {
+        error: spatialGeometryTextTooLargeMessage("GeoJSON"),
+        ...empty,
+      };
+    }
+    const parsed = parseFeatureCollectionForVirtualImport(geojsonRaw);
+    if (!parsed.ok) return { error: parsed.error, ...empty };
+    expectedPolygonCount = parsed.rows.length;
+  } else {
+    const dxfText = String(formData.get("dxf_text") ?? "");
+    const layerName = String(formData.get("layer_name") ?? "").trim();
+    if (!dxfText.trim() || !layerName) {
+      return { error: "dxf_text dan layer_name wajib", ...empty };
+    }
+    if (dxfText.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+      return {
+        error: spatialGeometryTextTooLargeMessage("DXF"),
+        ...empty,
+      };
+    }
+    const keysJsonRaw = String(formData.get("match_keys_json") ?? "").trim();
+    if (!keysJsonRaw) {
+      return { error: "match_keys_json wajib untuk DXF", ...empty };
+    }
+    let dxf: ReturnType<typeof parseDxfDocument>;
+    try {
+      dxf = parseDxfDocument(dxfText);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Gagal membaca DXF.";
+      return { error: msg, ...empty };
+    }
+    const rings = extractClosedPolygonRingsFromDxfLayer(dxf, layerName, dxfText);
+    if (rings.length === 0) {
+      return {
+        error:
+          "Tidak ada poligon tertutup di layer DXF yang dipilih.",
+        ...empty,
+      };
+    }
+    let matchKeys: string[];
+    try {
+      const parsed = JSON.parse(keysJsonRaw) as unknown;
+      if (!Array.isArray(parsed)) {
+        return { error: "match_keys_json tidak valid", ...empty };
+      }
+      matchKeys = parsed.map((x) => String(x ?? "").trim());
+      if (matchKeys.length !== rings.length || matchKeys.some((k) => !k)) {
+        return {
+          error: `match_keys_json harus ${rings.length} kunci non-kosong.`,
+          ...empty,
+        };
+      }
+    } catch {
+      return { error: "match_keys_json tidak valid", ...empty };
+    }
+    expectedPolygonCount = rings.length;
+  }
+
+  const shell = await createVirtualTableLayerShell(
+    supabase,
+    user.id,
+    projectId,
+    displayName,
+    description
+  );
+  if (!shell.ok) return { error: shell.error, ...empty };
+
+  const importFd = new FormData();
+  importFd.set("table_id", shell.tableId);
+  importFd.set("geometry_column_slug", LAYER_GEOMETRY_COLUMN_SLUG);
+  importFd.set("match_column_slug", LAYER_MATCH_COLUMN_SLUG);
+  importFd.set("upsert_mode", "insert_only");
+  if (featureKeyPrefix) importFd.set("feature_key_prefix", featureKeyPrefix);
+
+  let importResult: ImportVirtualRowsGeoJsonResult;
+
+  if (sourceFormat === "geojson") {
+    importFd.set("geojson_json", String(formData.get("geojson_json") ?? ""));
+    importResult = await importVirtualRowsGeoJsonBatchAction(importFd);
+  } else {
+    importFd.set("dxf_text", String(formData.get("dxf_text") ?? ""));
+    importFd.set("layer_name", String(formData.get("layer_name") ?? ""));
+    importFd.set("source_srid", String(formData.get("source_srid") ?? "4326"));
+    importFd.set("match_keys_json", String(formData.get("match_keys_json") ?? ""));
+    const labels = formData.get("match_labels_json");
+    if (labels != null && String(labels).trim()) {
+      importFd.set("match_labels_json", String(labels));
+    }
+    importResult = await importVirtualRowsDxfBatchAction(importFd);
+  }
+
+  if (importResult.error || importResult.inserted === 0) {
+    await softDeleteVirtualTableById(supabase, shell.tableId);
+    const failHint =
+      importResult.failureSamples.length > 0
+        ? ` (${importResult.failureSamples.slice(0, 3).join("; ")})`
+        : "";
+    return {
+      error:
+        importResult.error ??
+        `Tidak ada poligon yang tersimpan (${importResult.failed} gagal).${failHint}`,
+      ...empty,
+    };
+  }
+
+  await writeProjectAuditLog(supabase, {
+    projectId,
+    actorUserId: user.id,
+    action: "virtual_table.layer_bootstrap",
+    entity: "core_pm.virtual_tables",
+    entityId: shell.tableId,
+    payload: {
+      display_name: displayName,
+      slug: shell.slug,
+      source_format: sourceFormat,
+      inserted: importResult.inserted,
+      expected_polygons: expectedPolygonCount,
+    },
+  });
+
+  revalidatePath("/", "layout");
+  return {
+    error: null,
+    tableId: shell.tableId,
+    tableSlug: shell.slug,
+    displayName,
+    inserted: importResult.inserted,
+    failed: importResult.failed,
+    failureSamples: importResult.failureSamples,
+  };
+}
+
 export async function updateVirtualRowCellAction(
   formData: FormData
 ): Promise<ActionResult> {
@@ -2376,7 +2676,6 @@ export async function updateVirtualRowCellAction(
 
   if (error) return { error: error.message };
 
-  revalidatePath("/", "layout");
   return { error: null };
 }
 
@@ -2448,7 +2747,6 @@ export async function updateVirtualRowAction(
 
   if (error) return { error: error.message };
 
-  revalidatePath("/", "layout");
   return { error: null };
 }
 
@@ -2472,7 +2770,6 @@ export async function deleteVirtualRowAction(
 
   if (error) return { error: error.message };
 
-  revalidatePath("/", "layout");
   return { error: null };
 }
 
@@ -2540,7 +2837,6 @@ export async function deleteVirtualRowsBulkAction(
     return { error: "Tidak ada baris yang dihapus (mungkin sudah dihapus)", deleted: 0 };
   }
 
-  revalidatePath("/", "layout");
   return { error: null, deleted: count };
 }
 
@@ -2548,29 +2844,53 @@ export async function deleteVirtualRowsBulkAction(
 // Fetch rows for a specific virtual table (called client-side via action)
 // ---------------------------------------------------------------------------
 
+export type FetchVirtualRowsOptions = {
+  limit?: number;
+  offset?: number;
+};
+
 export async function fetchVirtualRowsAction(
-  tableId: string
-): Promise<{ rows: Record<string, unknown>[]; error: string | null }> {
+  tableId: string,
+  options?: FetchVirtualRowsOptions
+): Promise<{
+  rows: Record<string, unknown>[];
+  totalCount: number;
+  error: string | null;
+}> {
   const supabase = await createServerSupabaseClient();
-  if (!supabase) return { rows: [], error: "Supabase tidak dikonfigurasi" };
+  if (!supabase) return { rows: [], totalCount: 0, error: "Supabase tidak dikonfigurasi" };
 
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { rows: [], error: "Belum masuk" };
+  if (!user) return { rows: [], totalCount: 0, error: "Belum masuk" };
 
-  const { data, error } = await supabase
+  let query = supabase
     .schema("core_pm")
     .from("virtual_rows")
-    .select("id, table_id, payload, sort_order, created_by, created_at, updated_at")
+    .select(
+      "id, table_id, payload, sort_order, created_by, created_at, updated_at",
+      { count: "exact" }
+    )
     .eq("table_id", tableId)
     .is("deleted_at", null)
     .order("sort_order")
     .order("created_at", { ascending: true });
 
-  if (error) return { rows: [], error: error.message };
+  if (options?.limit != null && options.limit > 0) {
+    const offset = Math.max(0, options.offset ?? 0);
+    query = query.range(offset, offset + options.limit - 1);
+  }
 
-  return { rows: (data ?? []) as Record<string, unknown>[], error: null };
+  const { data, error, count } = await query;
+
+  if (error) return { rows: [], totalCount: 0, error: error.message };
+
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const totalCount =
+    typeof count === "number" ? count : rows.length;
+
+  return { rows, totalCount, error: null };
 }
 
 // ---------------------------------------------------------------------------

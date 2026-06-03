@@ -16,8 +16,15 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { ChevronRight, MapPin, PanelLeft, Trash2, Upload } from "lucide-react";
 import {
+  ChevronRight,
+  MapPin,
+  PanelLeft,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import {
+  addOrganizationStaffByEmailAction,
   addProjectMemberByEmailAction,
   createOrganizationProjectInlineAction,
   createProjectInOrganizationAction,
@@ -159,15 +166,24 @@ import type {
 import type { MapFootprint } from "./workspace-map";
 import { type ViewId } from "./workspace-views";
 import type { UserNotificationRow } from "./user-notification-types";
-import type { VirtualTableRow, VirtualColumnRow } from "./virtual-table-types";
+import type {
+  VirtualTableRow,
+  VirtualColumnRow,
+  VirtualDataRow,
+} from "./virtual-table-types";
 import {
   VirtualTableCreateDialog,
+  VirtualTableDxfImportDialog,
   VirtualTableGeoJsonImportDialog,
+  VirtualTableLayerUploadDialog,
+  type LayerUploadCreated,
 } from "./virtual-table-view";
 import {
   fetchVirtualRowsAction,
   resolveRelationLabelsAction,
 } from "./virtual-table-actions";
+
+const EMPTY_VIRTUAL_COLUMNS: VirtualColumnRow[] = [];
 import {
   buildVirtualTableMapPopupProperties,
   collectRelationIdsFromVirtualPayloads,
@@ -175,6 +191,28 @@ import {
   type VirtualColumnForMapPopup,
 } from "@/lib/virtual-table-map-popup";
 import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
+import { buildChatRowPathSegments } from "@/lib/chat-row-context";
+import { resolveVirtualRowChatContextAction } from "./chat-actions";
+import {
+  WorkspaceRightPanelProvider,
+  WorkspaceRightPanelCloser,
+  WorkspaceRightPanelTableSync,
+  WorkspaceRightPanelOrgSync,
+  WorkspaceRightPanelProjectSync,
+  type WorkspaceRightPanelApi,
+} from "./workspace-right-panel-context";
+import { WorkspaceRightPanel } from "./workspace-right-panel";
+import {
+  SidebarOrganizationChatButton,
+  SidebarProjectChatButton,
+} from "./workspace-sidebar-chat";
+import { SidebarVirtualTableItem } from "./workspace-sidebar-vtable-item";
+import type { ChatMentionOption } from "./chat-types";
+import {
+  ProjectChatUnreadBadge,
+  VirtualTableChatUnreadBadge,
+  VirtualTableChatUnreadProvider,
+} from "./virtual-table-chat-unread-context";
 
 function TabViewLoading({ label }: { label: string }) {
   return (
@@ -326,6 +364,16 @@ export type ProjectMemberRow = {
   display_name: string | null;
 };
 
+export type OrganizationMemberRow = {
+  organization_id: string;
+  user_id: string;
+  role: string;
+  joined_at: string;
+};
+
+const ORG_STAFF_ROLES = new Set(["owner", "admin", "staff"]);
+const ORG_ADMIN_ROLES = new Set(["owner", "admin"]);
+
 export type ActivityLogRow = {
   id: string;
   organization_id: string;
@@ -352,6 +400,7 @@ type Props = {
   statuses: StatusRow[];
   issues: IssueRow[];
   projectMembers: ProjectMemberRow[];
+  organizationMembers?: OrganizationMemberRow[];
   footprints: DemoFootprintRow[];
   bidangHasilUkurMap: BidangHasilUkurMapRow[];
   issueGeometryFeatureMap: IssueGeometryFeatureMapRow[];
@@ -1590,6 +1639,7 @@ export function WorkspaceClient({
   statuses,
   issues,
   projectMembers = [],
+  organizationMembers = [],
   footprints,
   bidangHasilUkurMap,
   issueGeometryFeatureMap = [],
@@ -1639,6 +1689,8 @@ export function WorkspaceClient({
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [organizationDialogOpen, setOrganizationDialogOpen] = useState(false);
   const [memberDialogOpen, setMemberDialogOpen] = useState(false);
+  const [orgStaffDialogOpen, setOrgStaffDialogOpen] = useState(false);
+  const [orgStaffMsg, setOrgStaffMsg] = useState<string | null>(null);
   const [mapGeomDialogOpen, setMapGeomDialogOpen] = useState(false);
   const [mapGeomInputMode, setMapGeomInputMode] =
     useState<MapGeometryInputMode>("single");
@@ -1673,6 +1725,7 @@ export function WorkspaceClient({
 
   // --- Virtual tables ---
   const [activeVirtualTableSlug, setActiveVirtualTableSlug] = useState<string | null>(null);
+  const workspaceRightPanelApiRef = useRef<WorkspaceRightPanelApi | null>(null);
   const [vtableCreateDialogOpen, setVtableCreateDialogOpen] = useState(false);
   const [vtableCreateScope, setVtableCreateScope] = useState<"project" | "organization">("project");
   const mapGeomDetectedKind = useMemo<
@@ -1903,10 +1956,6 @@ export function WorkspaceClient({
   const [canonicalOrgId, setCanonicalOrgId] = useState<string | null>(
     orgIdFromSearchParams
   );
-  useEffect(() => {
-    setCanonicalOrgId(orgIdFromSearchParams);
-  }, [orgIdFromSearchParams]);
-
   const projectsInOrg = useMemo(() => {
     if (!canonicalOrgId) return [];
     return projects
@@ -1923,10 +1972,6 @@ export function WorkspaceClient({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     projectIdFromSearchParams
   );
-  useEffect(() => {
-    setSelectedProjectId(projectIdFromSearchParams);
-  }, [projectIdFromSearchParams]);
-
   const taskIdFromSearchParams = useMemo(() => {
     const q = searchParams.get("task");
     if (!q || !selectedProjectId) return null;
@@ -1939,10 +1984,6 @@ export function WorkspaceClient({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
     taskIdFromSearchParams
   );
-  useEffect(() => {
-    setSelectedTaskId(taskIdFromSearchParams);
-  }, [taskIdFromSearchParams]);
-
   useEffect(() => {
     setOptimisticStatusByIssueId({});
     queuedStatusCommitByIssueRef.current.clear();
@@ -1998,7 +2039,7 @@ export function WorkspaceClient({
     };
   }, [selectedProjectId, userId]);
 
-  /** Saat login awal / pindah organisasi, reset tree issue ke kondisi collapsed default. */
+  /** Saat pindah organisasi saja — jangan reset tiap router.refresh (issues array baru). */
   useEffect(() => {
     if (!canonicalOrgId) return;
     const projectIdsInOrg = new Set(
@@ -2009,7 +2050,8 @@ export function WorkspaceClient({
     setCollapsedProjectIds(new Set(projectIdsInOrg));
     const issuesInOrg = issues.filter((i) => projectIdsInOrg.has(i.project_id));
     setCollapsedIssueIds(parentIssueIdsWithChildren(issuesInOrg));
-  }, [canonicalOrgId, projects, issues]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hanya saat ganti org
+  }, [canonicalOrgId]);
 
   const selectedBerkasId = useMemo(() => {
     if (parseViewParam(searchParams.get("view")) !== "Berkas") return null;
@@ -2031,7 +2073,6 @@ export function WorkspaceClient({
   }, [berkasPermohonan, selectedBerkasId, selectedProjectId]);
 
   const [mapShowIssueGeometry, setMapShowIssueGeometry] = useState(true);
-
   const berkasIdsWithBidangInProject = useMemo(() => {
     const s = new Set<string>();
     if (!selectedProjectId) return s;
@@ -2042,7 +2083,9 @@ export function WorkspaceClient({
   }, [bidangHasilUkurMap, selectedProjectId]);
 
   const activeViewFromUrl = useMemo((): ViewId => {
-    const raw = parseViewParam(searchParams.get("view")) ?? "Dashboard";
+    const viewParam = searchParams.get("view");
+    if (viewParam?.toLowerCase() === "chat") return "Dashboard";
+    const raw = parseViewParam(viewParam) ?? "Dashboard";
     const enabled = effectiveEnabledModuleCodes(
       canonicalOrgId,
       organizationModules
@@ -2072,35 +2115,65 @@ export function WorkspaceClient({
     [enabledModulesForOrg]
   );
 
+  const issueIdsInSelectedProjectKey = useMemo(() => {
+    if (!selectedProjectId) return "";
+    return issues
+      .filter((i) => i.project_id === selectedProjectId)
+      .map((i) => i.id)
+      .sort()
+      .join(",");
+  }, [issues, selectedProjectId]);
+
   useEffect(() => {
     if (projects.length === 0 || !canonicalOrgId || !selectedProjectId) return;
-    const p = new URLSearchParams(
-      typeof window !== "undefined"
-        ? window.location.search
-        : searchParams.toString()
-    );
+    if (scopeRoutePending) return;
+    const p = new URLSearchParams(searchParams.toString());
     let dirty = false;
-    if (p.get("org") !== canonicalOrgId) {
+
+    const urlOrg = p.get("org");
+    const orgValid =
+      Boolean(urlOrg) &&
+      orgsWithProjects.some((o) => o.id === urlOrg) &&
+      projects.some((proj) => proj.organization_id === urlOrg);
+
+    const orgForPool = orgValid ? urlOrg! : canonicalOrgId;
+    const projectPool = orgForPool
+      ? projects.filter((x) => x.organization_id === orgForPool)
+      : [];
+
+    const urlProject = p.get("project");
+    const projectValid =
+      Boolean(urlProject) && projectPool.some((x) => x.id === urlProject);
+
+    // URL valid menang (mis. klik notifikasi) — jangan timpa dengan state project lama.
+    if (!orgValid && canonicalOrgId) {
       p.set("org", canonicalOrgId);
       dirty = true;
     }
-    if (p.get("project") !== selectedProjectId) {
-      p.set("project", selectedProjectId);
-      dirty = true;
+    if (!projectValid) {
+      const fallbackProject =
+        selectedProjectId &&
+        projectPool.some((x) => x.id === selectedProjectId)
+          ? selectedProjectId
+          : projectPool[0]?.id ?? null;
+      if (fallbackProject && urlProject !== fallbackProject) {
+        p.set("project", fallbackProject);
+        dirty = true;
+      }
     }
     if (!p.get("view")) {
       p.set("view", viewToParam("Dashboard"));
       dirty = true;
     }
     const tid = p.get("task");
-    if (
-      tid &&
-      !issues.some(
-        (i) => i.id === tid && i.project_id === selectedProjectId
-      )
-    ) {
-      p.delete("task");
-      dirty = true;
+    if (tid && selectedProjectId) {
+      const ids = issueIdsInSelectedProjectKey
+        ? issueIdsInSelectedProjectKey.split(",")
+        : [];
+      if (!ids.includes(tid)) {
+        p.delete("task");
+        dirty = true;
+      }
     }
     const enabled = effectiveEnabledModuleCodes(
       canonicalOrgId,
@@ -2119,6 +2192,10 @@ export function WorkspaceClient({
       dirty = true;
     }
     if (parseViewParam(p.get("view")) === "Keuangan" && !enabled.has("finance")) {
+      p.set("view", viewToParam("Dashboard"));
+      dirty = true;
+    }
+    if (p.get("view")?.toLowerCase() === "chat") {
       p.set("view", viewToParam("Dashboard"));
       dirty = true;
     }
@@ -2155,9 +2232,10 @@ export function WorkspaceClient({
     selectedProjectId,
     searchParams,
     router,
-    issues,
+    issueIdsInSelectedProjectKey,
     organizationModules,
     berkasPermohonan,
+    scopeRoutePending,
   ]);
 
   const selectedOrganization = useMemo(
@@ -2179,6 +2257,103 @@ export function WorkspaceClient({
         m.role === "owner"
     );
   }, [projectMembers, selectedProjectId, userId]);
+
+  const projectIdsWithOwner = useMemo(() => {
+    return new Set(
+      projectMembers.filter((m) => m.role === "owner").map((m) => m.project_id)
+    );
+  }, [projectMembers]);
+
+  const isMemberOfSelectedProject = useMemo(() => {
+    if (!selectedProjectId || !userId) return false;
+    return projectMembers.some(
+      (m) => m.project_id === selectedProjectId && m.user_id === userId
+    );
+  }, [projectMembers, selectedProjectId, userId]);
+
+  const selectedProjectHasNoOwner = useMemo(() => {
+    if (!selectedProjectId) return false;
+    return !projectIdsWithOwner.has(selectedProjectId);
+  }, [projectIdsWithOwner, selectedProjectId]);
+
+  /** Owner, atau anggota saat project belum punya owner (recovery seed demo). */
+  const isOrgAdminOfCanonicalOrg = useMemo(() => {
+    if (!canonicalOrgId || !userId) return false;
+    return organizationMembers.some(
+      (m) =>
+        m.organization_id === canonicalOrgId &&
+        m.user_id === userId &&
+        (m.role === "owner" || m.role === "admin")
+    );
+  }, [organizationMembers, canonicalOrgId, userId]);
+
+  const canManageSelectedProject = useMemo(
+    () =>
+      isOwnerOfSelectedProject ||
+      isOrgAdminOfCanonicalOrg ||
+      (selectedProjectHasNoOwner && isMemberOfSelectedProject),
+    [
+      isOwnerOfSelectedProject,
+      isOrgAdminOfCanonicalOrg,
+      selectedProjectHasNoOwner,
+      isMemberOfSelectedProject,
+    ]
+  );
+
+  const canDeleteProject = useCallback(
+    (projectId: string) => {
+      if (!userId) return false;
+      const projectOrgId = projects.find((p) => p.id === projectId)?.organization_id;
+      if (
+        projectOrgId &&
+        organizationMembers.some(
+          (m) =>
+            m.organization_id === projectOrgId &&
+            m.user_id === userId &&
+            (m.role === "owner" || m.role === "admin")
+        )
+      ) {
+        return true;
+      }
+      if (
+        projectMembers.some(
+          (m) =>
+            m.project_id === projectId &&
+            m.user_id === userId &&
+            m.role === "owner"
+        )
+      ) {
+        return true;
+      }
+      if (!projectIdsWithOwner.has(projectId)) {
+        return projectMembers.some(
+          (m) => m.project_id === projectId && m.user_id === userId
+        );
+      }
+      return false;
+    },
+    [projectMembers, projectIdsWithOwner, userId, projects, organizationMembers]
+  );
+
+  const hasOrgStaffAccess = useMemo(() => {
+    if (!canonicalOrgId || !userId) return false;
+    return organizationMembers.some(
+      (m) =>
+        m.organization_id === canonicalOrgId &&
+        m.user_id === userId &&
+        ORG_STAFF_ROLES.has(m.role)
+    );
+  }, [organizationMembers, canonicalOrgId, userId]);
+
+  const canManageOrgStaff = useMemo(() => {
+    if (!canonicalOrgId || !userId) return false;
+    return organizationMembers.some(
+      (m) =>
+        m.organization_id === canonicalOrgId &&
+        m.user_id === userId &&
+        ORG_ADMIN_ROLES.has(m.role)
+    );
+  }, [organizationMembers, canonicalOrgId, userId]);
 
   const selectedTask = useMemo(
     () => issues.find((i) => i.id === selectedTaskId) ?? null,
@@ -2604,18 +2779,28 @@ export function WorkspaceClient({
   const [mapTabEpoch, setMapTabEpoch] = useState(0);
   const [mapImportTableId, setMapImportTableId] = useState<string>("");
   const [mapGeoImportOpen, setMapGeoImportOpen] = useState(false);
+  const [mapDxfImportOpen, setMapDxfImportOpen] = useState(false);
+  const [mapLayerUploadOpen, setMapLayerUploadOpen] = useState(false);
+  const [mapImportTableRows, setMapImportTableRows] = useState<VirtualDataRow[]>(
+    []
+  );
   const [mapImportPreviewLayers, setMapImportPreviewLayers] = useState<
     MapFootprint[]
   >([]);
 
   useEffect(() => {
-    if (activeView === "Map") {
-      setMapTabEpoch((n) => n + 1);
-    } else {
+    if (activeView !== "Map") {
       setMapImportPreviewLayers([]);
       setMapGeoImportOpen(false);
+      setMapDxfImportOpen(false);
+      setMapLayerUploadOpen(false);
     }
   }, [activeView]);
+
+  /** Muat ulang geometri virtual table di peta saat ganti project (bukan tiap buka tab Map). */
+  useEffect(() => {
+    setMapTabEpoch((n) => n + 1);
+  }, [selectedProjectId]);
 
   const mapLayersForSelectedProject = useMemo((): MapFootprint[] => {
     const issueGeom: MapFootprint[] = issueGeometryVisibleForMap.map(
@@ -2693,6 +2878,37 @@ export function WorkspaceClient({
     return out;
   }, [projectMembersForSelectedProject]);
 
+  const projectsForMention = useMemo(() => {
+    if (!canonicalOrgId) return [];
+    return projects
+      .filter(
+        (p) => p.organization_id === canonicalOrgId
+      )
+      .map((p) => ({ id: p.id, name: p.name, key: p.key }));
+  }, [projects, canonicalOrgId]);
+
+  const workspaceChatMentionOptions = useMemo((): ChatMentionOption[] => {
+    const opts: ChatMentionOption[] = [];
+    for (const m of projectMembersForSelectedProject) {
+      const label = m.display_name?.trim() || m.user_id.slice(0, 8);
+      opts.push({
+        id: m.user_id,
+        label,
+        kind: "user",
+        searchText: label.toLowerCase(),
+      });
+    }
+    for (const p of projectsForMention) {
+      opts.push({
+        id: p.id,
+        label: p.name,
+        kind: "project",
+        searchText: `${p.name} ${p.key}`.toLowerCase(),
+      });
+    }
+    return opts;
+  }, [projectMembersForSelectedProject, projectsForMention]);
+
   const financeInvoicesInProject = useMemo(
     () =>
       financeInvoices.filter((i) => i.project_id === (selectedProjectId ?? "")),
@@ -2723,10 +2939,10 @@ export function WorkspaceClient({
   // --- Virtual tables: org-level + project-level ---
   const vtablesForOrg = useMemo(
     () =>
-      canonicalOrgId
+      canonicalOrgId && hasOrgStaffAccess
         ? virtualTables.filter((vt) => vt.organization_id === canonicalOrgId && !vt.project_id)
         : [],
-    [virtualTables, canonicalOrgId]
+    [virtualTables, canonicalOrgId, hasOrgStaffAccess]
   );
 
   const vtablesForProject = useMemo(
@@ -2742,6 +2958,30 @@ export function WorkspaceClient({
     [vtablesForOrg, vtablesForProject]
   );
 
+  const vtablesAllProjectsInOrg = useMemo(() => {
+    if (!canonicalOrgId) return [];
+    const projectIds = new Set(projectsInOrg.map((p) => p.id));
+    return virtualTables.filter(
+      (vt) => vt.project_id != null && projectIds.has(vt.project_id)
+    );
+  }, [virtualTables, canonicalOrgId, projectsInOrg]);
+
+  const virtualTableIdsForChatUnread = useMemo(() => {
+    const ids = new Set<string>();
+    for (const vt of vtablesForOrg) ids.add(vt.id);
+    for (const vt of vtablesAllProjectsInOrg) ids.add(vt.id);
+    return [...ids];
+  }, [vtablesForOrg, vtablesAllProjectsInOrg]);
+
+  const tablesForProjectChatBadge = useMemo(
+    () =>
+      vtablesAllProjectsInOrg.map((vt) => ({
+        id: vt.id,
+        projectId: vt.project_id,
+      })),
+    [vtablesAllProjectsInOrg]
+  );
+
   const activeVirtualTable = useMemo(
     () =>
       activeVirtualTableSlug
@@ -2750,12 +2990,22 @@ export function WorkspaceClient({
     [allAccessibleVtables, activeVirtualTableSlug]
   );
 
+  const virtualColumnsByTableId = useMemo(() => {
+    const map = new Map<string, typeof virtualColumns>();
+    for (const col of virtualColumns) {
+      const list = map.get(col.table_id);
+      if (list) list.push(col);
+      else map.set(col.table_id, [col]);
+    }
+    return map;
+  }, [virtualColumns]);
+
   const activeVirtualTableColumns = useMemo(
     () =>
       activeVirtualTable
-        ? virtualColumns.filter((vc) => vc.table_id === activeVirtualTable.id)
+        ? (virtualColumnsByTableId.get(activeVirtualTable.id) ?? [])
         : [],
-    [virtualColumns, activeVirtualTable]
+    [virtualColumnsByTableId, activeVirtualTable]
   );
 
   // Identify virtual tables with geometry columns (org + project)
@@ -2765,6 +3015,20 @@ export function WorkspaceClient({
     const tableIdsWithGeo = new Set(geoCols.map((c) => c.table_id));
     return allAccessibleVtables.filter((vt) => tableIdsWithGeo.has(vt.id));
   }, [virtualColumns, allAccessibleVtables]);
+
+  const vtablesWithGeometrySig = useMemo(
+    () => vtablesWithGeometry.map((vt) => vt.id).join(","),
+    [vtablesWithGeometry]
+  );
+
+  const virtualColumnsGeomSig = useMemo(
+    () =>
+      virtualColumns
+        .filter((c) => c.data_type === "geometry")
+        .map((c) => `${c.id}:${c.table_id}:${c.slug}`)
+        .join("|"),
+    [virtualColumns]
+  );
 
   useEffect(() => {
     if (vtablesWithGeometry.length === 0) {
@@ -2826,6 +3090,50 @@ export function WorkspaceClient({
     router.refresh();
   }, [router]);
 
+  const handleMapDxfImportOpenChange = useCallback((open: boolean) => {
+    setMapDxfImportOpen(open);
+  }, []);
+
+  const handleMapDxfImported = useCallback(() => {
+    setMapDxfImportOpen(false);
+    setMapTabEpoch((n) => n + 1);
+    router.refresh();
+  }, [router]);
+
+  const handleMapLayerUploadOpenChange = useCallback((open: boolean) => {
+    setMapLayerUploadOpen(open);
+    if (!open) setMapImportPreviewLayers([]);
+  }, []);
+
+  const handleMapLayerCreated = useCallback(
+    (result: LayerUploadCreated) => {
+      setMapImportPreviewLayers([]);
+      setMapLayerUploadOpen(false);
+      setMapImportTableId(result.tableId);
+      setActiveVirtualTableSlug(result.tableSlug);
+      setMapTabEpoch((n) => n + 1);
+      router.refresh();
+    },
+    [router]
+  );
+
+  useEffect(() => {
+    if (!mapDxfImportOpen || !mapImportTableId) {
+      setMapImportTableRows([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchVirtualRowsAction(mapImportTableId).then((result) => {
+      if (cancelled) return;
+      setMapImportTableRows(
+        result.error ? [] : (result.rows as VirtualDataRow[])
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapDxfImportOpen, mapImportTableId]);
+
   useEffect(() => {
     if (activeView !== "Map") {
       return;
@@ -2882,6 +3190,11 @@ export function WorkspaceClient({
             relationLabels,
             rowId
           );
+          const chatPathSegments = buildChatRowPathSegments({
+            projectName: selectedProject?.name ?? null,
+            tableDisplayName: vt.display_name,
+            rowLabel: rowTitle,
+          });
 
           for (const gc of geoCols) {
             const geo = payload[gc.slug];
@@ -2896,7 +3209,13 @@ export function WorkspaceClient({
                 payload,
                 relationLabels,
                 memberNameByUserId,
-                { skipGeometrySlug: gc.slug, rowTitle }
+                {
+                  skipGeometrySlug: gc.slug,
+                  rowTitle,
+                  virtualRowId: rowId,
+                  projectName: selectedProject?.name ?? null,
+                  chatPathSegments,
+                }
               ),
               layerKind: "virtual_table",
             });
@@ -2908,7 +3227,14 @@ export function WorkspaceClient({
     return () => {
       cancelled = true;
     };
-  }, [activeView, mapTabEpoch, vtablesWithGeometry, virtualColumns, memberNameByUserId]);
+  }, [
+    activeView,
+    mapTabEpoch,
+    vtablesWithGeometry,
+    vtablesWithGeometrySig,
+    virtualColumnsGeomSig,
+    memberNameByUserId,
+  ]);
 
   const tableRows = useMemo((): TableRow[] => {
     if (!selectedProjectId) return [];
@@ -3287,22 +3613,19 @@ export function WorkspaceClient({
   );
 
   /**
-   * Perbarui scope di URL. Default: client-only (replaceState) — data org sudah di props.
-   * `refresh: true` untuk ganti organisasi / setelah buat org+project (butuh RSC).
+   * Perbarui scope di URL + state lokal. Semua navigasi client memakai router.replace
+   * agar searchParams Next.js tetap selaras (hindari loop replaceState vs RSC).
+   * `refresh: true` setelah buat org+project (tetap router.replace + refresh RSC).
    */
   const commitScopeInUrl = useCallback(
     (
       mutate: (p: URLSearchParams) => void,
       options?: { refresh?: boolean; syncView?: boolean }
     ) => {
-      const currentQuery =
-        typeof window !== "undefined"
-          ? window.location.search.slice(1)
-          : searchParams.toString();
-      const p = new URLSearchParams(currentQuery);
+      const p = new URLSearchParams(searchParams.toString());
       mutate(p);
       const nextQuery = p.toString();
-      if (nextQuery === currentQuery && !options?.refresh) return;
+      if (nextQuery === searchParams.toString() && !options?.refresh) return;
 
       const orgParam = p.get("org");
       if (
@@ -3339,18 +3662,12 @@ export function WorkspaceClient({
 
       if (options?.refresh) {
         setScopeRoutePending(true);
-        startScopeNavTransition(() => {
-          void router.replace(`/?${nextQuery}`, { scroll: false });
-        });
-        return;
       }
-
-      if (typeof window !== "undefined") {
-        window.history.replaceState(
-          window.history.state,
-          "",
-          `/?${nextQuery}`
-        );
+      startScopeNavTransition(() => {
+        void router.replace(`/?${nextQuery}`, { scroll: false });
+      });
+      if (options?.refresh) {
+        router.refresh();
       }
     },
     [
@@ -3371,6 +3688,148 @@ export function WorkspaceClient({
     if (!scopeRoutePending) return;
     setScopeRoutePending(false);
   }, [searchParams, scopeRoutePending]);
+
+  /** Back/forward browser: baca scope dari URL tanpa timpa navigasi commitScopeInUrl. */
+  useEffect(() => {
+    const syncScopeFromWindowUrl = () => {
+      const p = new URLSearchParams(window.location.search);
+      const orgParam = p.get("org");
+      if (
+        orgParam &&
+        orgsWithProjects.some((o) => o.id === orgParam) &&
+        projects.some((proj) => proj.organization_id === orgParam)
+      ) {
+        setCanonicalOrgId(orgParam);
+      }
+      const nextProjectId = resolveProjectIdInParams(p);
+      setSelectedProjectId(nextProjectId);
+      setSelectedTaskId(resolveTaskIdInParams(p, nextProjectId));
+      const orgForModules =
+        orgParam && orgsWithProjects.some((o) => o.id === orgParam)
+          ? orgParam
+          : canonicalOrgId;
+      const viewParsed = parseViewParam(p.get("view"));
+      if (
+        viewParsed &&
+        isViewAllowedForModules(
+          viewParsed,
+          effectiveEnabledModuleCodes(orgForModules, organizationModules)
+        )
+      ) {
+        setActiveView(viewParsed);
+      }
+    };
+    window.addEventListener("popstate", syncScopeFromWindowUrl);
+    return () => window.removeEventListener("popstate", syncScopeFromWindowUrl);
+  }, [
+    canonicalOrgId,
+    organizationModules,
+    orgsWithProjects,
+    projects,
+    resolveProjectIdInParams,
+    resolveTaskIdInParams,
+  ]);
+
+  const navigateFromNotification = useCallback(
+    (n: UserNotificationRow) => {
+      const payload = (n.payload ?? {}) as Record<string, unknown>;
+      const projectId =
+        n.project_id ??
+        (typeof payload.project_id === "string" ? payload.project_id : null);
+      const virtualRowId =
+        typeof payload.virtual_row_id === "string"
+          ? payload.virtual_row_id
+          : null;
+
+      commitScopeInUrl(
+        (q) => {
+          if (n.organization_id) q.set("org", n.organization_id);
+          if (projectId) q.set("project", projectId);
+          q.delete("task");
+          q.delete("berkas");
+          if (n.kind === "chat_mention") {
+            if (virtualRowId) {
+              q.set("view", viewToParam("Map"));
+            }
+          } else {
+            q.set("view", viewToParam("Map"));
+          }
+        },
+        { syncView: true }
+      );
+
+      if (n.kind === "chat_mention" && virtualRowId) {
+        const fallbackSegments = buildChatRowPathSegments({
+          projectName: selectedProject?.name ?? null,
+          tableDisplayName:
+            typeof payload.table_display_name === "string"
+              ? payload.table_display_name
+              : "Tabel",
+          rowLabel:
+            typeof payload.row_title === "string" ? payload.row_title : "Baris",
+        });
+        const openRow = (pathSegments: string[]) => {
+          workspaceRightPanelApiRef.current?.openRowPanel({
+            tableId: activeVirtualTable?.id ?? "",
+            rowId: virtualRowId,
+            pathSegments,
+            tab: "chat",
+            mentionOptions: [
+              ...workspaceChatMentionOptions,
+              {
+                id: virtualRowId,
+                label: pathSegments[pathSegments.length - 1] ?? "Baris",
+                kind: "row",
+              },
+            ],
+          });
+        };
+        openRow(fallbackSegments);
+        void resolveVirtualRowChatContextAction(virtualRowId).then((res) => {
+          if (res.error || !res.data) return;
+          openRow(res.data.pathSegments);
+        });
+        return;
+      }
+
+      if (n.kind === "chat_mention") {
+        const scopeType =
+          typeof payload.scope_type === "string" ? payload.scope_type : null;
+        const api = workspaceRightPanelApiRef.current;
+        if (!api) return;
+        if (scopeType === "organization") {
+          api.openOrganizationChat({
+            mentionOptions: workspaceChatMentionOptions,
+          });
+        } else if (scopeType === "project" && projectId) {
+          api.openProjectChat({
+            projectId,
+            mentionOptions: workspaceChatMentionOptions,
+          });
+        } else if (scopeType === "virtual_table") {
+          const tableId =
+            typeof payload.virtual_table_id === "string"
+              ? payload.virtual_table_id
+              : null;
+          if (tableId) {
+            api.openTableChat({
+              tableId,
+              mentionOptions: workspaceChatMentionOptions,
+            });
+            const vt = virtualTables.find((t) => t.id === tableId);
+            if (vt) setActiveVirtualTableSlug(vt.slug);
+          }
+        }
+      }
+    },
+    [
+      commitScopeInUrl,
+      selectedProject?.name,
+      activeVirtualTable?.id,
+      workspaceChatMentionOptions,
+      virtualTables,
+    ]
+  );
 
   /** Ganti project/task dalam org — tidak memicu RSC. */
   const commitTaskSelection = useCallback(
@@ -3547,6 +4006,19 @@ export function WorkspaceClient({
     "Versi pilot — fitur dan data dapat berubah. Laporkan masalah ke tim proyek.";
 
   return (
+    <VirtualTableChatUnreadProvider
+      userId={userId}
+      tableIds={virtualTableIdsForChatUnread}
+      tablesForProjectBadge={tablesForProjectChatBadge}
+    >
+    <WorkspaceRightPanelProvider apiRef={workspaceRightPanelApiRef}>
+    <WorkspaceRightPanelCloser activeVirtualTableSlug={activeVirtualTableSlug} />
+    <WorkspaceRightPanelTableSync activeTableId={activeVirtualTable?.id ?? null} />
+    <WorkspaceRightPanelOrgSync organizationId={canonicalOrgId} />
+    <WorkspaceRightPanelProjectSync
+      selectedProjectId={selectedProjectId}
+      mentionOptions={workspaceChatMentionOptions}
+    />
     <div className="flex h-svh max-h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       {pilotBannerOn ? (
         <div
@@ -3584,6 +4056,13 @@ export function WorkspaceClient({
             <p className="text-sm font-medium text-muted-foreground">
               Organisasi
             </p>
+            <div className="flex items-center gap-1">
+              {canonicalOrgId && hasOrgStaffAccess && userId ? (
+                <SidebarOrganizationChatButton
+                  mentionOptions={workspaceChatMentionOptions}
+                  disabled={workspaceActionPending}
+                />
+              ) : null}
             <Dialog
               open={organizationDialogOpen}
               onOpenChange={(open) => {
@@ -3670,6 +4149,7 @@ export function WorkspaceClient({
                 </form>
               </DialogContent>
             </Dialog>
+            </div>
           </div>
           <div className="ml-2">
             {orgsWithProjects.map((o) => {
@@ -3710,7 +4190,78 @@ export function WorkspaceClient({
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-medium text-muted-foreground">Project</p>
             <div className="flex items-center gap-1">
-              {selectedProjectId && (
+              {canonicalOrgId && canManageOrgStaff ? (
+                <Dialog
+                  open={orgStaffDialogOpen}
+                  onOpenChange={(open) => {
+                    setOrgStaffDialogOpen(open);
+                    if (open) setOrgStaffMsg(null);
+                  }}
+                >
+                  <DialogTrigger render={<Button size="sm" variant="outline" />}>
+                    + Tim inti
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Tambah tim inti organisasi</DialogTitle>
+                      <DialogDescription>
+                        Karyawan inti otomatis menjadi anggota{" "}
+                        <strong>member</strong> di semua project organisasi ini
+                        (bukan owner). Hire per project tetap lewat + Anggota
+                        pada project yang dipilih.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <form
+                      className="grid gap-3"
+                      action={(fd) => {
+                        if (!canonicalOrgId) return;
+                        setOrgStaffMsg(null);
+                        fd.set("organization_id", canonicalOrgId);
+                        startMemberTransition(async () => {
+                          const r = await addOrganizationStaffByEmailAction(fd);
+                          if (r.error) {
+                            setOrgStaffMsg(r.error);
+                            return;
+                          }
+                          setOrgStaffDialogOpen(false);
+                          router.refresh();
+                        });
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <Label>Email user *</Label>
+                        <Input
+                          name="email"
+                          type="email"
+                          required
+                          placeholder="contoh: staff@domain.com"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Role organisasi</Label>
+                        <select
+                          name="role"
+                          defaultValue="staff"
+                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                        >
+                          <option value="staff">staff</option>
+                          <option value="admin">admin</option>
+                          <option value="owner">owner</option>
+                        </select>
+                      </div>
+                      <Button type="submit" disabled={memberPending}>
+                        Tambahkan ke organisasi
+                      </Button>
+                      {orgStaffMsg ? (
+                        <p className="text-xs text-red-600" role="alert">
+                          {orgStaffMsg}
+                        </p>
+                      ) : null}
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              ) : null}
+              {selectedProjectId && canManageSelectedProject && (
                 <Dialog
                   open={memberDialogOpen}
                   onOpenChange={(open) => {
@@ -3729,10 +4280,22 @@ export function WorkspaceClient({
                         <span className="font-medium text-foreground">
                           {selectedProject?.name ?? "aktif"}
                         </span>{" "}
-                        berdasarkan email. Hanya owner project yang bisa. Email
-                        harus sudah punya akun di aplikasi (sudah daftar /
-                        login minimal sekali); undangan ke email yang belum
-                        terdaftar akan ditolak sampai user itu mendaftar.
+                        berdasarkan email.{" "}
+                        {selectedProjectHasNoOwner ? (
+                          <>
+                            Project ini belum punya owner — Anda (anggota)
+                            dapat menambah anggota dan menetapkan role owner.
+                          </>
+                        ) : isOrgAdminOfCanonicalOrg ? (
+                          <>
+                            Sebagai admin organisasi Anda dapat mengelola anggota
+                            project ini.
+                          </>
+                        ) : (
+                          <>Hanya owner project atau admin organisasi yang dapat mengelola anggota.</>
+                        )}{" "}
+                        Email harus sudah punya akun di aplikasi (sudah daftar
+                        / login minimal sekali).
                       </DialogDescription>
                     </DialogHeader>
                     <form
@@ -3784,7 +4347,7 @@ export function WorkspaceClient({
                   </DialogContent>
                 </Dialog>
               )}
-              {canonicalOrgId && (
+              {canonicalOrgId && hasOrgStaffAccess ? (
                 <Dialog
                   open={projectDialogOpen}
                   onOpenChange={(open) => {
@@ -3849,7 +4412,7 @@ export function WorkspaceClient({
                     </form>
                   </DialogContent>
                 </Dialog>
-              )}
+              ) : null}
             </div>
           </div>
           {projectsInOrg.map((p) => {
@@ -3882,30 +4445,56 @@ export function WorkspaceClient({
                         q.delete("task");
                       }, { syncView: false });
                     }}
-                    className={`h-8 flex-1 justify-start gap-2 rounded-md px-3 text-left text-[0.95rem] font-medium ${
+                    className={`h-8 min-w-0 flex-1 justify-start gap-2 rounded-md px-3 text-left text-[0.95rem] font-medium ${
                       isSelectedProject
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
                     }`}
                   >
-                    <span className="truncate">{p.name}</span>
+                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                    <ProjectChatUnreadBadge projectId={p.id} />
                   </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="h-8 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setProjectMsg(null);
-                      setProjectDeleteConfirm({ projectId: p.id, name: p.name });
-                    }}
-                    aria-label={`Hapus project ${p.name}`}
-                    title="Hapus project"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {userId ? (
+                    <SidebarProjectChatButton
+                      projectId={p.id}
+                      mentionOptions={workspaceChatMentionOptions}
+                      disabled={workspaceActionPending}
+                      onBeforeOpen={() => {
+                        if (p.id !== selectedProjectId) {
+                          commitScopeInUrl((q) => {
+                            q.set("org", p.organization_id);
+                            q.set("project", p.id);
+                            q.delete("task");
+                          }, { syncView: false });
+                        }
+                      }}
+                    />
+                  ) : null}
+                  {canDeleteProject(p.id) ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="h-8 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setProjectMsg(null);
+                        setProjectDeleteConfirm({
+                          projectId: p.id,
+                          name: p.name,
+                        });
+                      }}
+                      aria-label={`Hapus project ${p.name}`}
+                      title={
+                        projectIdsWithOwner.has(p.id)
+                          ? "Hapus project (owner)"
+                          : "Hapus project (belum ada owner)"
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"
@@ -4027,6 +4616,10 @@ export function WorkspaceClient({
                 <DialogDescription>
                   Project "{projectDeleteConfirm?.name ?? "ini"}" akan dihapus
                   (soft delete) beserta unit kerja di dalamnya tidak lagi tampil.
+                  {projectDeleteConfirm &&
+                  !projectIdsWithOwner.has(projectDeleteConfirm.projectId)
+                    ? " Project ini belum punya owner — penghapusan diizinkan untuk anggota sebagai pemulihan data demo."
+                    : null}
                 </DialogDescription>
               </DialogHeader>
               <div className="flex justify-end gap-2">
@@ -4095,22 +4688,15 @@ export function WorkspaceClient({
               <ul className="space-y-0.5">
                 {vtablesForOrg.map((vt) => (
                   <li key={vt.id}>
-                    <button
-                      type="button"
-                      className={`w-full rounded-md px-2 py-1 text-left text-sm transition-colors ${
-                        activeVirtualTableSlug === vt.slug
-                          ? "bg-primary/10 font-medium text-primary"
-                          : "text-foreground hover:bg-muted"
-                      }`}
-                      onClick={() => {
+                    <SidebarVirtualTableItem
+                      table={vt}
+                      activeVirtualTableSlug={activeVirtualTableSlug}
+                      onSelect={() => {
                         setActiveVirtualTableSlug(
                           activeVirtualTableSlug === vt.slug ? null : vt.slug
                         );
                       }}
-                    >
-                      {vt.icon ? `${vt.icon} ` : ""}
-                      {vt.display_name}
-                    </button>
+                    />
                   </li>
                 ))}
               </ul>
@@ -4142,22 +4728,15 @@ export function WorkspaceClient({
               <ul className="space-y-0.5">
                 {vtablesForProject.map((vt) => (
                   <li key={vt.id}>
-                    <button
-                      type="button"
-                      className={`w-full rounded-md px-2 py-1 text-left text-sm transition-colors ${
-                        activeVirtualTableSlug === vt.slug
-                          ? "bg-primary/10 font-medium text-primary"
-                          : "text-foreground hover:bg-muted"
-                      }`}
-                      onClick={() => {
+                    <SidebarVirtualTableItem
+                      table={vt}
+                      activeVirtualTableSlug={activeVirtualTableSlug}
+                      onSelect={() => {
                         setActiveVirtualTableSlug(
                           activeVirtualTableSlug === vt.slug ? null : vt.slug
                         );
                       }}
-                    >
-                      {vt.icon ? `${vt.icon} ` : ""}
-                      {vt.display_name}
-                    </button>
+                    />
                   </li>
                 ))}
               </ul>
@@ -4169,20 +4748,17 @@ export function WorkspaceClient({
       </aside>
       </div>
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/30">
+      <div className="relative flex min-h-0 min-w-0 flex-1">
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/30">
         <Tabs
           value={activeView}
           onValueChange={(value) => {
             const v = value as ViewId;
-            startViewSwitchTransition(() => {
-              setActiveView(v);
-              const q = new URLSearchParams(searchParams.toString());
+            commitScopeInUrl((q) => {
               q.set("view", viewToParam(v));
               if (v !== "Berkas" && v !== "Map") {
                 q.delete("berkas");
               }
-              const next = `/?${q.toString()}`;
-              window.history.replaceState(window.history.state, "", next);
             });
           }}
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
@@ -4287,7 +4863,11 @@ export function WorkspaceClient({
                     </PopoverContent>
                   </Popover>
                 )}
-                <NotificationsBell notifications={userNotifications} />
+                <NotificationsBell
+                  userId={userId}
+                  notifications={userNotifications}
+                  onNavigate={navigateFromNotification}
+                />
                 <ThemeToggle />
                 <form action={signOut} className="flex shrink-0 items-center gap-2">
                   <p className="text-xs text-muted-foreground">{userEmail}</p>
@@ -4367,7 +4947,13 @@ export function WorkspaceClient({
             </TabsContent>
             <TabsContent value="Tabel" className="min-h-0 w-full min-w-0 flex-none outline-none">
               <TabPanelMount view="Tabel" activeView={activeView}>
-              {canonicalOrgId && vtablesForOrg.length > 0 ? (
+              {canonicalOrgId && !hasOrgStaffAccess ? (
+                <p className="mt-5 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                  Tabel organisasi hanya untuk <strong>tim inti</strong>. Anda
+                  hanya melihat tabel pada project yang di-assign.
+                </p>
+              ) : null}
+              {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
                 <div className="mt-5 space-y-4">
                   <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Tabel Organisasi
@@ -4381,10 +4967,16 @@ export function WorkspaceClient({
                         <VirtualTableView
                           key={vt.id}
                           table={vt}
-                          columns={virtualColumns.filter((c) => c.table_id === vt.id)}
+                          columns={virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS}
                           projectId={selectedProjectId}
+                          organizationId={canonicalOrgId}
+                          organizationName={selectedOrganization?.name ?? null}
+                          userId={userId}
+                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                          projectsForMention={projectsForMention}
                           memberNameByUserId={memberNameByUserId}
                           allVirtualTables={allAccessibleVtables}
+                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
                         />
                     </div>
                   ))}
@@ -4405,10 +4997,16 @@ export function WorkspaceClient({
                         <VirtualTableView
                           key={vt.id}
                           table={vt}
-                          columns={virtualColumns.filter((c) => c.table_id === vt.id)}
+                          columns={virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS}
                           projectId={selectedProjectId}
+                          organizationId={canonicalOrgId}
+                          organizationName={selectedOrganization?.name ?? null}
+                          userId={userId}
+                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                          projectsForMention={projectsForMention}
                           memberNameByUserId={memberNameByUserId}
                           allVirtualTables={allAccessibleVtables}
+                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
                         />
                     </div>
                   ))}
@@ -4433,12 +5031,18 @@ export function WorkspaceClient({
                   </p>
                 ) : (
                   <>
-                    {selectedTaskId && (
+                    {!hasOrgStaffAccess ? (
+                      <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                        Hire project: daftar berkas hanya untuk project aktif (
+                        <strong>{selectedProject?.name ?? "—"}</strong>).
+                      </p>
+                    ) : null}
+                    {selectedTaskId && hasOrgStaffAccess ? (
                       <p className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                         Scope <strong>unit kerja</strong> aktif — daftar berkas tetap
                         untuk seluruh <strong>project</strong> ini.
                       </p>
-                    )}
+                    ) : null}
                     {selectedBerkasId && selectedBerkas ? (
                       <BerkasDetailPanel
                         berkas={selectedBerkas}
@@ -5875,23 +6479,64 @@ export function WorkspaceClient({
                           </DialogContent>
                         </Dialog>
                     )}
-                    {mapImportTable ? (
-                      <VirtualTableGeoJsonImportDialog
-                        open={mapGeoImportOpen}
-                        onOpenChange={handleMapGeoImportOpenChange}
-                        table={mapImportTable}
-                        columns={mapImportTableColumns}
-                        allVirtualTables={allAccessibleVtables}
+                    {selectedProjectId ? (
+                      <VirtualTableLayerUploadDialog
+                        open={mapLayerUploadOpen}
+                        onOpenChange={handleMapLayerUploadOpenChange}
+                        projectId={selectedProjectId}
                         mapPreviewEnabled
                         onPreviewChange={handleMapImportPreviewChange}
-                        onImported={handleMapGeoImported}
+                        onCreated={handleMapLayerCreated}
                       />
+                    ) : null}
+                    {mapImportTable ? (
+                      <>
+                        <VirtualTableGeoJsonImportDialog
+                          open={mapGeoImportOpen}
+                          onOpenChange={handleMapGeoImportOpenChange}
+                          table={mapImportTable}
+                          columns={mapImportTableColumns}
+                          allVirtualTables={allAccessibleVtables}
+                          mapPreviewEnabled
+                          onPreviewChange={handleMapImportPreviewChange}
+                          onImported={handleMapGeoImported}
+                        />
+                        <VirtualTableDxfImportDialog
+                          open={mapDxfImportOpen}
+                          onOpenChange={handleMapDxfImportOpenChange}
+                          table={mapImportTable}
+                          columns={mapImportTableColumns}
+                          allVirtualTables={allAccessibleVtables}
+                          rows={mapImportTableRows}
+                          onImported={handleMapDxfImported}
+                        />
+                      </>
                     ) : null}
                     <div className="grid min-h-0 min-w-0 flex-1 basis-0 grid-rows-[auto_minmax(0,1fr)] gap-y-3">
                       <div className="flex min-w-0 shrink-0 flex-col gap-2">
-                        {vtablesWithGeometry.length > 0 ? (
-                          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
-                            <div className="min-w-[10rem] flex-1 sm:max-w-xs">
+                        {selectedProjectId || vtablesWithGeometry.length > 0 ? (
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                            {selectedProjectId ? (
+                              <div className="flex min-w-0 shrink-0 flex-col justify-center gap-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 sm:w-[min(100%,14rem)]">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="w-fit shrink-0"
+                                  disabled={!selectedProjectId}
+                                  onClick={() => setMapLayerUploadOpen(true)}
+                                >
+                                  <Upload className="mr-1 size-3.5" />
+                                  Layer baru dari file
+                                </Button>
+                                <p className="text-[11px] leading-snug text-muted-foreground">
+                                  Tabel baru (no_bidang + geom) dari GeoJSON/DXF —
+                                  untuk surveyor.
+                                </p>
+                              </div>
+                            ) : null}
+                            {vtablesWithGeometry.length > 0 ? (
+                              <div className="flex min-w-0 flex-1 flex-wrap items-end gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+                            <div className="min-w-[10rem] flex-1 sm:max-w-[14rem]">
                               <label
                                 htmlFor="map-vtable-import-select"
                                 className="text-xs font-medium text-muted-foreground"
@@ -5924,6 +6569,16 @@ export function WorkspaceClient({
                               <Upload className="mr-1 size-3.5" />
                               Impor GeoJSON ke tabel
                             </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              disabled={!mapImportTableId}
+                              onClick={() => setMapDxfImportOpen(true)}
+                            >
+                              <Upload className="mr-1 size-3.5" />
+                              Impor DXF ke tabel
+                            </Button>
                             {mapImportPreviewLayers.length > 0 ? (
                               <p
                                 className="flex items-center gap-1 text-xs text-teal-800 dark:text-teal-300"
@@ -5934,14 +6589,16 @@ export function WorkspaceClient({
                                 peta
                               </p>
                             ) : null}
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                         {mapLayersForSelectedProject.length === 0 &&
                           mapImportPreviewLayers.length === 0 && (
                           <p className="text-sm text-muted-foreground">
                             Belum ada geometri di peta untuk project ini. Impor
-                            GeoJSON ke tabel virtual di atas, atau pilih unit kerja
-                            untuk geometri issue (legacy).
+                            GeoJSON atau DXF ke tabel virtual di atas, atau pilih
+                            unit kerja untuk geometri issue (legacy).
                           </p>
                         )}
                         {mapLayersForSelectedProject.length > 0 &&
@@ -5994,6 +6651,24 @@ export function WorkspaceClient({
                           <WorkspaceMap
                             footprints={visibleMapLayers}
                             highlightBerkasId={null}
+                            onVirtualRowChat={(rowId, pathSegments) => {
+                              workspaceRightPanelApiRef.current?.openRowPanel({
+                                tableId: activeVirtualTable?.id ?? "",
+                                rowId,
+                                pathSegments,
+                                tab: "chat",
+                                mentionOptions: [
+                                  ...workspaceChatMentionOptions,
+                                  {
+                                    id: rowId,
+                                    label:
+                                      pathSegments[pathSegments.length - 1] ??
+                                      "Baris",
+                                    kind: "row",
+                                  },
+                                ],
+                              });
+                            }}
                           />
                         </div>
                         <div className="flex shrink-0 min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -6192,13 +6867,11 @@ export function WorkspaceClient({
             </Dialog>
             </div>
           </ScrollArea>
-        </section>
-        </Tabs>
 
-        {/* Virtual table overlay — shown when a custom table is selected in sidebar */}
+        {/* Overlay tabel — hanya menutup area konten tab, bukan header workspace */}
         {activeVirtualTable && (
-          <div className="absolute inset-0 z-20 flex flex-col overflow-auto bg-background">
-            <div className="shrink-0 border-b border-border bg-card/90 px-6 py-2">
+          <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-background">
+            <div className="shrink-0 border-b border-border bg-card/90 px-4 py-2">
               <button
                 type="button"
                 className="text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -6207,20 +6880,47 @@ export function WorkspaceClient({
                 ← Kembali
               </button>
             </div>
-            <div className="flex-1 overflow-auto p-6">
+            <div className="flex min-h-0 flex-1 flex-col">
               <VirtualTableView
                 key={activeVirtualTable.id}
+                layout="overlay"
                 table={activeVirtualTable}
                 columns={activeVirtualTableColumns}
                 projectId={selectedProjectId}
+                organizationId={canonicalOrgId}
+                organizationName={selectedOrganization?.name ?? null}
+                userId={userId}
+                isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                projectsForMention={projectsForMention}
                 memberNameByUserId={memberNameByUserId}
                 allVirtualTables={allAccessibleVtables}
                 onTableDeleted={() => setActiveVirtualTableSlug(null)}
+                onLayerCreated={(result) => {
+                  setActiveVirtualTableSlug(result.tableSlug);
+                  setMapImportTableId(result.tableId);
+                  router.refresh();
+                }}
               />
             </div>
           </div>
         )}
+        </section>
+        </Tabs>
       </main>
+
+      <WorkspaceRightPanel
+        organizationId={canonicalOrgId}
+        organizationName={selectedOrganization?.name ?? null}
+        projectId={selectedProjectId}
+        userId={userId}
+        userEmail={userEmail}
+        isOrgAdmin={isOrgAdminOfCanonicalOrg}
+        projectsForMention={projectsForMention}
+        memberNameByUserId={memberNameByUserId}
+        allVirtualTables={allAccessibleVtables}
+        virtualColumns={virtualColumns}
+      />
+      </div>
 
       {/* Create virtual table dialog */}
       <VirtualTableCreateDialog
@@ -6237,5 +6937,7 @@ export function WorkspaceClient({
       </div>
       </div>
     </div>
+    </WorkspaceRightPanelProvider>
+    </VirtualTableChatUnreadProvider>
   );
 }

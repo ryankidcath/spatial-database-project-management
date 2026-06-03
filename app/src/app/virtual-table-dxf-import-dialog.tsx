@@ -40,7 +40,10 @@ import {
   MAX_SPATIAL_GEOMETRY_TEXT_MB,
   spatialGeometryTextTooLargeMessage,
 } from "@/lib/spatial-import-limits";
-import { normalizeVirtualTableMatchKey } from "@/lib/virtual-table-geojson-import";
+import {
+  normalizeVirtualTableMatchKey,
+  pickDefaultVirtualTableMatchColumn,
+} from "@/lib/virtual-table-geojson-import";
 import {
   VIRTUAL_TABLE_DXF_SOURCE_SRID_OPTIONS,
   virtualTableDxfKeyMappingTemplateCsv,
@@ -210,12 +213,10 @@ export function VirtualTableDxfImportDialog({
       geometryColumns.find((c) => c.slug === "geom" || c.slug === "geometry") ??
       geometryColumns[0];
     setGeometrySlug(geom?.slug ?? "");
-    const match =
-      matchColumns.find((c) => c.slug === "no_bidang") ??
-      matchColumns.find((c) => c.slug !== "title") ??
-      matchColumns[0];
+    const match = pickDefaultVirtualTableMatchColumn(matchColumns);
     setMatchSlug(match?.slug ?? "");
-    setDesaRelationSlug(relationColumns[0]?.slug ?? "");
+    const requiredRel = relationColumns.find((c) => c.is_required);
+    setDesaRelationSlug(requiredRel?.slug ?? "");
   }, [open, geometryColumns, matchColumns, relationColumns]);
 
   useEffect(() => {

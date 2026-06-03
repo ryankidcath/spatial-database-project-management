@@ -6,6 +6,9 @@ export const MAX_VIRTUAL_TABLE_CSV_ROWS = 5000;
 /** Maks baris yang bisa dihapus sekaligus (hapus menurut filter). */
 export const MAX_VIRTUAL_TABLE_BULK_DELETE_ROWS = 2000;
 
+/** Baris per halaman di tab Tabel (preview embedded, per tabel). */
+export const VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE = 50;
+
 export const VIRTUAL_TABLE_CSV_IMPORTABLE_TYPES = new Set([
   "text",
   "number",
