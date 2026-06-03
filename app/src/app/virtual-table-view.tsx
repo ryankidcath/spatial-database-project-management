@@ -3,6 +3,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -94,6 +95,11 @@ import {
   type VirtualTableImportColumnHint,
 } from "@/lib/virtual-table-import-limits";
 import { relationLookupSlugFromConfig } from "@/lib/virtual-table-relation-import";
+import {
+  getVirtualTableRowsCache,
+  setVirtualTableRowsCache,
+  virtualTableRowsCacheKey,
+} from "@/lib/virtual-table-rows-cache";
 import {
   parseFeatureCollectionForVirtualImport,
   pickDefaultVirtualTableMatchColumn,
@@ -910,14 +916,36 @@ export function VirtualTableView({
     return true;
   }, []);
 
-  // --- Row data (lazy-loaded) ---
+  // --- Row data (lazy-loaded + cache agar tab Tabel tidak reload penuh) ---
+  const [pageIndex, setPageIndex] = useState(0);
+  const rowsCacheKey = useMemo(
+    () =>
+      virtualTableRowsCacheKey(
+        table.id,
+        pageIndex,
+        isPaginatedEmbedded ? VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE : null
+      ),
+    [table.id, pageIndex, isPaginatedEmbedded]
+  );
+
   const [rows, setRows] = useState<VirtualDataRow[]>([]);
   const [totalRowCount, setTotalRowCount] = useState(0);
-  const [pageIndex, setPageIndex] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
 
+  useLayoutEffect(() => {
+    const cached = getVirtualTableRowsCache(rowsCacheKey);
+    if (cached && cached.rows.length > 0) {
+      setRows(cached.rows);
+      setTotalRowCount(cached.totalCount);
+      setInitialLoading(false);
+    }
+  }, [rowsCacheKey]);
+
   const loadRows = useCallback(async () => {
-    setInitialLoading(true);
+    const cached = getVirtualTableRowsCache(rowsCacheKey);
+    if (!cached?.rows.length) {
+      setInitialLoading(true);
+    }
     const result = await fetchVirtualRowsAction(
       table.id,
       isPaginatedEmbedded
@@ -932,11 +960,16 @@ export function VirtualTableView({
       setRows([]);
       setTotalRowCount(0);
     } else {
-      setRows(result.rows as VirtualDataRow[]);
+      const nextRows = result.rows as VirtualDataRow[];
+      setVirtualTableRowsCache(rowsCacheKey, {
+        rows: nextRows,
+        totalCount: result.totalCount,
+      });
+      setRows(nextRows);
       setTotalRowCount(result.totalCount);
     }
     setInitialLoading(false);
-  }, [table.id, isPaginatedEmbedded, pageIndex]);
+  }, [table.id, isPaginatedEmbedded, pageIndex, rowsCacheKey]);
 
   const totalPages = isPaginatedEmbedded
     ? Math.max(1, Math.ceil(totalRowCount / VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE))
