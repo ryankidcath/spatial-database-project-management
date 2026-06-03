@@ -1156,6 +1156,7 @@ export function VirtualTableView({
         rowId,
         pathSegments,
         tab: "chat",
+        closeWhenOverlayCloses: isOverlayLayout,
         mentionOptions: [
           ...buildBaseMentionOptions(),
           { id: rowId, label: rowTitle, kind: "row" },
@@ -1171,6 +1172,7 @@ export function VirtualTableView({
       table.id,
       organizationName,
       rows,
+      isOverlayLayout,
       openRowPanel,
       buildBaseMentionOptions,
       buildRowFileOptions,

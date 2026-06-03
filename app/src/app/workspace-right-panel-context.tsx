@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type MutableRefObject,
   type ReactNode,
@@ -223,9 +224,15 @@ export function WorkspaceRightPanelCloser({
   activeVirtualTableSlug: string | null;
 }) {
   const { closePanel, panel } = useWorkspaceRightPanel();
+  const prevOverlaySlugRef = useRef(activeVirtualTableSlug);
+
   useEffect(() => {
+    const prevSlug = prevOverlaySlugRef.current;
+    prevOverlaySlugRef.current = activeVirtualTableSlug;
+
     if (
-      !activeVirtualTableSlug &&
+      prevSlug != null &&
+      activeVirtualTableSlug == null &&
       panel?.kind === "row" &&
       panel.closeWhenOverlayCloses
     ) {
