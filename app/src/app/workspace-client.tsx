@@ -207,6 +207,7 @@ import {
   SidebarProjectChatButton,
 } from "./workspace-sidebar-chat";
 import { SidebarVirtualTableItem } from "./workspace-sidebar-vtable-item";
+import { VirtualTableTabCard } from "./virtual-table-tab-card";
 import type { ChatMentionOption } from "./chat-types";
 import {
   ProjectChatUnreadBadge,
@@ -259,18 +260,46 @@ const GanttScheduleView = dynamic(
   }
 );
 
-/** Only mount tab body while active — avoids rendering Map, all VirtualTables, etc. at once. */
-function TabPanelMount({
+/** Mount tab body on first visit; keep mounted (hidden) for fast tab switches. */
+function TabPanelKeepAlive({
   view,
   activeView,
   children,
+  className,
 }: {
   view: ViewId;
   activeView: ViewId;
   children: ReactNode;
+  className?: string;
 }) {
-  if (activeView !== view) return null;
-  return children;
+  const active = activeView === view;
+  const [mounted, setMounted] = useState(active);
+
+  useEffect(() => {
+    if (active) setMounted(true);
+  }, [active]);
+
+  if (!mounted) return null;
+
+  return (
+    <div
+      className={cn(active ? className : "hidden", !active && "pointer-events-none")}
+      hidden={!active}
+      aria-hidden={!active}
+      inert={!active ? true : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
+function urlScopeKey(p: URLSearchParams): string {
+  return [
+    p.get("org") ?? "",
+    p.get("project") ?? "",
+    p.get("task") ?? "",
+    p.get("berkas") ?? "",
+  ].join("|");
 }
 
 const WorkspaceMap = dynamic(
@@ -3624,8 +3653,13 @@ export function WorkspaceClient({
     ) => {
       const p = new URLSearchParams(searchParams.toString());
       mutate(p);
+      const prevQuery = searchParams.toString();
       const nextQuery = p.toString();
-      if (nextQuery === searchParams.toString() && !options?.refresh) return;
+      if (nextQuery === prevQuery && !options?.refresh) return;
+
+      const viewOnlyNav =
+        !options?.refresh &&
+        urlScopeKey(new URLSearchParams(prevQuery)) === urlScopeKey(p);
 
       const orgParam = p.get("org");
       if (
@@ -3658,6 +3692,15 @@ export function WorkspaceClient({
             setActiveView(viewParsed);
           });
         }
+      }
+
+      if (viewOnlyNav) {
+        window.history.replaceState(
+          null,
+          "",
+          nextQuery ? `/?${nextQuery}` : "/"
+        );
+        return;
       }
 
       if (options?.refresh) {
@@ -4754,6 +4797,11 @@ export function WorkspaceClient({
           value={activeView}
           onValueChange={(value) => {
             const v = value as ViewId;
+            if (
+              isViewAllowedForModules(v, enabledModulesForOrg)
+            ) {
+              startViewSwitchTransition(() => setActiveView(v));
+            }
             commitScopeInUrl((q) => {
               q.set("view", viewToParam(v));
               if (v !== "Berkas" && v !== "Map") {
@@ -4930,7 +4978,7 @@ export function WorkspaceClient({
               ))}
             </TabsList>
             <TabsContent value="Dashboard" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Dashboard" activeView={activeView}>
+              <TabPanelKeepAlive view="Dashboard" activeView={activeView}>
               {!selectedProjectId ? (
                 <p className="mt-5 text-sm text-muted-foreground">
                   Pilih project di sidebar untuk melihat dashboard.
@@ -4943,71 +4991,48 @@ export function WorkspaceClient({
                   virtualColumns={virtualColumns}
                 />
               )}
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Tabel" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Tabel" activeView={activeView}>
+              <TabPanelKeepAlive view="Tabel" activeView={activeView}>
               {canonicalOrgId && !hasOrgStaffAccess ? (
                 <p className="mt-5 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
                   Tabel organisasi hanya untuk <strong>tim inti</strong>. Anda
                   hanya melihat tabel pada project yang di-assign.
                 </p>
               ) : null}
+              <p className="mt-5 text-sm text-muted-foreground">
+                Daftar tabel di scope ini. Edit data lewat{" "}
+                <strong className="text-foreground">Buka tabel lengkap</strong>{" "}
+                (sidebar atau tombol di kartu).
+              </p>
               {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
-                <div className="mt-5 space-y-4">
+                <div className="mt-5 space-y-3">
                   <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Tabel Organisasi
                   </p>
                   {vtablesForOrg.map((vt) => (
-                    <div
-                      key={vt.id}
-                      id={`vtable-${vt.slug}`}
-                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
-                    >
-                        <VirtualTableView
-                          key={vt.id}
-                          table={vt}
-                          columns={virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS}
-                          projectId={selectedProjectId}
-                          organizationId={canonicalOrgId}
-                          organizationName={selectedOrganization?.name ?? null}
-                          userId={userId}
-                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
-                          projectsForMention={projectsForMention}
-                          memberNameByUserId={memberNameByUserId}
-                          allVirtualTables={allAccessibleVtables}
-                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
-                        />
+                    <div key={vt.id} id={`vtable-${vt.slug}`}>
+                      <VirtualTableTabCard
+                        table={vt}
+                        onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
+                      />
                     </div>
                   ))}
                 </div>
               ) : null}
 
               {selectedProjectId && vtablesForProject.length > 0 ? (
-                <div className="mt-6 space-y-4">
+                <div className="mt-6 space-y-3">
                   <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Tabel Project
                   </p>
                   {vtablesForProject.map((vt) => (
-                    <div
-                      key={vt.id}
-                      id={`vtable-${vt.slug}`}
-                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
-                    >
-                        <VirtualTableView
-                          key={vt.id}
-                          table={vt}
-                          columns={virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS}
-                          projectId={selectedProjectId}
-                          organizationId={canonicalOrgId}
-                          organizationName={selectedOrganization?.name ?? null}
-                          userId={userId}
-                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
-                          projectsForMention={projectsForMention}
-                          memberNameByUserId={memberNameByUserId}
-                          allVirtualTables={allAccessibleVtables}
-                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
-                        />
+                    <div key={vt.id} id={`vtable-${vt.slug}`}>
+                      <VirtualTableTabCard
+                        table={vt}
+                        onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
+                      />
                     </div>
                   ))}
                 </div>
@@ -5020,10 +5045,10 @@ export function WorkspaceClient({
                     : "Belum ada tabel custom pada scope ini."}
                 </p>
               ) : null}
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Berkas" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Berkas" activeView={activeView}>
+              <TabPanelKeepAlive view="Berkas" activeView={activeView}>
               <div className="mt-4 space-y-3">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
@@ -5088,10 +5113,10 @@ export function WorkspaceClient({
                   </>
                 )}
               </div>
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Laporan" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Laporan" activeView={activeView}>
+              <TabPanelKeepAlive view="Laporan" activeView={activeView}>
               <div className="mt-4">
                 <p className="mb-3 text-sm text-muted-foreground">
                   Agregat dari view SQL schema{" "}
@@ -5105,10 +5130,10 @@ export function WorkspaceClient({
                   pengukuranByStatus={plmPengukuranStatusSummary}
                 />
               </div>
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Keuangan" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Keuangan" activeView={activeView}>
+              <TabPanelKeepAlive view="Keuangan" activeView={activeView}>
               <div className="mt-4">
                 <FinancePanel
                   projectId={selectedProjectId}
@@ -5123,13 +5148,17 @@ export function WorkspaceClient({
                   pembayaran={financePembayaranInProject}
                 />
               </div>
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent
               value="Map"
               className="flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col overflow-hidden outline-none"
             >
-              <TabPanelMount view="Map" activeView={activeView}>
+              <TabPanelKeepAlive
+                view="Map"
+                activeView={activeView}
+                className="flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col"
+              >
               <div className="flex h-0 min-h-0 flex-1 basis-0 flex-col">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
@@ -6733,10 +6762,10 @@ export function WorkspaceClient({
                   </div>
                 )}
               </div>
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Kanban" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Kanban" activeView={activeView}>
+              <TabPanelKeepAlive view="Kanban" activeView={activeView}>
               {selectedProjectId ? (
               <div className="mt-4">
                 {selectedTaskId && (
@@ -6762,10 +6791,10 @@ export function WorkspaceClient({
                 )}
               </div>
               ) : null}
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Kalender" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Kalender" activeView={activeView}>
+              <TabPanelKeepAlive view="Kalender" activeView={activeView}>
               {selectedProjectId ? (
               <div className="mt-4">
                 <CalendarScheduleView
@@ -6777,10 +6806,10 @@ export function WorkspaceClient({
                 />
               </div>
               ) : null}
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Gantt" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelMount view="Gantt" activeView={activeView}>
+              <TabPanelKeepAlive view="Gantt" activeView={activeView}>
               {selectedProjectId ? (
               <div className="mt-4">
                 <GanttScheduleView
@@ -6792,7 +6821,7 @@ export function WorkspaceClient({
                 />
               </div>
               ) : null}
-              </TabPanelMount>
+              </TabPanelKeepAlive>
             </TabsContent>
             <Dialog
               open={Boolean(taskNoteEditor)}
