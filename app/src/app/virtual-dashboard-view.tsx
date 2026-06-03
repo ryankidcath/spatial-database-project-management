@@ -30,8 +30,13 @@ import type {
 import { DASHBOARD_WIDGET_TYPES } from "./virtual-dashboard-types";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import {
+  bundleNeedsFromWidgets,
+  dashboardFilterCountKey,
+  type DashboardTableBundle,
+} from "@/lib/dashboard-table-bundle";
+import {
   ensureVirtualDashboardAction,
-  fetchDashboardWidgetRowsAction,
+  fetchDashboardTableBundleAction,
   saveVirtualDashboardWidgetsAction,
 } from "./virtual-dashboard-actions";
 import {
@@ -99,16 +104,17 @@ function SimpleStatusPie({
 
 function WidgetBody({
   widget,
-  rows,
+  bundle,
   columnsByTableId,
   tableNameById,
 }: {
   widget: DashboardWidget;
-  rows: VirtualDataRow[];
+  bundle: DashboardTableBundle | null;
   columnsByTableId: Map<string, VirtualColumnRow[]>;
   tableNameById: Map<string, string>;
 }) {
   const cfg = widget.config as Record<string, string | undefined>;
+  const rows = (bundle?.rows ?? []) as VirtualDataRow[];
 
   if (widget.type === "header") {
     return (
@@ -119,10 +125,14 @@ function WidgetBody({
   }
 
   if (widget.type === "stat") {
-    const n = countRows(rows, {
-      column: cfg.filter_column,
-      value: cfg.filter_value,
-    });
+    const filterCol = cfg.filter_column?.trim();
+    const filterVal = cfg.filter_value?.trim();
+    const n =
+      filterCol && filterVal && bundle
+        ? (bundle.filterCounts[
+            dashboardFilterCountKey(filterCol, filterVal)
+          ] ?? 0)
+        : (bundle?.totalCount ?? countRows(rows));
     return (
       <div>
         <p className="text-4xl font-bold tabular-nums text-foreground">{n}</p>
@@ -232,14 +242,14 @@ function formatPreview(val: unknown): string {
 
 function WidgetCard({
   widget,
-  rows,
+  bundle,
   columnsByTableId,
   tableNameById,
   editing,
   onRemove,
 }: {
   widget: DashboardWidget;
-  rows: VirtualDataRow[];
+  bundle: DashboardTableBundle | null;
   columnsByTableId: Map<string, VirtualColumnRow[]>;
   tableNameById: Map<string, string>;
   editing: boolean;
@@ -266,7 +276,7 @@ function WidgetCard({
       ) : null}
       <WidgetBody
         widget={widget}
-        rows={rows}
+        bundle={bundle}
         columnsByTableId={columnsByTableId}
         tableNameById={tableNameById}
       />
@@ -296,7 +306,9 @@ export function VirtualDashboardView({
     hasInitial ? (initialDashboard?.widgets ?? []) : []
   );
   const [editing, setEditing] = useState(false);
-  const [rowsByTable, setRowsByTable] = useState<Map<string, VirtualDataRow[]>>(new Map());
+  const [bundlesByTable, setBundlesByTable] = useState<
+    Map<string, DashboardTableBundle>
+  >(new Map());
   const [addOpen, setAddOpen] = useState(false);
   const [newType, setNewType] = useState<DashboardWidgetType>("stat");
   const [newTitle, setNewTitle] = useState("");
@@ -333,17 +345,13 @@ export function VirtualDashboardView({
     return m;
   }, [virtualTables]);
 
-  const fetchRowsForWidgets = useCallback(async (list: DashboardWidget[]) => {
-    const tableIds = new Set<string>();
-    for (const w of list) {
-      const c = w.config as { table_id?: string };
-      if (c.table_id) tableIds.add(c.table_id);
-    }
-    const next = new Map<string, VirtualDataRow[]>();
+  const fetchBundlesForWidgets = useCallback(async (list: DashboardWidget[]) => {
+    const needsByTable = bundleNeedsFromWidgets(list);
+    const next = new Map<string, DashboardTableBundle>();
     await Promise.all(
-      [...tableIds].map(async (tid) => {
-        const r = await fetchDashboardWidgetRowsAction(tid);
-        if (!r.error) next.set(tid, r.rows as VirtualDataRow[]);
+      [...needsByTable.entries()].map(async ([tid, needs]) => {
+        const r = await fetchDashboardTableBundleAction(tid, needs);
+        if (!r.error && r.bundle) next.set(tid, r.bundle);
       })
     );
     return next;
@@ -355,14 +363,16 @@ export function VirtualDashboardView({
       setLoadError(null);
       setDashboard(null);
       setWidgets([]);
-      setRowsByTable(new Map());
+      setBundlesByTable(new Map());
       return undefined;
     }
 
     if (hasInitial && reloadToken === 0) {
       setLoading(false);
       setLoadError(null);
-      void fetchRowsForWidgets(initialDashboard?.widgets ?? []).then(setRowsByTable);
+      void fetchBundlesForWidgets(initialDashboard?.widgets ?? []).then(
+        setBundlesByTable
+      );
       return undefined;
     }
 
@@ -388,10 +398,10 @@ export function VirtualDashboardView({
           setLoading(false);
 
           if (d?.widgets?.length) {
-            const next = await fetchRowsForWidgets(d.widgets);
-            if (!cancelled && loadSeqRef.current === seq) setRowsByTable(next);
+            const next = await fetchBundlesForWidgets(d.widgets);
+            if (!cancelled && loadSeqRef.current === seq) setBundlesByTable(next);
           } else {
-            setRowsByTable(new Map());
+            setBundlesByTable(new Map());
           }
         })
         .catch(() => {
@@ -415,30 +425,25 @@ export function VirtualDashboardView({
     reloadToken,
     hasInitial,
     initialDashboard,
-    fetchRowsForWidgets,
+    fetchBundlesForWidgets,
   ]);
 
-  const refreshRowsForWidgets = useCallback(async (list: DashboardWidget[]) => {
-    const tableIds = new Set<string>();
-    for (const w of list) {
-      const c = w.config as { table_id?: string };
-      if (c.table_id) tableIds.add(c.table_id);
-    }
-    const next = new Map(rowsByTable);
+  const refreshBundlesForWidgets = useCallback(async (list: DashboardWidget[]) => {
+    const needsByTable = bundleNeedsFromWidgets(list);
+    const next = new Map(bundlesByTable);
     await Promise.all(
-      [...tableIds].map(async (tid) => {
-        if (next.has(tid)) return;
-        const r = await fetchDashboardWidgetRowsAction(tid);
-        if (!r.error) next.set(tid, r.rows as VirtualDataRow[]);
+      [...needsByTable.entries()].map(async ([tid, needs]) => {
+        const r = await fetchDashboardTableBundleAction(tid, needs);
+        if (!r.error && r.bundle) next.set(tid, r.bundle);
       })
     );
-    setRowsByTable(next);
-  }, [rowsByTable]);
+    setBundlesByTable(next);
+  }, [bundlesByTable]);
 
-  const getRowsForWidget = (widget: DashboardWidget): VirtualDataRow[] => {
+  const getBundleForWidget = (widget: DashboardWidget): DashboardTableBundle | null => {
     const tid = (widget.config as { table_id?: string }).table_id;
-    if (!tid) return [];
-    return rowsByTable.get(tid) ?? [];
+    if (!tid) return null;
+    return bundlesByTable.get(tid) ?? null;
   };
 
   const saveWidgets = () => {
@@ -503,7 +508,7 @@ export function VirtualDashboardView({
       { id, type: newType, title, w: newW, config },
     ];
     setWidgets(next);
-    void refreshRowsForWidgets(next);
+    void refreshBundlesForWidgets(next);
     setAddOpen(false);
     setNewTitle("");
     setNewHeaderText("");
@@ -588,7 +593,7 @@ export function VirtualDashboardView({
             <WidgetCard
               key={w.id}
               widget={w}
-              rows={getRowsForWidget(w)}
+              bundle={getBundleForWidget(w)}
               columnsByTableId={columnsByTableId}
               tableNameById={tableNameById}
               editing={editing}

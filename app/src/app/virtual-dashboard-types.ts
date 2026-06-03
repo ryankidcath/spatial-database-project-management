@@ -10,7 +10,7 @@ export const DASHBOARD_WIDGET_TYPES: {
   label: string;
   description: string;
 }[] = [
-  { value: "stat", label: "Angka", description: "Hitung jumlah baris" },
+  { value: "stat", label: "Angka", description: "Jumlah baris di database (bukan cuplikan 50)" },
   { value: "status_pie", label: "Pie status", description: "Distribusi kolom pilihan (To Do / On Progress / Done)" },
   {
     value: "bar_by_group",

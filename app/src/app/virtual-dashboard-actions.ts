@@ -7,7 +7,11 @@ import {
   fetchVirtualDashboardForProject,
   parseDashboardWidgets,
 } from "@/lib/virtual-dashboard-server";
-import { VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE } from "@/lib/virtual-table-import-limits";
+import {
+  dashboardFilterCountKey,
+  type DashboardTableBundle,
+  type DashboardTableBundleNeeds,
+} from "@/lib/dashboard-table-bundle";
 import type {
   DashboardWidget,
   VirtualDashboardRow,
@@ -52,18 +56,63 @@ export async function ensureVirtualDashboardAction(
   return result;
 }
 
-/** Baris widget dashboard — terpisah dari virtual-table-actions agar bundle client ringan. */
-export async function fetchDashboardWidgetRowsAction(
-  tableId: string
-): Promise<{
-  rows: Record<string, unknown>[];
-  error: string | null;
-}> {
-  const r = await fetchVirtualRowsAction(tableId, {
-    limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
-    offset: 0,
-  });
-  return { rows: r.rows, error: r.error };
+/** Data widget dashboard: hitung total di DB, chart dari seluruh baris (bukan cap 50). */
+export async function fetchDashboardTableBundleAction(
+  tableId: string,
+  needs: DashboardTableBundleNeeds
+): Promise<{ bundle: DashboardTableBundle | null; error: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { bundle: null, error: "Supabase tidak dikonfigurasi" };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { bundle: null, error: "Belum masuk" };
+
+  const base = () =>
+    supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .select("id", { count: "exact", head: true })
+      .eq("table_id", tableId)
+      .is("deleted_at", null);
+
+  const { count: totalRaw, error: totalErr } = await base();
+  if (totalErr) return { bundle: null, error: totalErr.message };
+
+  const totalCount = totalRaw ?? 0;
+  const filterCounts: Record<string, number> = {};
+
+  for (const f of needs.filters) {
+    const { count, error } = await base().filter(
+      `payload->>${f.column}`,
+      "eq",
+      f.value
+    );
+    if (error) return { bundle: null, error: error.message };
+    filterCounts[dashboardFilterCountKey(f.column, f.value)] = count ?? 0;
+  }
+
+  let rows: Record<string, unknown>[] = [];
+  if (needs.needsChartRows) {
+    const r = await fetchVirtualRowsAction(tableId);
+    if (r.error) return { bundle: null, error: r.error };
+    rows = r.rows;
+  } else if (needs.previewLimit > 0) {
+    const r = await fetchVirtualRowsAction(tableId, {
+      limit: needs.previewLimit,
+      offset: 0,
+    });
+    if (r.error) return { bundle: null, error: r.error };
+    rows = r.rows;
+  }
+
+  return {
+    bundle: { totalCount, filterCounts, rows },
+    error: null,
+  };
 }
 
 export async function saveVirtualDashboardWidgetsAction(
