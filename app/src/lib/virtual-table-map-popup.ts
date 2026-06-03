@@ -84,6 +84,7 @@ export function buildVirtualTableMapPopupProperties(
     skipGeometrySlug?: string;
     rowTitle?: string;
     virtualRowId?: string;
+    virtualTableId?: string;
     projectName?: string | null;
     chatPathSegments?: string[];
   }
@@ -97,6 +98,9 @@ export function buildVirtualTableMapPopupProperties(
   }
   if (options?.virtualRowId) {
     out._virtual_row_id = options.virtualRowId;
+  }
+  if (options?.virtualTableId) {
+    out._virtual_table_id = options.virtualTableId;
   }
   if (options?.projectName?.trim()) {
     out._popup_project_name = options.projectName.trim();

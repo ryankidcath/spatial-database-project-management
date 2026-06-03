@@ -38,6 +38,8 @@ export type WorkspaceRightPanelState =
       mentionOptions: ChatMentionOption[];
       fileAttachmentOptions: ChatAttachmentRef[];
       rowPayload?: Record<string, unknown>;
+      /** Tutup saat overlay tabel ditutup (default). Popup Map = false. */
+      closeWhenOverlayCloses: boolean;
     };
 
 export type OpenOrganizationChatInput = {
@@ -62,6 +64,8 @@ export type OpenRowPanelInput = {
   mentionOptions: ChatMentionOption[];
   fileAttachmentOptions?: ChatAttachmentRef[];
   rowPayload?: Record<string, unknown>;
+  /** Default true — dari popup Map set false agar panel tetap terbuka. */
+  closeWhenOverlayCloses?: boolean;
 };
 
 export type WorkspaceRightPanelApi = {
@@ -132,6 +136,7 @@ export function WorkspaceRightPanelProvider({
       mentionOptions: input.mentionOptions,
       fileAttachmentOptions: input.fileAttachmentOptions ?? [],
       rowPayload: input.rowPayload,
+      closeWhenOverlayCloses: input.closeWhenOverlayCloses ?? true,
     });
   }, []);
 
@@ -216,10 +221,14 @@ export function WorkspaceRightPanelCloser({
 }) {
   const { closePanel, panel } = useWorkspaceRightPanel();
   useEffect(() => {
-    if (!activeVirtualTableSlug && panel?.kind === "row") {
+    if (
+      !activeVirtualTableSlug &&
+      panel?.kind === "row" &&
+      panel.closeWhenOverlayCloses
+    ) {
       closePanel();
     }
-  }, [activeVirtualTableSlug, closePanel, panel?.kind]);
+  }, [activeVirtualTableSlug, closePanel, panel]);
   return null;
 }
 
@@ -237,10 +246,11 @@ export function WorkspaceRightPanelTableSync({
 
   useEffect(() => {
     if (!activeTableId || !panelTableId) return;
+    if (panel?.kind === "row" && !panel.closeWhenOverlayCloses) return;
     if (panelTableId !== activeTableId) {
       closePanel();
     }
-  }, [activeTableId, panelTableId, closePanel]);
+  }, [activeTableId, panelTableId, panel, closePanel]);
 
   return null;
 }

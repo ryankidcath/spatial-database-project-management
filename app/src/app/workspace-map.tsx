@@ -34,6 +34,8 @@ export type MapFootprint = {
     issueId: string;
     featureId: string;
   };
+  /** Hanya `virtual_table` — untuk chat baris dari popup. */
+  virtualTableId?: string;
 };
 
 const DEFAULT_CENTER: L.LatLngExpression = [-6.74, 108.55];
@@ -238,6 +240,7 @@ function popupHtmlWithGeoJson(
         key !== "_row_id" &&
         key !== "_popup_row_title" &&
         key !== "_virtual_row_id" &&
+        key !== "_virtual_table_id" &&
         key !== "_chat_path_segments" &&
         key !== "_popup_project_name"
     )
@@ -267,9 +270,13 @@ function popupHtmlWithGeoJson(
     typeof properties._popup_project_name === "string"
       ? properties._popup_project_name.trim()
       : "";
+  const virtualTableId =
+    typeof properties._virtual_table_id === "string"
+      ? properties._virtual_table_id.trim()
+      : "";
   const chatBtnHtml =
     layerKind === "virtual_table" && virtualRowId
-      ? `<div style="margin-top:10px"><button type="button" data-vt-chat-row-id="${escapePopupText(virtualRowId)}" data-vt-chat-path="${escapePopupText(chatPathJson)}" data-vt-chat-row-title="${escapePopupText(chatRowTitle || title)}" data-vt-chat-table="${escapePopupText(chatTable)}" data-vt-chat-project="${escapePopupText(chatProject)}" style="font-size:12px;padding:6px 12px;border-radius:6px;border:1px solid var(--primary);background:var(--primary);cursor:pointer;color:var(--primary-foreground)">Chat baris</button></div>`
+      ? `<div style="margin-top:10px"><button type="button" data-vt-chat-row-id="${escapePopupText(virtualRowId)}" data-vt-chat-table-id="${escapePopupText(virtualTableId)}" data-vt-chat-path="${escapePopupText(chatPathJson)}" data-vt-chat-row-title="${escapePopupText(chatRowTitle || title)}" data-vt-chat-table="${escapePopupText(chatTable)}" data-vt-chat-project="${escapePopupText(chatProject)}" style="font-size:12px;padding:6px 12px;border-radius:6px;border:1px solid var(--primary);background:var(--primary);cursor:pointer;color:var(--primary-foreground)">Chat baris</button></div>`
       : "";
   return `<div style="min-width:260px;max-width:520px;color:var(--foreground)">
 <div style="font-weight:600;margin-bottom:6px;color:var(--foreground)">${title}</div>
@@ -562,7 +569,11 @@ export function WorkspaceMap({
   /** Sorot poligon hasil ukur yang terikat `berkas_id` ini. */
   highlightBerkasId?: string | null;
   /** Buka chat virtual row dari popup peta. */
-  onVirtualRowChat?: (rowId: string, pathSegments: string[]) => void;
+  onVirtualRowChat?: (
+    rowId: string,
+    pathSegments: string[],
+    tableId: string
+  ) => void;
 }) {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -760,7 +771,8 @@ export function WorkspaceMap({
           rowLabel: rowTitle,
         });
       }
-      onVirtualRowChat(rowId, pathSegments);
+      const tableId = btn.getAttribute("data-vt-chat-table-id")?.trim() ?? "";
+      onVirtualRowChat(rowId, pathSegments, tableId);
     };
     el.addEventListener("click", onClick);
     return () => el.removeEventListener("click", onClick);

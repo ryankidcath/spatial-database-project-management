@@ -30,6 +30,7 @@ import {
   createProjectInOrganizationAction,
   signOut,
 } from "@/app/auth/actions";
+import { toast } from "sonner";
 import { NotificationsBell } from "./notifications-bell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -3286,11 +3287,13 @@ export function WorkspaceClient({
                   skipGeometrySlug: gc.slug,
                   rowTitle,
                   virtualRowId: rowId,
+                  virtualTableId: vt.id,
                   projectName: selectedProject?.name ?? null,
                   chatPathSegments,
                 }
               ),
               layerKind: "virtual_table",
+              virtualTableId: vt.id,
             });
           }
         }
@@ -6774,22 +6777,53 @@ export function WorkspaceClient({
                           <WorkspaceMap
                             footprints={visibleMapLayers}
                             highlightBerkasId={null}
-                            onVirtualRowChat={(rowId, pathSegments) => {
-                              workspaceRightPanelApiRef.current?.openRowPanel({
-                                tableId: activeVirtualTable?.id ?? "",
-                                rowId,
-                                pathSegments,
-                                tab: "chat",
-                                mentionOptions: [
-                                  ...workspaceChatMentionOptions,
+                            onVirtualRowChat={(rowId, pathSegments, tableId) => {
+                              const openRow = (
+                                resolvedTableId: string,
+                                segments: string[]
+                              ) => {
+                                if (!resolvedTableId) {
+                                  toast.error(
+                                    "Tabel baris tidak dikenali. Buka tabel dari sidebar lalu coba lagi."
+                                  );
+                                  return;
+                                }
+                                workspaceRightPanelApiRef.current?.openRowPanel(
                                   {
-                                    id: rowId,
-                                    label:
-                                      pathSegments[pathSegments.length - 1] ??
-                                      "Baris",
-                                    kind: "row",
-                                  },
-                                ],
+                                    tableId: resolvedTableId,
+                                    rowId,
+                                    pathSegments: segments,
+                                    tab: "chat",
+                                    closeWhenOverlayCloses: false,
+                                    mentionOptions: [
+                                      ...workspaceChatMentionOptions,
+                                      {
+                                        id: rowId,
+                                        label:
+                                          segments[segments.length - 1] ??
+                                          "Baris",
+                                        kind: "row",
+                                      },
+                                    ],
+                                  }
+                                );
+                              };
+
+                              if (tableId) {
+                                openRow(tableId, pathSegments);
+                                return;
+                              }
+
+                              void resolveVirtualRowChatContextAction(
+                                rowId
+                              ).then((res) => {
+                                if (res.error || !res.data) {
+                                  toast.error(
+                                    res.error ?? "Gagal membuka chat baris"
+                                  );
+                                  return;
+                                }
+                                openRow(res.data.tableId, res.data.pathSegments);
                               });
                             }}
                           />

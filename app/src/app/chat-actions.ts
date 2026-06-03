@@ -106,7 +106,7 @@ export async function deleteChatMessageAction(
 /** Judul breadcrumb chat baris (project › tabel › label) untuk dialog / notifikasi. */
 export async function resolveVirtualRowChatContextAction(
   virtualRowId: string
-): Promise<ChatActionResult<{ pathSegments: string[] }>> {
+): Promise<ChatActionResult<{ tableId: string; pathSegments: string[] }>> {
   const supabase = await createServerSupabaseClient();
   if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
   const {
@@ -197,6 +197,7 @@ export async function resolveVirtualRowChatContextAction(
   return {
     error: null,
     data: {
+      tableId,
       pathSegments: buildChatRowPathSegments({
         projectName,
         tableDisplayName: String(table.display_name),
