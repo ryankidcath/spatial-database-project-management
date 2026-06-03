@@ -207,7 +207,6 @@ import {
   SidebarProjectChatButton,
 } from "./workspace-sidebar-chat";
 import { SidebarVirtualTableItem } from "./workspace-sidebar-vtable-item";
-import { VirtualTableTabCard } from "./virtual-table-tab-card";
 import type { ChatMentionOption } from "./chat-types";
 import {
   ProjectChatUnreadBadge,
@@ -5002,19 +5001,36 @@ export function WorkspaceClient({
                 </p>
               ) : null}
               <p className="mt-5 text-sm text-muted-foreground">
-                Daftar tabel di scope ini. Edit data lewat{" "}
-                <strong className="text-foreground">Buka tabel lengkap</strong>{" "}
-                (sidebar atau tombol di kartu).
+                Preview <strong className="text-foreground">50 baris per halaman</strong>{" "}
+                per tabel. Untuk seluruh data dan edit penuh, gunakan{" "}
+                <strong className="text-foreground">Tabel lengkap</strong> (tombol di header
+                tabel atau sidebar).
               </p>
               {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
-                <div className="mt-5 space-y-3">
+                <div className="mt-5 space-y-4">
                   <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Tabel Organisasi
                   </p>
                   {vtablesForOrg.map((vt) => (
-                    <div key={vt.id} id={`vtable-${vt.slug}`}>
-                      <VirtualTableTabCard
+                    <div
+                      key={vt.id}
+                      id={`vtable-${vt.slug}`}
+                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
+                    >
+                      <VirtualTableView
+                        key={vt.id}
                         table={vt}
+                        columns={
+                          virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
+                        }
+                        projectId={selectedProjectId}
+                        organizationId={canonicalOrgId}
+                        organizationName={selectedOrganization?.name ?? null}
+                        userId={userId}
+                        isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                        projectsForMention={projectsForMention}
+                        memberNameByUserId={memberNameByUserId}
+                        allVirtualTables={allAccessibleVtables}
                         onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
                       />
                     </div>
@@ -5023,14 +5039,30 @@ export function WorkspaceClient({
               ) : null}
 
               {selectedProjectId && vtablesForProject.length > 0 ? (
-                <div className="mt-6 space-y-3">
+                <div className="mt-6 space-y-4">
                   <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Tabel Project
                   </p>
                   {vtablesForProject.map((vt) => (
-                    <div key={vt.id} id={`vtable-${vt.slug}`}>
-                      <VirtualTableTabCard
+                    <div
+                      key={vt.id}
+                      id={`vtable-${vt.slug}`}
+                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
+                    >
+                      <VirtualTableView
+                        key={vt.id}
                         table={vt}
+                        columns={
+                          virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
+                        }
+                        projectId={selectedProjectId}
+                        organizationId={canonicalOrgId}
+                        organizationName={selectedOrganization?.name ?? null}
+                        userId={userId}
+                        isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                        projectsForMention={projectsForMention}
+                        memberNameByUserId={memberNameByUserId}
+                        allVirtualTables={allAccessibleVtables}
                         onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
                       />
                     </div>

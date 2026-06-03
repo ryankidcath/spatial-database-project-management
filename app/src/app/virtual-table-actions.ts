@@ -2849,29 +2849,6 @@ export type FetchVirtualRowsOptions = {
   offset?: number;
 };
 
-/** Hitung baris aktif tanpa memuat payload (ringan untuk daftar tab Tabel). */
-export async function fetchVirtualTableRowCountAction(
-  tableId: string
-): Promise<{ count: number; error: string | null }> {
-  const supabase = await createServerSupabaseClient();
-  if (!supabase) return { count: 0, error: "Supabase tidak dikonfigurasi" };
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { count: 0, error: "Belum masuk" };
-
-  const { count, error } = await supabase
-    .schema("core_pm")
-    .from("virtual_rows")
-    .select("id", { count: "exact", head: true })
-    .eq("table_id", tableId)
-    .is("deleted_at", null);
-
-  if (error) return { count: 0, error: error.message };
-  return { count: count ?? 0, error: null };
-}
-
 export async function fetchVirtualRowsAction(
   tableId: string,
   options?: FetchVirtualRowsOptions
