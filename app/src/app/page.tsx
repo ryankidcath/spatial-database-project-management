@@ -48,6 +48,11 @@ import type {
   VirtualTableRow,
   VirtualColumnRow,
 } from "./virtual-table-types";
+import type { VirtualDashboardRow } from "./virtual-dashboard-types";
+import {
+  ensureVirtualDashboardForProject,
+  fetchVirtualDashboardsForProjects,
+} from "@/lib/virtual-dashboard-server";
 
 type HomeProps = {
   searchParams: Promise<{ joinError?: string; org?: string; project?: string; view?: string }>;
@@ -704,6 +709,33 @@ export default async function Home({ searchParams }: HomeProps) {
 
   const virtualColumns = (vcolsRaw ?? []) as VirtualColumnRow[];
 
+  const virtualDashboardsByProjectId: Record<string, VirtualDashboardRow> = user?.id
+    ? await fetchVirtualDashboardsForProjects(supabase, scopedProjectIds)
+    : {};
+
+  const bootstrapProjectId =
+    selectedProjectId ??
+    (selectedOrgId
+      ? projectList.find((p) => p.organization_id === selectedOrgId)?.id
+      : null) ??
+    projectList[0]?.id ??
+    null;
+
+  if (
+    user?.id &&
+    bootstrapProjectId &&
+    !virtualDashboardsByProjectId[bootstrapProjectId]
+  ) {
+    const ensured = await ensureVirtualDashboardForProject(
+      supabase,
+      user.id,
+      bootstrapProjectId
+    );
+    if (ensured.dashboard) {
+      virtualDashboardsByProjectId[bootstrapProjectId] = ensured.dashboard;
+    }
+  }
+
   const fetchError =
     projectsError?.message ??
     orgsError?.message ??
@@ -786,6 +818,7 @@ export default async function Home({ searchParams }: HomeProps) {
         userNotifications={userNotifications}
         virtualTables={virtualTables}
         virtualColumns={virtualColumns}
+        virtualDashboardsByProjectId={virtualDashboardsByProjectId}
         joinError={joinError}
       />
     </Suspense>

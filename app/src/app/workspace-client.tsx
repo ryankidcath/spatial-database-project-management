@@ -481,6 +481,10 @@ type Props = {
   userNotifications?: UserNotificationRow[];
   virtualTables?: VirtualTableRow[];
   virtualColumns?: VirtualColumnRow[];
+  virtualDashboardsByProjectId?: Record<
+    string,
+    import("./virtual-dashboard-types").VirtualDashboardRow
+  >;
   joinError?: string | null;
 };
 
@@ -1719,10 +1723,12 @@ export function WorkspaceClient({
   userNotifications = [],
   virtualTables = [],
   virtualColumns = [],
+  virtualDashboardsByProjectId = {},
   joinError,
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const clientNavReadyRef = useRef(false);
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
   const [taskPending, startTaskTransition] = useTransition();
   const [, startStatusTransition] = useTransition();
@@ -1942,6 +1948,11 @@ export function WorkspaceClient({
   const [memberPending, startMemberTransition] = useTransition();
   const [, startScopeNavTransition] = useTransition();
   const [scopeRoutePending, setScopeRoutePending] = useState(false);
+
+  useEffect(() => {
+    clientNavReadyRef.current = true;
+  }, []);
+
   const workspaceActionPending =
     taskPending ||
     mapGeomPending ||
@@ -2189,6 +2200,7 @@ export function WorkspaceClient({
   }, [issues, selectedProjectId]);
 
   useEffect(() => {
+    if (!clientNavReadyRef.current) return;
     if (projects.length === 0 || !canonicalOrgId || !selectedProjectId) return;
     if (scopeRoutePending) return;
     const p = workspaceUrlParamsBaseline(
@@ -5030,10 +5042,14 @@ export function WorkspaceClient({
                 </p>
               ) : (
                 <VirtualDashboardView
+                  key={selectedProjectId}
                   projectId={selectedProjectId}
                   projectName={selectedProject?.name ?? "Project"}
                   virtualTables={allAccessibleVtables}
                   virtualColumns={virtualColumns}
+                  initialDashboard={
+                    virtualDashboardsByProjectId[selectedProjectId] ?? null
+                  }
                 />
               )}
               </TabPanelKeepAlive>
