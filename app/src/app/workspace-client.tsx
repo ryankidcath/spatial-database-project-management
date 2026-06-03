@@ -194,6 +194,7 @@ import {
 } from "@/lib/virtual-table-map-popup";
 import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
+import { fileAttachmentOptionsFromRowPayload } from "@/lib/chat-row-panel";
 import { resolveVirtualRowChatContextAction } from "./chat-actions";
 import {
   WorkspaceRightPanelProvider,
@@ -3857,12 +3858,33 @@ export function WorkspaceClient({
           rowLabel:
             typeof payload.row_title === "string" ? payload.row_title : "Baris",
         });
-        const openRow = (pathSegments: string[]) => {
+        void resolveVirtualRowChatContextAction(virtualRowId).then((res) => {
+          if (res.error || !res.data) {
+            workspaceRightPanelApiRef.current?.openRowPanel({
+              tableId: activeVirtualTable?.id ?? "",
+              rowId: virtualRowId,
+              pathSegments: fallbackSegments,
+              tab: "chat",
+              mentionOptions: [
+                ...workspaceChatMentionOptions,
+                {
+                  id: virtualRowId,
+                  label: fallbackSegments[fallbackSegments.length - 1] ?? "Baris",
+                  kind: "row",
+                },
+              ],
+            });
+            return;
+          }
+          const { tableId, pathSegments, rowPayload, relationLabels } = res.data;
+          const tableCols = virtualColumns.filter((c) => c.table_id === tableId);
           workspaceRightPanelApiRef.current?.openRowPanel({
-            tableId: activeVirtualTable?.id ?? "",
+            tableId,
             rowId: virtualRowId,
             pathSegments,
             tab: "chat",
+            rowPayload,
+            relationLabels,
             mentionOptions: [
               ...workspaceChatMentionOptions,
               {
@@ -3871,12 +3893,11 @@ export function WorkspaceClient({
                 kind: "row",
               },
             ],
+            fileAttachmentOptions: fileAttachmentOptionsFromRowPayload(
+              rowPayload,
+              tableCols
+            ),
           });
-        };
-        openRow(fallbackSegments);
-        void resolveVirtualRowChatContextAction(virtualRowId).then((res) => {
-          if (res.error || !res.data) return;
-          openRow(res.data.pathSegments);
         });
         return;
       }
@@ -6777,43 +6798,7 @@ export function WorkspaceClient({
                           <WorkspaceMap
                             footprints={visibleMapLayers}
                             highlightBerkasId={null}
-                            onVirtualRowChat={(rowId, pathSegments, tableId) => {
-                              const openRow = (
-                                resolvedTableId: string,
-                                segments: string[]
-                              ) => {
-                                if (!resolvedTableId) {
-                                  toast.error(
-                                    "Tabel baris tidak dikenali. Buka tabel dari sidebar lalu coba lagi."
-                                  );
-                                  return;
-                                }
-                                workspaceRightPanelApiRef.current?.openRowPanel(
-                                  {
-                                    tableId: resolvedTableId,
-                                    rowId,
-                                    pathSegments: segments,
-                                    tab: "chat",
-                                    closeWhenOverlayCloses: false,
-                                    mentionOptions: [
-                                      ...workspaceChatMentionOptions,
-                                      {
-                                        id: rowId,
-                                        label:
-                                          segments[segments.length - 1] ??
-                                          "Baris",
-                                        kind: "row",
-                                      },
-                                    ],
-                                  }
-                                );
-                              };
-
-                              if (tableId) {
-                                openRow(tableId, pathSegments);
-                                return;
-                              }
-
+                            onVirtualRowChat={(rowId) => {
                               void resolveVirtualRowChatContextAction(
                                 rowId
                               ).then((res) => {
@@ -6823,7 +6808,37 @@ export function WorkspaceClient({
                                   );
                                   return;
                                 }
-                                openRow(res.data.tableId, res.data.pathSegments);
+                                const { tableId, pathSegments, rowPayload, relationLabels } =
+                                  res.data;
+                                const tableCols = virtualColumns.filter(
+                                  (c) => c.table_id === tableId
+                                );
+                                workspaceRightPanelApiRef.current?.openRowPanel(
+                                  {
+                                    tableId,
+                                    rowId,
+                                    pathSegments,
+                                    tab: "chat",
+                                    closeWhenOverlayCloses: false,
+                                    rowPayload,
+                                    relationLabels,
+                                    mentionOptions: [
+                                      ...workspaceChatMentionOptions,
+                                      {
+                                        id: rowId,
+                                        label:
+                                          pathSegments[pathSegments.length - 1] ??
+                                          "Baris",
+                                        kind: "row",
+                                      },
+                                    ],
+                                    fileAttachmentOptions:
+                                      fileAttachmentOptionsFromRowPayload(
+                                        rowPayload,
+                                        tableCols
+                                      ),
+                                  }
+                                );
                               });
                             }}
                           />

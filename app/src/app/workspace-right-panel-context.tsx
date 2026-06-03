@@ -38,6 +38,7 @@ export type WorkspaceRightPanelState =
       mentionOptions: ChatMentionOption[];
       fileAttachmentOptions: ChatAttachmentRef[];
       rowPayload?: Record<string, unknown>;
+      relationLabels?: Record<string, string>;
       /** Tutup saat overlay tabel ditutup (default). Popup Map = false. */
       closeWhenOverlayCloses: boolean;
     };
@@ -64,6 +65,7 @@ export type OpenRowPanelInput = {
   mentionOptions: ChatMentionOption[];
   fileAttachmentOptions?: ChatAttachmentRef[];
   rowPayload?: Record<string, unknown>;
+  relationLabels?: Record<string, string>;
   /** Default true — dari popup Map set false agar panel tetap terbuka. */
   closeWhenOverlayCloses?: boolean;
 };
@@ -136,6 +138,7 @@ export function WorkspaceRightPanelProvider({
       mentionOptions: input.mentionOptions,
       fileAttachmentOptions: input.fileAttachmentOptions ?? [],
       rowPayload: input.rowPayload,
+      relationLabels: input.relationLabels,
       closeWhenOverlayCloses: input.closeWhenOverlayCloses ?? true,
     });
   }, []);

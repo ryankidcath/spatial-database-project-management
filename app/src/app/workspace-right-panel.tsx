@@ -5,6 +5,7 @@ import { RowChatContextPath } from "@/components/row-chat-context-path";
 import { cn } from "@/lib/utils";
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { rowLabelFromPath } from "@/lib/chat-row-context";
+import { formatVirtualTableValueForMapPopup } from "@/lib/virtual-table-map-popup";
 import { ChatPanel } from "./chat-panel";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import {
@@ -177,6 +178,8 @@ export function WorkspaceRightPanel({
             <RowDetailPlaceholder
               pathSegments={panel.pathSegments}
               rowPayload={panel.rowPayload}
+              relationLabels={panel.relationLabels}
+              memberNameByUserId={memberNameByUserId}
               columns={
                 virtualColumns.filter((c) => c.table_id === panel.tableId)
               }
@@ -287,31 +290,36 @@ function PanelTabButton({
 function RowDetailPlaceholder({
   pathSegments,
   rowPayload,
+  relationLabels = {},
+  memberNameByUserId,
   columns,
 }: {
   pathSegments: string[];
   rowPayload?: Record<string, unknown>;
+  relationLabels?: Record<string, string>;
+  memberNameByUserId: Map<string, string>;
   columns: VirtualColumnRow[];
 }) {
-  const visibleCols = [...columns].sort((a, b) => a.position - b.position);
+  const visibleCols = [...columns]
+    .filter((c) => c.data_type !== "geometry")
+    .sort((a, b) => a.position - b.position);
 
   return (
     <div className="min-h-0 flex-1 overflow-auto p-3 text-sm">
-      <p className="mb-3 text-xs text-muted-foreground">
-        Ringkasan baris — editor lengkap menyusul.
-      </p>
       {visibleCols.length === 0 ? (
         <p className="text-muted-foreground">Tidak ada kolom untuk ditampilkan.</p>
       ) : (
         <dl className="space-y-2">
           {visibleCols.map((col) => {
             const val = rowPayload?.[col.slug];
+            const formatted = formatVirtualTableValueForMapPopup(
+              val,
+              col.data_type,
+              relationLabels,
+              memberNameByUserId
+            );
             const display =
-              val == null || val === ""
-                ? "—"
-                : typeof val === "object"
-                  ? JSON.stringify(val)
-                  : String(val);
+              formatted.trim() !== "" ? formatted : "—";
             return (
               <div key={col.id} className="border-b border-border/60 pb-2">
                 <dt className="text-xs font-medium text-muted-foreground">
