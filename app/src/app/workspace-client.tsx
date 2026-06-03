@@ -301,6 +301,34 @@ function urlScopeKey(p: URLSearchParams): string {
   ].join("|");
 }
 
+/** URL aktual di browser + state org/project (hindari searchParams Next.js tertinggal). */
+function workspaceUrlParamsBaseline(
+  searchParams: { toString(): string },
+  canonicalOrgId: string | null,
+  selectedProjectId: string | null,
+  projects: ProjectRow[]
+): URLSearchParams {
+  const p = new URLSearchParams(
+    typeof window !== "undefined"
+      ? window.location.search
+      : searchParams.toString()
+  );
+  if (
+    canonicalOrgId &&
+    projects.some((proj) => proj.organization_id === canonicalOrgId)
+  ) {
+    p.set("org", canonicalOrgId);
+  }
+  const org = p.get("org");
+  if (selectedProjectId && org) {
+    const inOrg = projects.some(
+      (x) => x.id === selectedProjectId && x.organization_id === org
+    );
+    if (inOrg) p.set("project", selectedProjectId);
+  }
+  return p;
+}
+
 const WorkspaceMap = dynamic(
   () => import("./workspace-map").then((m) => m.WorkspaceMap),
   {
@@ -2123,8 +2151,24 @@ export function WorkspaceClient({
   }, [searchParams, canonicalOrgId, organizationModules]);
   const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const winView = parseViewParam(
+        new URLSearchParams(window.location.search).get("view")
+      );
+      const enabled = effectiveEnabledModuleCodes(
+        canonicalOrgId,
+        organizationModules
+      );
+      if (
+        winView &&
+        isViewAllowedForModules(winView, enabled) &&
+        winView === activeView
+      ) {
+        return;
+      }
+    }
     setActiveView(activeViewFromUrl);
-  }, [activeViewFromUrl]);
+  }, [activeViewFromUrl, activeView, canonicalOrgId, organizationModules]);
 
   const enabledModulesForOrg = useMemo(
     () => effectiveEnabledModuleCodes(canonicalOrgId, organizationModules),
@@ -2155,37 +2199,25 @@ export function WorkspaceClient({
   useEffect(() => {
     if (projects.length === 0 || !canonicalOrgId || !selectedProjectId) return;
     if (scopeRoutePending) return;
-    const p = new URLSearchParams(searchParams.toString());
+    const p = workspaceUrlParamsBaseline(
+      searchParams,
+      canonicalOrgId,
+      selectedProjectId,
+      projects
+    );
     let dirty = false;
 
-    const urlOrg = p.get("org");
-    const orgValid =
-      Boolean(urlOrg) &&
-      orgsWithProjects.some((o) => o.id === urlOrg) &&
-      projects.some((proj) => proj.organization_id === urlOrg);
-
-    const orgForPool = orgValid ? urlOrg! : canonicalOrgId;
-    const projectPool = orgForPool
-      ? projects.filter((x) => x.organization_id === orgForPool)
-      : [];
+    const projectPool = projects.filter(
+      (x) => x.organization_id === canonicalOrgId
+    );
 
     const urlProject = p.get("project");
     const projectValid =
       Boolean(urlProject) && projectPool.some((x) => x.id === urlProject);
 
-    // URL valid menang (mis. klik notifikasi) — jangan timpa dengan state project lama.
-    if (!orgValid && canonicalOrgId) {
-      p.set("org", canonicalOrgId);
-      dirty = true;
-    }
-    if (!projectValid) {
-      const fallbackProject =
-        selectedProjectId &&
-        projectPool.some((x) => x.id === selectedProjectId)
-          ? selectedProjectId
-          : projectPool[0]?.id ?? null;
-      if (fallbackProject && urlProject !== fallbackProject) {
-        p.set("project", fallbackProject);
+    if (!projectValid && selectedProjectId) {
+      if (projectPool.some((x) => x.id === selectedProjectId)) {
+        p.set("project", selectedProjectId);
         dirty = true;
       }
     }
@@ -3650,35 +3682,23 @@ export function WorkspaceClient({
       mutate: (p: URLSearchParams) => void,
       options?: { refresh?: boolean; syncView?: boolean }
     ) => {
-      const p = new URLSearchParams(searchParams.toString());
+      const prevParams = workspaceUrlParamsBaseline(
+        searchParams,
+        canonicalOrgId,
+        selectedProjectId,
+        projects
+      );
+      const p = new URLSearchParams(prevParams.toString());
       mutate(p);
-      const prevQuery = searchParams.toString();
+      const prevQuery = prevParams.toString();
       const nextQuery = p.toString();
       if (nextQuery === prevQuery && !options?.refresh) return;
 
       const viewOnlyNav =
-        !options?.refresh &&
-        urlScopeKey(new URLSearchParams(prevQuery)) === urlScopeKey(p);
-
-      const orgParam = p.get("org");
-      if (
-        orgParam &&
-        orgsWithProjects.some((o) => o.id === orgParam) &&
-        projects.some((proj) => proj.organization_id === orgParam)
-      ) {
-        setCanonicalOrgId(orgParam);
-      }
-
-      const nextProjectId = resolveProjectIdInParams(p);
-      const nextTaskId = resolveTaskIdInParams(p, nextProjectId);
-      setSelectedProjectId(nextProjectId);
-      setSelectedTaskId(nextTaskId);
+        !options?.refresh && urlScopeKey(prevParams) === urlScopeKey(p);
 
       if (options?.syncView !== false) {
-        const orgForModules =
-          orgParam && orgsWithProjects.some((o) => o.id === orgParam)
-            ? orgParam
-            : canonicalOrgId;
+        const orgForModules = canonicalOrgId;
         const viewParsed = parseViewParam(p.get("view"));
         if (
           viewParsed &&
@@ -3702,6 +3722,20 @@ export function WorkspaceClient({
         return;
       }
 
+      const orgParam = p.get("org");
+      if (
+        orgParam &&
+        orgsWithProjects.some((o) => o.id === orgParam) &&
+        projects.some((proj) => proj.organization_id === orgParam)
+      ) {
+        setCanonicalOrgId(orgParam);
+      }
+
+      const nextProjectId = resolveProjectIdInParams(p);
+      const nextTaskId = resolveTaskIdInParams(p, nextProjectId);
+      setSelectedProjectId(nextProjectId);
+      setSelectedTaskId(nextTaskId);
+
       if (options?.refresh) {
         setScopeRoutePending(true);
       }
@@ -3714,6 +3748,7 @@ export function WorkspaceClient({
     },
     [
       canonicalOrgId,
+      selectedProjectId,
       organizationModules,
       resolveProjectIdInParams,
       resolveTaskIdInParams,
