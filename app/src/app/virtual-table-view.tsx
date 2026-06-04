@@ -47,6 +47,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { RelationTargetPickerDialog } from "@/components/relation-target-picker-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useIsBelowMd } from "@/lib/use-media-query";
 import type {
   VirtualTableRow,
   VirtualColumnRow,
@@ -879,6 +880,8 @@ export function VirtualTableView({
 }: Props) {
   const isOverlayLayout = layout === "overlay";
   const isPaginatedEmbedded = layout === "embedded";
+  const isBelowMd = useIsBelowMd();
+  const overlayTouchToolbar = isOverlayLayout && isBelowMd;
   const router = useRouter();
   const { refreshEpoch } = useVirtualTableChatUnread();
   const {
@@ -2198,19 +2201,36 @@ export function VirtualTableView({
       ) : null}
 
       {/* Header */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <div
+        className={cn(
+          "flex shrink-0 flex-wrap items-center justify-between gap-2",
+          overlayTouchToolbar && "flex-col items-stretch gap-3"
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-2">
           {table.icon && <span className="text-lg">{table.icon}</span>}
-          <h2 className="text-xl font-semibold tracking-tight text-foreground">
-            {table.display_name}
-          </h2>
-          {table.description && (
-            <span className="text-sm text-muted-foreground">
-              — {table.description}
-            </span>
-          )}
+          <div className="min-w-0">
+            <h2 className="truncate text-xl font-semibold tracking-tight text-foreground">
+              {table.display_name}
+            </h2>
+            {table.description ? (
+              <p
+                className={cn(
+                  "text-sm text-muted-foreground",
+                  overlayTouchToolbar ? "line-clamp-2" : ""
+                )}
+              >
+                {overlayTouchToolbar ? table.description : `— ${table.description}`}
+              </p>
+            ) : null}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-2",
+            overlayTouchToolbar && "[&_button]:min-h-11 [&_button]:touch-manipulation"
+          )}
+        >
           {pending && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Spinner className="size-3" /> Menyimpan…

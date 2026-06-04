@@ -140,6 +140,34 @@
   color: var(--muted-foreground);
 }
 
+/* Mobile: kontrol peta di atas tab bar; tombol chat popup mudah disentuh. */
+@media (max-width: 767px) {
+  .workspace-map-root .leaflet-top {
+    top: max(0.5rem, env(safe-area-inset-top));
+  }
+
+  .workspace-map-root .leaflet-bottom {
+    bottom: calc(3.75rem + env(safe-area-inset-bottom));
+  }
+
+  .workspace-map-root .leaflet-left {
+    left: max(0.5rem, env(safe-area-inset-left));
+  }
+
+  .workspace-map-root .leaflet-right {
+    right: max(0.5rem, env(safe-area-inset-right));
+  }
+
+  .workspace-map-popup button[data-vt-chat-row-id] {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 16px !important;
+    font-size: 14px !important;
+    touch-action: manipulation;
+  }
+}
+
 /* Radix ScrollArea: scrollbar di atas isi viewport + fade opacity (hindari konflik utility). */
 .pm-scroll-area-scrollbar {
   z-index: 20;

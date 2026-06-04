@@ -69,11 +69,14 @@ function SheetContent({
       >
         <Drawer.Popup
           data-slot="sheet-content"
+          role="dialog"
+          aria-modal="true"
           className={cn(
             "relative flex min-h-0 flex-col bg-card text-foreground shadow-lg outline-none ring-1 ring-border",
             side === "bottom" &&
               "max-h-[min(90dvh,100%)] w-full rounded-t-xl pb-[env(safe-area-inset-bottom)]",
-            side === "right" && "h-full w-full",
+            side === "right" &&
+              "h-full w-full pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]",
             className
           )}
           {...props}

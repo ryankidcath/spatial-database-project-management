@@ -1,4 +1,31 @@
+import { existsSync, readFileSync } from "fs";
+import { resolve } from "path";
 import { defineConfig, devices } from "@playwright/test";
+
+/** Lokal: muat `app/.env.e2e.local` (gitignored) bila env belum diset di shell. */
+function loadE2eEnvLocal(): void {
+  const path = resolve(__dirname, ".env.e2e.local");
+  if (!existsSync(path)) return;
+  const text = readFileSync(path, "utf8");
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (!key || process.env[key]) continue;
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+loadE2eEnvLocal();
 
 const port = 3000;
 const externalBase = process.env.PLAYWRIGHT_BASE_URL?.trim();
@@ -27,7 +54,14 @@ export default defineConfig({
     baseURL,
     trace: "on-first-retry",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "mobile-chrome",
+      use: { ...devices["Pixel 5"] },
+      testMatch: /mobile-workspace\.spec\.ts/,
+    },
+  ],
   ...(externalBase
     ? {}
     : {

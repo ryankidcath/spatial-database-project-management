@@ -10,6 +10,8 @@ import {
   updateIssueGeometryFeaturePropertiesAction,
 } from "./issue-geometry-feature-actions";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
+import { useIsBelowMd } from "@/lib/use-media-query";
+import { cn } from "@/lib/utils";
 
 export type MapFootprintLayerKind =
   | "demo"
@@ -576,8 +578,10 @@ export function WorkspaceMap({
   ) => void;
 }) {
   const router = useRouter();
+  const isBelowMd = useIsBelowMd();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const zoomControlRef = useRef<L.Control.Zoom | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
   const reopenPopupForFootprintIdRef = useRef<string | null>(null);
   const lastAutoFitBoundsKeyRef = useRef<string | null>(null);
@@ -588,9 +592,17 @@ export function WorkspaceMap({
     if (!el) return;
 
     const map = L.map(el, {
-      zoomControl: true,
+      zoomControl: false,
       scrollWheelZoom: true,
     }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+
+    const zoom = L.control.zoom({
+      position: isBelowMd ? "topright" : "topleft",
+    });
+    zoom.addTo(map);
+    zoomControlRef.current = zoom;
+
+    map.attributionControl.setPosition(isBelowMd ? "bottomleft" : "bottomright");
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -616,8 +628,20 @@ export function WorkspaceMap({
       layerGroupRef.current = null;
       lastAutoFitBoundsKeyRef.current = null;
       userAdjustedViewRef.current = false;
+      zoomControlRef.current = null;
     };
-  }, []);
+  }, [isBelowMd]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const zoom = zoomControlRef.current;
+    if (!map || !zoom) return;
+    const position = isBelowMd ? "topright" : "topleft";
+    if (zoom.getPosition() !== position) {
+      zoom.setPosition(position);
+    }
+    map.attributionControl.setPosition(isBelowMd ? "bottomleft" : "bottomright");
+  }, [isBelowMd]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -772,6 +796,7 @@ export function WorkspaceMap({
         });
       }
       const tableId = btn.getAttribute("data-vt-chat-table-id")?.trim() ?? "";
+      mapRef.current?.closePopup();
       onVirtualRowChat(rowId, pathSegments, tableId);
     };
     el.addEventListener("click", onClick);
@@ -781,8 +806,12 @@ export function WorkspaceMap({
   return (
     <div
       ref={containerRef}
-      className="h-full min-h-0 w-full min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-100"
+      className={cn(
+        "workspace-map-root h-full min-h-0 w-full min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-100",
+        isBelowMd && "touch-manipulation"
+      )}
       role="presentation"
+      aria-label="Peta workspace"
     />
   );
 }

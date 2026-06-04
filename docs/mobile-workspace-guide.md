@@ -1,7 +1,7 @@
 # Panduan mobile workspace — penerapan bertahap
 
 Dokumen ini menjadi **guide implementasi** responsif untuk Spatial PM workspace (sidebar, tab utama, panel kanan chat, tabel virtual, peta).  
-**Status:** Fase 0–1 diimplementasi (2026-06-03); Fase 2+ belum.
+**Status:** Fase 0–5 diimplementasi (2026-06-03).
 
 Referensi terkait:
 
@@ -165,8 +165,10 @@ Setiap fase bisa PR terpisah. Centang `[ ]` saat selesai.
 
 **Acceptance criteria:**
 
-- [ ] Ganti tab tanpa membuka sidebar panjang.
-- [ ] Scope org/project masih jelas di header.
+- [x] Ganti tab tanpa membuka sidebar panjang (bottom bar + tab list tersembunyi di `< md`).
+- [x] Scope org/project masih jelas di header (breadcrumb satu baris truncate di mobile).
+
+**Implementasi (2026-06-03):** `workspace-mobile-tabs.tsx`, `workspace-client.tsx` (bottom bar, breadcrumb), `notifications-bell.tsx` (panel fixed di atas tab bar).
 
 ---
 
@@ -183,8 +185,10 @@ Setiap fase bisa PR terpisah. Centang `[ ]` saat selesai.
 
 **Acceptance criteria:**
 
-- [ ] Satu tabel per layar penuh; scroll horizontal masih jalan untuk banyak kolom.
-- [ ] Chat baris dari grid membuka sheet yang sama seperti desktop panel.
+- [x] Satu tabel per layar penuh; scroll horizontal masih jalan untuk banyak kolom.
+- [x] Chat baris dari grid membuka sheet yang sama seperti desktop panel.
+
+**Implementasi (2026-06-03):** `workspace-virtual-table-list.tsx`, tab Tabel mobile di `workspace-client.tsx`, toolbar overlay + detail baris di `virtual-table-view.tsx` / `workspace-right-panel.tsx`.
 
 ---
 
@@ -195,7 +199,15 @@ Setiap fase bisa PR terpisah. Centang `[ ]` saat selesai.
 | Map | Kontrol peta tidak tertutup sheet; popup “Chat baris” buka sheet |
 | Mention notification | Deep link → sheet chat + tab Map jika geometri |
 
-**File utama:** `workspace-map.tsx`, `workspace-client.tsx` (handler notifikasi).
+**File utama:** `workspace-map.tsx`, `workspace-client.tsx` (handler notifikasi), `globals.css`.
+
+**Acceptance criteria:**
+
+- [x] Kontrol zoom/atribusi peta tidak tertutup bottom tab bar (CSS + posisi kontrol).
+- [x] Popup **Chat baris** → sheet (`openVirtualRowChatPanel`, tutup popup Leaflet).
+- [x] Notifikasi mention baris/geometri → tab Map + sheet chat (`closeWhenOverlayCloses: false`).
+
+**Implementasi (2026-06-03):** `openVirtualRowChatPanel`, kontrol peta mobile di `workspace-map.tsx` + `globals.css`, toolbar lapisan peta touch-friendly.
 
 ---
 
@@ -207,6 +219,17 @@ Setiap fase bisa PR terpisah. Centang `[ ]` saat selesai.
 | `100dvh` / safe area | Sheet & overlay hormati `env(safe-area-inset-*)` |
 | E2E | Playwright viewport mobile untuk smoke: login, buka sheet chat, tutup sidebar |
 | A11y | Focus trap di sheet; `aria-modal`; tombol tutup terlihat |
+
+**Acceptance criteria:**
+
+- [x] Tab hanya di-mount saat pertama dikunjungi (`TabPanelKeepAlive`; Map/Kanban/dll. sudah `dynamic()`).
+- [x] Shell mobile `100dvh` + `viewportFit: cover` + inset pada sidebar, sheet, tab bar, overlay tabel, kontrol peta.
+- [x] Sheet: `role="dialog"`, `aria-modal`, `aria-labelledby`, tombol tutup 44px.
+- [x] E2E `e2e/mobile-workspace.spec.ts` + proyek Playwright `mobile-chrome` (Pixel 5).
+
+**Catatan:** pemecahan fetch server `page.tsx` per tab tetap di `performance-notes-workspace-scope.md` (medium term); Fase 5 fokus lazy client + polish.
+
+**Implementasi (2026-06-03):** `workspace-client.tsx`, `sheet.tsx`, `workspace-right-panel.tsx`, `layout.tsx`, `playwright.config.ts`, `e2e/mobile-workspace.spec.ts`.
 
 ---
 
@@ -320,3 +343,7 @@ Setiap PR: screenshot before/after mobile + desktop smoke.
 |---------|-----------|
 | 2026-06-03 | Draft awal — baseline codebase, fase 0–5, QA checklist |
 | 2026-06-03 | Fase 0–1 selesai — Sheet, `useIsBelowMd`, sidebar drawer, panel chat sheet |
+| 2026-06-03 | Fase 2 selesai — bottom tab bar, breadcrumb mobile, notifikasi responsif |
+| 2026-06-03 | Fase 3 selesai — daftar kartu tabel mobile, overlay toolbar, detail baris |
+| 2026-06-03 | Fase 4 selesai — peta mobile, popup chat baris, notifikasi mention → Map + sheet |
+| 2026-06-03 | Fase 5 selesai — lazy tab, safe area, a11y sheet, E2E mobile |

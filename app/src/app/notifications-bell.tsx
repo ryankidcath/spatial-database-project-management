@@ -10,6 +10,8 @@ import type { UserNotificationRow } from "./user-notification-types";
 import { formatShortDate } from "./schedule-utils";
 import { viewToParam } from "./workspace-url";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
+import { useIsBelowMd } from "@/lib/use-media-query";
 
 const MAX_NOTIFICATIONS = 50;
 
@@ -58,6 +60,7 @@ function projectIdForNotification(n: UserNotificationRow): string | null {
 }
 
 export function NotificationsBell({ userId, notifications, onNavigate }: Props) {
+  const isBelowMd = useIsBelowMd();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [items, setItems] = useState<UserNotificationRow[]>(notifications);
@@ -238,7 +241,14 @@ export function NotificationsBell({ userId, notifications, onNavigate }: Props) 
             className="fixed inset-0 z-40 cursor-default bg-transparent"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute right-0 z-50 mt-1 w-[min(22rem,calc(100vw-2rem)))] rounded-lg border border-slate-200 bg-white py-2 shadow-lg">
+          <div
+            className={cn(
+              "z-50 rounded-lg border border-slate-200 bg-white py-2 shadow-lg",
+              isBelowMd
+                ? "fixed inset-x-2 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] max-h-[min(55dvh,22rem)] w-auto overflow-hidden"
+                : "absolute right-0 mt-1 w-[min(22rem,calc(100vw-2rem))]"
+            )}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 px-3 pb-2">
               <span className="text-xs font-semibold text-slate-700">
                 Kotak masuk

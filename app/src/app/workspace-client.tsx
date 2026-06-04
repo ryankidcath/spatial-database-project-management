@@ -207,6 +207,11 @@ import {
 } from "./workspace-right-panel-context";
 import { WorkspaceRightPanel } from "./workspace-right-panel";
 import {
+  WorkspaceMobileTabBar,
+  WORKSPACE_MOBILE_TAB_BAR_PADDING,
+} from "./workspace-mobile-tabs";
+import { VirtualTableMobileList } from "./workspace-virtual-table-list";
+import {
   SidebarOrganizationChatButton,
   SidebarProjectChatButton,
 } from "./workspace-sidebar-chat";
@@ -268,7 +273,7 @@ function TabPanelKeepAlive({
   className?: string;
 }) {
   const active = activeView === view;
-  const [mounted, setMounted] = useState(active || view === "Dashboard");
+  const [mounted, setMounted] = useState(active);
 
   useEffect(() => {
     if (active) setMounted(true);
@@ -3079,6 +3084,11 @@ export function WorkspaceClient({
     return segments.length > 0 ? segments : ["—"];
   }, [selectedOrganization, selectedProject, activeVirtualTable]);
 
+  const workspaceHeaderBreadcrumbTitle = useMemo(
+    () => workspaceHeaderBreadcrumb.join(" › "),
+    [workspaceHeaderBreadcrumb]
+  );
+
   const virtualColumnsByTableId = useMemo(() => {
     const map = new Map<string, typeof virtualColumns>();
     for (const col of virtualColumns) {
@@ -3785,6 +3795,23 @@ export function WorkspaceClient({
     ]
   );
 
+  const handleActiveViewChange = useCallback(
+    (v: ViewId) => {
+      if (!isViewAllowedForModules(v, enabledModulesForOrg)) return;
+      setActiveView(v);
+      commitScopeInUrl(
+        (q) => {
+          q.set("view", viewToParam(v));
+          if (v !== "Berkas" && v !== "Map") {
+            q.delete("berkas");
+          }
+        },
+        { syncView: false }
+      );
+    },
+    [enabledModulesForOrg, commitScopeInUrl]
+  );
+
   useEffect(() => {
     if (!scopeRoutePending) return;
     setScopeRoutePending(false);
@@ -3831,6 +3858,96 @@ export function WorkspaceClient({
     resolveTaskIdInParams,
   ]);
 
+  const openVirtualRowChatPanel = useCallback(
+    (
+      rowId: string,
+      options?: {
+        projectName?: string | null;
+        tableDisplayName?: string;
+        rowLabel?: string;
+        tableIdHint?: string;
+        switchToMapTab?: boolean;
+      }
+    ) => {
+      const switchToMap = options?.switchToMapTab !== false;
+      if (
+        switchToMap &&
+        isViewAllowedForModules("Map", enabledModulesForOrg)
+      ) {
+        setActiveView("Map");
+        commitScopeInUrl(
+          (q) => {
+            q.set("view", viewToParam("Map"));
+            q.delete("berkas");
+          },
+          { syncView: false }
+        );
+      }
+
+      const fallbackSegments = buildChatRowPathSegments({
+        projectName: options?.projectName ?? selectedProject?.name ?? null,
+        tableDisplayName: options?.tableDisplayName ?? "Tabel",
+        rowLabel: options?.rowLabel ?? "Baris",
+      });
+
+      void resolveVirtualRowChatContextAction(rowId).then((res) => {
+        const api = workspaceRightPanelApiRef.current;
+        if (!api) return;
+
+        const rowMention = (label: string) => ({
+          id: rowId,
+          label,
+          kind: "row" as const,
+        });
+
+        if (res.error || !res.data) {
+          api.openRowPanel({
+            tableId: options?.tableIdHint ?? activeVirtualTable?.id ?? "",
+            rowId,
+            pathSegments: fallbackSegments,
+            tab: "chat",
+            closeWhenOverlayCloses: false,
+            mentionOptions: [
+              ...workspaceChatMentionOptions,
+              rowMention(
+                fallbackSegments[fallbackSegments.length - 1] ?? "Baris"
+              ),
+            ],
+          });
+          return;
+        }
+
+        const { tableId, pathSegments, rowPayload, relationLabels } = res.data;
+        const tableCols = virtualColumns.filter((c) => c.table_id === tableId);
+        api.openRowPanel({
+          tableId,
+          rowId,
+          pathSegments,
+          tab: "chat",
+          closeWhenOverlayCloses: false,
+          rowPayload,
+          relationLabels,
+          mentionOptions: [
+            ...workspaceChatMentionOptions,
+            rowMention(pathSegments[pathSegments.length - 1] ?? "Baris"),
+          ],
+          fileAttachmentOptions: fileAttachmentOptionsFromRowPayload(
+            rowPayload,
+            tableCols
+          ),
+        });
+      });
+    },
+    [
+      enabledModulesForOrg,
+      commitScopeInUrl,
+      selectedProject?.name,
+      activeVirtualTable?.id,
+      workspaceChatMentionOptions,
+      virtualColumns,
+    ]
+  );
+
   const navigateFromNotification = useCallback(
     (n: UserNotificationRow) => {
       const payload = (n.payload ?? {}) as Record<string, unknown>;
@@ -3841,6 +3958,12 @@ export function WorkspaceClient({
         typeof payload.virtual_row_id === "string"
           ? payload.virtual_row_id
           : null;
+      const virtualRowOnMap =
+        Boolean(virtualRowId) &&
+        (payload.scope_type === "virtual_row" ||
+          payload.has_geometry === true ||
+          payload.from_map === true ||
+          payload.scope_type == null);
 
       commitScopeInUrl(
         (q) => {
@@ -3849,7 +3972,7 @@ export function WorkspaceClient({
           q.delete("task");
           q.delete("berkas");
           if (n.kind === "chat_mention") {
-            if (virtualRowId) {
+            if (virtualRowOnMap) {
               q.set("view", viewToParam("Map"));
             }
           } else {
@@ -3860,55 +3983,22 @@ export function WorkspaceClient({
       );
 
       if (n.kind === "chat_mention" && virtualRowId) {
-        const fallbackSegments = buildChatRowPathSegments({
-          projectName: selectedProject?.name ?? null,
+        openVirtualRowChatPanel(virtualRowId, {
+          projectName:
+            typeof payload.project_name === "string"
+              ? payload.project_name
+              : selectedProject?.name ?? null,
           tableDisplayName:
             typeof payload.table_display_name === "string"
               ? payload.table_display_name
               : "Tabel",
           rowLabel:
             typeof payload.row_title === "string" ? payload.row_title : "Baris",
-        });
-        void resolveVirtualRowChatContextAction(virtualRowId).then((res) => {
-          if (res.error || !res.data) {
-            workspaceRightPanelApiRef.current?.openRowPanel({
-              tableId: activeVirtualTable?.id ?? "",
-              rowId: virtualRowId,
-              pathSegments: fallbackSegments,
-              tab: "chat",
-              mentionOptions: [
-                ...workspaceChatMentionOptions,
-                {
-                  id: virtualRowId,
-                  label: fallbackSegments[fallbackSegments.length - 1] ?? "Baris",
-                  kind: "row",
-                },
-              ],
-            });
-            return;
-          }
-          const { tableId, pathSegments, rowPayload, relationLabels } = res.data;
-          const tableCols = virtualColumns.filter((c) => c.table_id === tableId);
-          workspaceRightPanelApiRef.current?.openRowPanel({
-            tableId,
-            rowId: virtualRowId,
-            pathSegments,
-            tab: "chat",
-            rowPayload,
-            relationLabels,
-            mentionOptions: [
-              ...workspaceChatMentionOptions,
-              {
-                id: virtualRowId,
-                label: pathSegments[pathSegments.length - 1] ?? "Baris",
-                kind: "row",
-              },
-            ],
-            fileAttachmentOptions: fileAttachmentOptionsFromRowPayload(
-              rowPayload,
-              tableCols
-            ),
-          });
+          tableIdHint:
+            typeof payload.virtual_table_id === "string"
+              ? payload.virtual_table_id
+              : undefined,
+          switchToMapTab: virtualRowOnMap,
         });
         return;
       }
@@ -3945,10 +4035,9 @@ export function WorkspaceClient({
     },
     [
       commitScopeInUrl,
-      selectedProject?.name,
-      activeVirtualTable?.id,
-      workspaceChatMentionOptions,
+      openVirtualRowChatPanel,
       virtualTables,
+      workspaceChatMentionOptions,
     ]
   );
 
@@ -4140,7 +4229,7 @@ export function WorkspaceClient({
       selectedProjectId={selectedProjectId}
       mentionOptions={workspaceChatMentionOptions}
     />
-    <div className="flex h-svh max-h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-svh max-h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground max-md:min-h-[100dvh] max-md:max-h-[100dvh] max-md:pt-[env(safe-area-inset-top)] max-md:pl-[env(safe-area-inset-left)] max-md:pr-[env(safe-area-inset-right)]">
       {pilotBannerOn ? (
         <div
           role="status"
@@ -4174,6 +4263,7 @@ export function WorkspaceClient({
           "flex min-h-0 h-full min-w-0 w-80 flex-1 basis-0 flex-col overflow-hidden font-sans text-sidebar-foreground",
           isBelowMd && [
             "fixed inset-y-0 left-0 z-50 max-w-[min(20rem,85vw)] shadow-xl transition-transform duration-300 ease-in-out motion-reduce:transition-none",
+            "pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]",
             isSidebarCollapsed ? "-translate-x-full pointer-events-none" : "translate-x-0",
           ]
         )}
@@ -4892,38 +4982,34 @@ export function WorkspaceClient({
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/30">
         <Tabs
           value={activeView}
-          onValueChange={(value) => {
-            const v = value as ViewId;
-            if (isViewAllowedForModules(v, enabledModulesForOrg)) {
-              setActiveView(v);
-            }
-            commitScopeInUrl(
-              (q) => {
-                q.set("view", viewToParam(v));
-                if (v !== "Berkas" && v !== "Map") {
-                  q.delete("berkas");
-                }
-              },
-              { syncView: false }
-            );
-          }}
+          onValueChange={(value) => handleActiveViewChange(value as ViewId)}
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
         >
         <header className="shrink-0 border-b border-border bg-card/90 px-4 py-3 md:px-6 md:py-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
               <button
                 type="button"
-                className="inline-flex h-5 w-5 items-center justify-center text-foreground transition-colors hover:opacity-80"
+                className={cn(
+                  "inline-flex shrink-0 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted hover:opacity-100",
+                  isBelowMd ? "h-11 w-11" : "h-5 w-5 hover:opacity-80"
+                )}
                 onClick={() => setIsSidebarCollapsed((v) => !v)}
                 title={isSidebarCollapsed ? "Buka sidebar" : "Tutup sidebar"}
                 aria-label={isSidebarCollapsed ? "Buka sidebar" : "Tutup sidebar"}
+                aria-expanded={!isSidebarCollapsed}
               >
-                <PanelLeft className="h-4 w-4" />
+                <PanelLeft className={isBelowMd ? "h-5 w-5" : "h-4 w-4"} />
               </button>
               <div className="h-6 w-px bg-border" aria-hidden="true" />
-              <nav aria-label="Lokasi workspace" className="min-w-0">
-                <ol className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm">
+              <nav aria-label="Lokasi workspace" className="min-w-0 flex-1">
+                <p
+                  className="truncate text-sm font-medium text-foreground md:hidden"
+                  title={workspaceHeaderBreadcrumbTitle}
+                >
+                  {workspaceHeaderBreadcrumbTitle}
+                </p>
+                <ol className="hidden min-w-0 flex-wrap items-center gap-x-1.5 text-sm md:flex">
                   {workspaceHeaderBreadcrumb.map((segment, idx) => (
                     <li
                       key={`${segment}-${idx}`}
@@ -4943,6 +5029,7 @@ export function WorkspaceClient({
                             ? "truncate font-medium text-foreground"
                             : "truncate text-muted-foreground"
                         }
+                        title={segment}
                       >
                         {segment}
                       </span>
@@ -5050,7 +5137,10 @@ export function WorkspaceClient({
         </header>
 
         <section
-          className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+          className={cn(
+            "relative flex min-h-0 flex-1 flex-col overflow-hidden",
+            WORKSPACE_MOBILE_TAB_BAR_PADDING
+          )}
           aria-busy={workspaceActionPending}
         >
           {workspaceActionPending ? (
@@ -5081,7 +5171,7 @@ export function WorkspaceClient({
                   : "min-h-full"
               )}
             >
-            <TabsList className="mb-4 h-auto min-h-9 w-full max-w-full shrink-0 flex-wrap justify-start gap-1 rounded-lg bg-muted p-1 text-muted-foreground sm:flex-nowrap">
+            <TabsList className="mb-4 hidden h-auto min-h-9 w-full max-w-full shrink-0 flex-wrap justify-start gap-1 rounded-lg bg-muted p-1 text-muted-foreground md:flex md:flex-nowrap">
               {visibleViews.map((view) => (
                 <TabsTrigger key={view} value={view} className="px-2.5 sm:px-3">
                   {view}
@@ -5117,73 +5207,102 @@ export function WorkspaceClient({
                 </p>
               ) : null}
               <p className="mt-5 text-sm text-muted-foreground">
-                Preview <strong className="text-foreground">50 baris per halaman</strong>{" "}
-                per tabel. Untuk seluruh data dan edit penuh, gunakan{" "}
-                <strong className="text-foreground">Tabel lengkap</strong> (tombol di header
-                tabel atau sidebar).
+                {isBelowMd ? (
+                  <>
+                    Ketuk kartu tabel untuk membuka editor penuh di layar ini. Chat
+                    baris dan detail kolom tersedia dari grid setelah tabel dibuka.
+                  </>
+                ) : (
+                  <>
+                    Preview <strong className="text-foreground">50 baris per halaman</strong>{" "}
+                    per tabel. Untuk seluruh data dan edit penuh, gunakan{" "}
+                    <strong className="text-foreground">Tabel lengkap</strong> (tombol di
+                    header tabel atau sidebar).
+                  </>
+                )}
               </p>
               {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
-                <div className="mt-5 space-y-4">
-                  <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Tabel Organisasi
-                  </p>
-                  {vtablesForOrg.map((vt) => (
-                    <div
-                      key={vt.id}
-                      id={`vtable-${vt.slug}`}
-                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
-                    >
-                      <VirtualTableView
+                isBelowMd ? (
+                  <VirtualTableMobileList
+                    className="mt-5"
+                    sectionTitle="Tabel Organisasi"
+                    tables={vtablesForOrg}
+                    virtualColumnsByTableId={virtualColumnsByTableId}
+                    onOpenTable={(slug) => setActiveVirtualTableSlug(slug)}
+                  />
+                ) : (
+                  <div className="mt-5 space-y-4">
+                    <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Tabel Organisasi
+                    </p>
+                    {vtablesForOrg.map((vt) => (
+                      <div
                         key={vt.id}
-                        table={vt}
-                        columns={
-                          virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
-                        }
-                        projectId={selectedProjectId}
-                        organizationId={canonicalOrgId}
-                        organizationName={selectedOrganization?.name ?? null}
-                        userId={userId}
-                        isOrgAdmin={isOrgAdminOfCanonicalOrg}
-                        projectsForMention={projectsForMention}
-                        memberNameByUserId={memberNameByUserId}
-                        allVirtualTables={allAccessibleVtables}
-                        onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
-                      />
-                    </div>
-                  ))}
-                </div>
+                        id={`vtable-${vt.slug}`}
+                        className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
+                      >
+                        <VirtualTableView
+                          key={vt.id}
+                          table={vt}
+                          columns={
+                            virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
+                          }
+                          projectId={selectedProjectId}
+                          organizationId={canonicalOrgId}
+                          organizationName={selectedOrganization?.name ?? null}
+                          userId={userId}
+                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                          projectsForMention={projectsForMention}
+                          memberNameByUserId={memberNameByUserId}
+                          allVirtualTables={allAccessibleVtables}
+                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )
               ) : null}
 
               {selectedProjectId && vtablesForProject.length > 0 ? (
-                <div className="mt-6 space-y-4">
-                  <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Tabel Project
-                  </p>
-                  {vtablesForProject.map((vt) => (
-                    <div
-                      key={vt.id}
-                      id={`vtable-${vt.slug}`}
-                      className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
-                    >
-                      <VirtualTableView
+                isBelowMd ? (
+                  <VirtualTableMobileList
+                    className="mt-6"
+                    sectionTitle="Tabel Project"
+                    tables={vtablesForProject}
+                    virtualColumnsByTableId={virtualColumnsByTableId}
+                    onOpenTable={(slug) => setActiveVirtualTableSlug(slug)}
+                  />
+                ) : (
+                  <div className="mt-6 space-y-4">
+                    <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Tabel Project
+                    </p>
+                    {vtablesForProject.map((vt) => (
+                      <div
                         key={vt.id}
-                        table={vt}
-                        columns={
-                          virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
-                        }
-                        projectId={selectedProjectId}
-                        organizationId={canonicalOrgId}
-                        organizationName={selectedOrganization?.name ?? null}
-                        userId={userId}
-                        isOrgAdmin={isOrgAdminOfCanonicalOrg}
-                        projectsForMention={projectsForMention}
-                        memberNameByUserId={memberNameByUserId}
-                        allVirtualTables={allAccessibleVtables}
-                        onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
-                      />
-                    </div>
-                  ))}
-                </div>
+                        id={`vtable-${vt.slug}`}
+                        className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
+                      >
+                        <VirtualTableView
+                          key={vt.id}
+                          table={vt}
+                          columns={
+                            virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
+                          }
+                          projectId={selectedProjectId}
+                          organizationId={canonicalOrgId}
+                          organizationName={selectedOrganization?.name ?? null}
+                          userId={userId}
+                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                          projectsForMention={projectsForMention}
+                          memberNameByUserId={memberNameByUserId}
+                          allVirtualTables={allAccessibleVtables}
+                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )
               ) : null}
 
               {allAccessibleVtables.length === 0 ? (
@@ -6791,14 +6910,24 @@ export function WorkspaceClient({
                             </p>
                           )}
                         {mapLayersForSelectedProject.length > 0 && (
-                          <div className="flex items-center gap-2 text-sm">
-                            <span className="font-medium text-muted-foreground">
+                          <div
+                            className={cn(
+                              "flex flex-wrap items-center gap-2 text-sm",
+                              isBelowMd && "gap-3"
+                            )}
+                          >
+                            <span className="w-full font-medium text-muted-foreground md:w-auto">
                               Lapisan peta:
                             </span>
-                            <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                            <label
+                              className={cn(
+                                "inline-flex cursor-pointer items-center gap-2 text-sm text-foreground",
+                                isBelowMd && "min-h-11 rounded-md border border-border/60 px-3 py-2"
+                              )}
+                            >
                               <input
                                 type="checkbox"
-                                className="rounded border-border"
+                                className="size-4 rounded border-border"
                                 checked={mapShowIssueGeometry}
                                 disabled={issueGeometryForSelectedProject.length === 0}
                                 onChange={(e) =>
@@ -6808,10 +6937,16 @@ export function WorkspaceClient({
                               Geometri
                             </label>
                             {vtableGeometryLayers.length > 0 && (
-                              <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                              <label
+                                className={cn(
+                                  "inline-flex cursor-pointer items-center gap-2 text-sm text-foreground",
+                                  isBelowMd &&
+                                    "min-h-11 rounded-md border border-border/60 px-3 py-2"
+                                )}
+                              >
                                 <input
                                   type="checkbox"
-                                  className="rounded border-border"
+                                  className="size-4 rounded border-border"
                                   checked={mapShowVirtualTableGeometry}
                                   onChange={(e) =>
                                     setMapShowVirtualTableGeometry(e.target.checked)
@@ -6829,46 +6964,8 @@ export function WorkspaceClient({
                             footprints={visibleMapLayers}
                             highlightBerkasId={null}
                             onVirtualRowChat={(rowId) => {
-                              void resolveVirtualRowChatContextAction(
-                                rowId
-                              ).then((res) => {
-                                if (res.error || !res.data) {
-                                  toast.error(
-                                    res.error ?? "Gagal membuka chat baris"
-                                  );
-                                  return;
-                                }
-                                const { tableId, pathSegments, rowPayload, relationLabels } =
-                                  res.data;
-                                const tableCols = virtualColumns.filter(
-                                  (c) => c.table_id === tableId
-                                );
-                                workspaceRightPanelApiRef.current?.openRowPanel(
-                                  {
-                                    tableId,
-                                    rowId,
-                                    pathSegments,
-                                    tab: "chat",
-                                    closeWhenOverlayCloses: false,
-                                    rowPayload,
-                                    relationLabels,
-                                    mentionOptions: [
-                                      ...workspaceChatMentionOptions,
-                                      {
-                                        id: rowId,
-                                        label:
-                                          pathSegments[pathSegments.length - 1] ??
-                                          "Baris",
-                                        kind: "row",
-                                      },
-                                    ],
-                                    fileAttachmentOptions:
-                                      fileAttachmentOptionsFromRowPayload(
-                                        rowPayload,
-                                        tableCols
-                                      ),
-                                  }
-                                );
+                              openVirtualRowChatPanel(rowId, {
+                                switchToMapTab: false,
                               });
                             }}
                           />
@@ -6905,10 +7002,15 @@ export function WorkspaceClient({
                             )}
                           </p>
                           {selectedTaskId ? (
-                            <div className="flex shrink-0 items-center gap-2">
+                            <div
+                              className={cn(
+                                "flex shrink-0 flex-wrap items-center gap-2",
+                                isBelowMd && "[&_button]:min-h-11"
+                              )}
+                            >
                               <Button
                                 type="button"
-                                size="sm"
+                                size={isBelowMd ? "default" : "sm"}
                                 variant="secondary"
                                 onClick={openMapGeomDialog}
                               >
@@ -6916,7 +7018,7 @@ export function WorkspaceClient({
                               </Button>
                               <Button
                                 type="button"
-                                size="sm"
+                                size={isBelowMd ? "default" : "sm"}
                                 variant="outline"
                                 className="border-destructive/40 text-destructive hover:bg-destructive/10"
                                 onClick={openMapGeomManageDialog}
@@ -7072,8 +7174,8 @@ export function WorkspaceClient({
 
         {/* Overlay tabel — hanya menutup area konten tab, bukan header workspace */}
         {activeVirtualTable && (
-          <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-background">
-            <div className="shrink-0 border-b border-border bg-card/90 px-4 py-2">
+          <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-background max-md:pb-[env(safe-area-inset-bottom)]">
+            <div className="shrink-0 border-b border-border bg-card/90 px-4 py-2 max-md:pt-[env(safe-area-inset-top)]">
               <button
                 type="button"
                 className="text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -7108,6 +7210,14 @@ export function WorkspaceClient({
         )}
         </section>
         </Tabs>
+        {isBelowMd ? (
+          <WorkspaceMobileTabBar
+            activeView={activeView}
+            visibleViews={visibleViews}
+            onViewChange={handleActiveViewChange}
+            className="absolute inset-x-0 bottom-0 z-20 md:hidden"
+          />
+        ) : null}
       </main>
 
       <WorkspaceRightPanel

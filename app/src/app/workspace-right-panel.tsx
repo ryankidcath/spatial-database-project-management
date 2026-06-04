@@ -46,7 +46,11 @@ export function WorkspaceRightPanel(props: Props) {
         side="bottom"
       >
         {panel ? (
-          <SheetContent side="bottom" className="h-[min(90dvh,100%)] gap-0 p-0">
+          <SheetContent
+            side="bottom"
+            className="h-[min(90dvh,100%)] gap-0 p-0"
+            aria-labelledby="workspace-right-panel-title"
+          >
             <WorkspaceRightPanelInner {...props} panel={panel} />
           </SheetContent>
         ) : null}
@@ -260,10 +264,19 @@ function RightPanelHeader({
 }) {
   const singleChatTab = tabs.length === 1 && tabs[0]?.id === "chat";
 
+  const panelTitle =
+    tabs.find((t) => t.id === activeTab)?.label ?? tabs[0]?.label ?? "Panel";
+
   return (
     <div className="shrink-0 border-b border-border">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
         <div className="flex min-w-0 flex-1 gap-1">
+          <h2
+            id="workspace-right-panel-title"
+            className="sr-only"
+          >
+            {panelTitle}
+          </h2>
           {tabs.map((tab) => (
             <PanelTabButton
               key={tab.id}
@@ -283,7 +296,8 @@ function RightPanelHeader({
           onClick={onClose}
           aria-label="Tutup panel"
         >
-          <X className="size-4" />
+          <X className="size-4" aria-hidden />
+          <span className="sr-only">Tutup</span>
         </button>
       </div>
       <div className="border-t border-border px-3 py-2.5">
@@ -302,13 +316,16 @@ function PanelTabButton({
   label: string;
   onClick?: () => void;
 }) {
+  const isBelowMd = useIsBelowMd();
+
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!onClick}
       className={cn(
-        "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+        "rounded-md font-medium transition-colors",
+        isBelowMd ? "min-h-10 px-3 py-2 text-sm" : "px-2.5 py-1 text-xs",
         active
           ? "bg-primary text-primary-foreground"
           : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -333,16 +350,22 @@ function RowDetailPlaceholder({
   memberNameByUserId: Map<string, string>;
   columns: VirtualColumnRow[];
 }) {
+  const isBelowMd = useIsBelowMd();
   const visibleCols = [...columns]
     .filter((c) => c.data_type !== "geometry")
     .sort((a, b) => a.position - b.position);
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto p-3 text-sm">
+    <div
+      className={cn(
+        "min-h-0 flex-1 overflow-auto text-sm",
+        isBelowMd ? "space-y-3 p-4" : "p-3"
+      )}
+    >
       {visibleCols.length === 0 ? (
         <p className="text-muted-foreground">Tidak ada kolom untuk ditampilkan.</p>
       ) : (
-        <dl className="space-y-2">
+        <dl className={cn(isBelowMd ? "space-y-3" : "space-y-2")}>
           {visibleCols.map((col) => {
             const val = rowPayload?.[col.slug];
             const formatted = formatVirtualTableValueForMapPopup(
@@ -354,17 +377,41 @@ function RowDetailPlaceholder({
             const display =
               formatted.trim() !== "" ? formatted : "—";
             return (
-              <div key={col.id} className="border-b border-border/60 pb-2">
-                <dt className="text-xs font-medium text-muted-foreground">
+              <div
+                key={col.id}
+                className={cn(
+                  isBelowMd
+                    ? "rounded-lg border border-border bg-muted/30 px-3 py-3"
+                    : "border-b border-border/60 pb-2"
+                )}
+              >
+                <dt
+                  className={cn(
+                    "font-medium text-muted-foreground",
+                    isBelowMd ? "text-sm" : "text-xs"
+                  )}
+                >
                   {col.display_name}
                 </dt>
-                <dd className="mt-0.5 break-words text-foreground">{display}</dd>
+                <dd
+                  className={cn(
+                    "mt-1 break-words text-foreground",
+                    isBelowMd && "text-base leading-snug"
+                  )}
+                >
+                  {display}
+                </dd>
               </div>
             );
           })}
         </dl>
       )}
-      <p className="mt-4 text-[10px] text-muted-foreground">
+      <p
+        className={cn(
+          "text-muted-foreground",
+          isBelowMd ? "text-xs" : "mt-4 text-[10px]"
+        )}
+      >
         {pathSegments.join(" › ")}
       </p>
     </div>

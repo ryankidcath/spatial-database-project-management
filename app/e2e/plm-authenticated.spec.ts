@@ -1,27 +1,15 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { loginToWorkspace } from "./workspace-shell";
 
 const e2eEmail = process.env.E2E_EMAIL?.trim();
 const e2ePassword = process.env.E2E_PASSWORD?.trim();
 const hasE2eAuth = Boolean(e2eEmail && e2ePassword);
 
-async function loginToWorkspace(page: Page) {
-  await page.goto("/login");
-  await page.locator("#login-email").fill(e2eEmail!);
-  await page.locator("#login-password").fill(e2ePassword!);
-  await page.getByRole("button", { name: /^Masuk$/i }).click();
-  await page.waitForURL((u: URL) => !u.pathname.includes("/login"), {
-    timeout: 45_000,
-  });
-  await expect(
-    page.getByRole("button", { name: "Berkas", exact: true })
-  ).toBeVisible({ timeout: 20_000 });
-}
-
 (hasE2eAuth ? test.describe : test.describe.skip)(
   "PLM alur (E2E_EMAIL + E2E_PASSWORD)",
   () => {
     test("login lalu tab Berkas tersedia", async ({ page }) => {
-      await loginToWorkspace(page);
+      await loginToWorkspace(page, e2eEmail!, e2ePassword!);
 
       await page.getByRole("button", { name: "Berkas", exact: true }).click();
 
@@ -36,7 +24,7 @@ async function loginToWorkspace(page: Page) {
     test("tab Keuangan sinkron dengan toggle modul finance", async ({
       page,
     }) => {
-      await loginToWorkspace(page);
+      await loginToWorkspace(page, e2eEmail!, e2ePassword!);
 
       const financeRow = page
         .locator("aside")
@@ -62,7 +50,7 @@ async function loginToWorkspace(page: Page) {
     test("deep link view=keuangan sinkron dengan status modul finance", async ({
       page,
     }) => {
-      await loginToWorkspace(page);
+      await loginToWorkspace(page, e2eEmail!, e2ePassword!);
 
       const financeRow = page
         .locator("aside")
@@ -87,7 +75,7 @@ async function loginToWorkspace(page: Page) {
     test("aktifkan modul Keuangan lalu tab Keuangan menampilkan form draft invoice", async ({
       page,
     }) => {
-      await loginToWorkspace(page);
+      await loginToWorkspace(page, e2eEmail!, e2ePassword!);
       await expect(
         page.locator("aside").getByText("Modul organisasi", { exact: true })
       ).toBeVisible({ timeout: 20_000 });
