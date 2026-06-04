@@ -47,32 +47,130 @@ export async function loginToWorkspace(page: Page, email: string, password: stri
   await expect(
     page
       .getByRole("tablist", { name: "Navigasi tab utama" })
-      .or(page.getByRole("button", { name: "Berkas", exact: true }))
+      .or(page.getByRole("heading", { name: "Pilih organisasi" }))
+      .or(page.getByRole("heading", { name: "Pilih project" }))
   ).toBeVisible({ timeout: 45_000 });
 }
 
-/** Buka drawer sidebar lalu klik Chat organisasi atau Chat proyek (pertama). */
-export async function openSidebarChat(
+async function isMobileWorkspaceChrome(page: Page): Promise<boolean> {
+  return page
+    .getByRole("tablist", { name: "Navigasi tab utama" })
+    .isVisible()
+    .catch(() => false);
+}
+
+/** Buka chat: header mobile → tab Chat inbox → sidebar (desktop). */
+export async function openWorkspaceChat(
   page: Page
-): Promise<"organization" | "project"> {
-  await page.getByRole("button", { name: "Buka sidebar" }).click();
-
-  const sidebar = page.locator("aside");
-  const chatEntry = sidebar.getByRole("button", {
-    name: /Chat (organisasi|proyek)/,
-  });
-  await expect(chatEntry.first()).toBeVisible({ timeout: 15_000 });
-
-  const orgChat = sidebar.getByRole("button", { name: "Chat organisasi" });
-  if ((await orgChat.count()) > 0) {
-    await orgChat.first().scrollIntoViewIfNeeded();
-    await orgChat.first().click();
+): Promise<"organization" | "project" | "inbox"> {
+  const orgHeader = page.getByRole("button", { name: "Chat organisasi" });
+  if ((await orgHeader.count()) > 0 && (await orgHeader.first().isVisible())) {
+    await orgHeader.first().click();
     return "organization";
   }
 
-  const projectChat = sidebar.getByRole("button", { name: "Chat proyek" });
-  await expect(projectChat.first()).toBeVisible({ timeout: 15_000 });
-  await projectChat.first().scrollIntoViewIfNeeded();
-  await projectChat.first().click();
+  const projectHeader = page.getByRole("button", { name: "Chat proyek" });
+  if (
+    (await projectHeader.count()) > 0 &&
+    (await projectHeader.first().isVisible())
+  ) {
+    await projectHeader.first().click();
+    return "project";
+  }
+
+  const mobile = await isMobileWorkspaceChrome(page);
+  if (mobile) {
+    const chatTab = page.getByRole("tab", { name: "Chat" });
+    if (await chatTab.isVisible().catch(() => false)) {
+      await chatTab.click();
+      const room = page.getByTestId("chat-inbox-room").first();
+      await expect(room).toBeVisible({ timeout: 20_000 });
+      await room.click();
+      return "inbox";
+    }
+    throw new Error(
+      "Tidak ada pintu chat mobile (header atau tab Chat inbox)."
+    );
+  }
+
+  await page.getByRole("button", { name: "Buka sidebar" }).click();
+  const sidebar = page.locator("aside");
+  const orgSidebar = sidebar.getByRole("button", { name: "Chat organisasi" });
+  if ((await orgSidebar.count()) > 0 && (await orgSidebar.first().isVisible())) {
+    await orgSidebar.first().scrollIntoViewIfNeeded();
+    await orgSidebar.first().click();
+    return "organization";
+  }
+
+  const projectSidebar = sidebar.getByRole("button", { name: "Chat proyek" });
+  await expect(projectSidebar.first()).toBeVisible({ timeout: 15_000 });
+  await projectSidebar.first().scrollIntoViewIfNeeded();
+  await projectSidebar.first().click();
   return "project";
+}
+
+/** @deprecated Gunakan `openWorkspaceChat` */
+export const openSidebarChat = openWorkspaceChat;
+
+/** Selesaikan wizard org → project jika belum di workspace (mobile v2). */
+export async function ensureMobileWorkspaceReady(page: Page) {
+  const tablist = page.getByRole("tablist", { name: "Navigasi tab utama" });
+  if (await tablist.isVisible().catch(() => false)) return;
+
+  const orgHeading = page.getByRole("heading", { name: "Pilih organisasi" });
+  if (await orgHeading.isVisible().catch(() => false)) {
+    await page.getByRole("listitem").first().getByRole("button").click({
+      timeout: 15_000,
+    });
+    await expect(
+      page.getByRole("heading", { name: "Pilih project" })
+    ).toBeVisible({ timeout: 20_000 });
+  }
+
+  const projectHeading = page.getByRole("heading", { name: "Pilih project" });
+  if (await projectHeading.isVisible().catch(() => false)) {
+    await page.getByRole("listitem").first().getByRole("button").click({
+      timeout: 15_000,
+    });
+  }
+
+  await expect(tablist).toBeVisible({ timeout: 25_000 });
+}
+
+export type OpenMobileTableResult = "opened" | "no-table" | "no-rows";
+
+/** Tab Tabel → kartu tabel pertama → sheet detail baris (mobile v2). */
+export async function openFirstMobileTableRowDetail(
+  page: Page
+): Promise<OpenMobileTableResult> {
+  await page.getByRole("tab", { name: "Tabel" }).click();
+  await expect(
+    page.getByText(/Ketuk kartu tabel|Preview.*50 baris/i)
+  ).toBeVisible({ timeout: 20_000 });
+
+  const tableBtn = page.getByTestId("virtual-table-open").first();
+  const hasTable = await tableBtn.isVisible().catch(() => false);
+  if (!hasTable) {
+    return "no-table";
+  }
+
+  await tableBtn.scrollIntoViewIfNeeded();
+  await tableBtn.click();
+  await expect(
+    page.getByRole("button", { name: "← Daftar tabel" })
+  ).toBeVisible({ timeout: 20_000 });
+
+  const rowDetailBtn = page
+    .getByRole("button", { name: /^Buka detail baris / })
+    .first();
+  const hasRows = await rowDetailBtn.isVisible().catch(() => false);
+  if (!hasRows) {
+    return "no-rows";
+  }
+
+  await rowDetailBtn.click();
+  await expect(page.getByRole("tab", { name: "Detail" })).toBeVisible({
+    timeout: 15_000,
+  });
+  return "opened";
 }

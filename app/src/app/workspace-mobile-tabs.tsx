@@ -7,6 +7,7 @@ import {
   GanttChart,
   LayoutDashboard,
   Map,
+  MessageSquare,
   MoreHorizontal,
   Table2,
   Wallet,
@@ -27,6 +28,7 @@ const MOBILE_TAB_ORDER: ViewId[] = [
   "Dashboard",
   "Map",
   "Tabel",
+  "Chat",
   "Berkas",
   "Laporan",
   "Keuangan",
@@ -43,6 +45,7 @@ const VIEW_META: Record<
 > = {
   Dashboard: { label: "Dashboard", shortLabel: "Home", icon: LayoutDashboard },
   Tabel: { label: "Tabel", shortLabel: "Tabel", icon: Table2 },
+  Chat: { label: "Chat", shortLabel: "Chat", icon: MessageSquare },
   Berkas: { label: "Berkas", shortLabel: "Berkas", icon: FolderOpen },
   Laporan: { label: "Laporan", shortLabel: "Laporan", icon: BarChart3 },
   Keuangan: { label: "Keuangan", shortLabel: "Keuangan", icon: Wallet },

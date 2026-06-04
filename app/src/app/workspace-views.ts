@@ -1,6 +1,7 @@
 export const VIEWS = [
   "Dashboard",
   "Tabel",
+  "Chat",
   "Berkas",
   "Laporan",
   "Keuangan",

@@ -1,11 +1,13 @@
 # Panduan mobile workspace — penerapan bertahap
 
 Dokumen ini menjadi **guide implementasi** responsif untuk Spatial PM workspace (sidebar, tab utama, panel kanan chat, tabel virtual, peta).  
-**Status:** Fase 0–5 diimplementasi (2026-06-03).
+**Status:** Fase 0–5 + **mobile v2 Step 1–6** selesai (2026-06-03). Rencana: `docs/mobile-scope-flow-v2.md`.
 
 Referensi terkait:
 
+- `docs/mobile-scope-flow-v2.md` — **rencana eksekusi berikutnya** (org → project → workspace, tabel → baris → detail edit)
 - `docs/chat-feature-decisions.md` — model chat & panel kanan desktop
+- `docs/chat-tab-navigation-options.md` — opsi tab Chat / inbox (draft; putuskan setelah v2 Step 5)
 - `docs/performance-notes-workspace-scope.md` — muat data workspace di server
 - `app/src/app/workspace-client.tsx`, `workspace-right-panel.tsx`, `virtual-table-view.tsx`
 
@@ -312,6 +314,40 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 
 - [ ] Tombol Login → “Memproses…” → loading workspace → masuk
 
+### Mobile v2 — wizard scope (Step 1–2)
+
+- [ ] 390px: login → (jika >1 org) pilih organisasi → pilih project → bottom bar muncul
+- [ ] 1 org: langsung layar project
+- [ ] URL `?org=&project=` valid → skip wizard ke workspace
+- [ ] **Ganti proyek** / **Ganti organisasi** di header; overlay & chat tertutup
+- [ ] Refresh dengan scope lengkap di URL → tetap workspace (tanpa wizard ulang)
+- [ ] Refresh di pemilih project → tetap project (sessionStorage)
+- [ ] Swipe dari tepi kiri di layar project → kembali ke org (jika >1 org)
+
+### Mobile v2 — tabel & baris (Step 3–4)
+
+- [ ] Tab Tabel → kartu tabel → daftar baris (tanpa grid horizontal)
+- [ ] Tap baris → sheet Detail (form editable) + tab Chat
+- [ ] Simpan field → daftar baris ter-update
+- [ ] ← Daftar tabel menutup overlay
+
+### Mobile v2 — chat (Step 5–5b)
+
+- [ ] Header: Chat Org (tim inti) / Chat Proyek — tidak di sidebar mobile
+- [ ] Tab **Chat** di bottom bar → inbox room → sheet obrolan
+- [ ] Mention notifikasi baris → Peta + chat; org/proyek/tabel → tab Chat
+
+### Desktop regresi (v2 tidak mengubah wizard)
+
+- [ ] 1280px: sidebar org/project; grid tabel; panel kanan chat
+- [ ] Tab Chat desktop: master–detail; panel `w-96` off di tab Chat
+
+---
+
+## Tab disembunyikan sementara (2026-06-04)
+
+**Kanban**, **Kalender**, dan **Gantt** tidak tampil di tab desktop maupun bottom bar mobile. URL lama (`?view=kanban`, `kalender`, `gantt`) dialihkan ke Dashboard. Kode view tetap ada; aktifkan lagi lewat `HIDDEN_WORKSPACE_VIEWS` di `app/src/app/workspace-modules.ts`.
+
 ---
 
 ## Di luar scope (v1 mobile)
@@ -326,12 +362,23 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 
 ## Urutan PR yang disarankan
 
+### v1 (selesai)
+
 1. **PR-A:** Fase 0 + hook media query  
 2. **PR-B:** Fase 1 (sidebar drawer + panel sheet + padding)  
 3. **PR-C:** Fase 1 sisa — tombol chat baris touch-friendly  
 4. **PR-D:** Fase 2 navigasi  
 5. **PR-E:** Fase 3 tabel  
 6. **PR-F:** Fase 4–5  
+
+### v2 (berikutnya — lihat `mobile-scope-flow-v2.md`)
+
+1. **PR-G:** Step 1 wizard org/project  
+2. **PR-H:** Step 2 ganti proyek dari header  
+3. **PR-I:** Step 3 daftar baris mobile  
+4. **PR-J:** Step 4 detail vertikal editable  
+5. **PR-K:** Step 5 chat + keputusan opsi A/B/C  
+6. **PR-L:** Step 6 polish & E2E  
 
 Setiap PR: screenshot before/after mobile + desktop smoke.
 
@@ -347,3 +394,10 @@ Setiap PR: screenshot before/after mobile + desktop smoke.
 | 2026-06-03 | Fase 3 selesai — daftar kartu tabel mobile, overlay toolbar, detail baris |
 | 2026-06-03 | Fase 4 selesai — peta mobile, popup chat baris, notifikasi mention → Map + sheet |
 | 2026-06-03 | Fase 5 selesai — lazy tab, safe area, a11y sheet, E2E mobile |
+| 2026-06-04 | Sembunyikan Kanban/Kalender/Gantt; draft opsi tab Chat di `chat-tab-navigation-options.md` |
+| 2026-06-04 | Rencana mobile v2: `mobile-scope-flow-v2.md` (wizard scope, tabel→baris→detail edit) |
+| 2026-06-03 | v2 Step 3 — tap tabel → daftar baris (`workspace-mobile-row-list`, `workspace-mobile-virtual-table-overlay`) |
+| 2026-06-03 | v2 Step 4 — detail baris editable mobile (`workspace-mobile-row-detail-form`, sheet 100dvh) |
+| 2026-06-03 | v2 Step 5 — chat header mobile, guard org, notifikasi → workspace/Map/Tabel |
+| 2026-06-03 | v2 Step 5b — tab Chat inbox (`workspace-chat-inbox.tsx`, Opsi B) |
+| 2026-06-03 | v2 Step 6 — sessionStorage fase, swipe back, E2E wizard/tabel/detail, QA checklist |

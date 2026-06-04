@@ -1,5 +1,19 @@
 import { VIEWS, type ViewId } from "./workspace-views";
 
+/**
+ * Tab yang disembunyikan sementara dari navigasi (URL lama dialihkan ke Dashboard).
+ * Kode Kanban/Kalender/Gantt tetap di repo untuk diaktifkan lagi nanti.
+ */
+export const HIDDEN_WORKSPACE_VIEWS: ReadonlySet<ViewId> = new Set([
+  "Kanban",
+  "Kalender",
+  "Gantt",
+]);
+
+export function isWorkspaceViewHidden(view: ViewId): boolean {
+  return HIDDEN_WORKSPACE_VIEWS.has(view);
+}
+
 export type ModuleRegistryRow = {
   module_code: string;
   display_name: string;
@@ -41,6 +55,7 @@ export function isViewAllowedForModules(
   view: ViewId,
   enabled: Set<string>
 ): boolean {
+  if (isWorkspaceViewHidden(view)) return false;
   const req = viewRequiredModuleCode(view);
   if (!req) return true;
   return enabled.has(req);

@@ -25,6 +25,8 @@ function VirtualTableListCard({
   return (
     <button
       type="button"
+      data-testid="virtual-table-open"
+      aria-label={`Buka tabel ${table.display_name}`}
       onClick={onOpen}
       className={cn(
         "flex w-full min-h-[4.5rem] items-center gap-3 rounded-xl border border-border bg-card p-4 text-left shadow-sm",

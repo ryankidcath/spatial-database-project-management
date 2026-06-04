@@ -210,6 +210,19 @@ import {
   WorkspaceMobileTabBar,
   WORKSPACE_MOBILE_TAB_BAR_PADDING,
 } from "./workspace-mobile-tabs";
+import { WorkspaceMobileOrgPicker } from "./workspace-mobile-org-picker";
+import { WorkspaceMobileProjectPicker } from "./workspace-mobile-project-picker";
+import { WorkspaceMobileVirtualTableOverlay } from "./workspace-mobile-virtual-table-overlay";
+import { WorkspaceMobileHeaderChat } from "./workspace-mobile-header-chat";
+import { WorkspaceChatInbox } from "./workspace-chat-inbox";
+import {
+  type MobileScopePhase,
+  clearMobileScopeSession,
+  readMobileScopeSession,
+  writeMobileScopeSession,
+} from "./workspace-mobile-scope";
+import { WorkspaceMobileSwipeBack } from "./workspace-mobile-swipe-back";
+import { WorkspaceRightPanelMobileChatGuard } from "./workspace-right-panel-mobile-guard";
 import { VirtualTableMobileList } from "./workspace-virtual-table-list";
 import {
   SidebarOrganizationChatButton,
@@ -1996,6 +2009,10 @@ export function WorkspaceClient({
   );
   const isBelowMd = useIsBelowMd();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [mobileScopePhase, setMobileScopePhase] = useState<MobileScopePhase | null>(
+    null
+  );
+  const mobileScopeInitializedRef = useRef(false);
 
   useEffect(() => {
     setIsSidebarCollapsed(isBelowMd);
@@ -2044,6 +2061,127 @@ export function WorkspaceClient({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     projectIdFromSearchParams
   );
+
+  const showMobileScopeWizard = isBelowMd && mobileScopePhase !== "workspace";
+
+  useEffect(() => {
+    if (!isBelowMd) {
+      setMobileScopePhase(null);
+      mobileScopeInitializedRef.current = false;
+      return;
+    }
+
+    const urlOrg = searchParams.get("org");
+    const urlProject = searchParams.get("project");
+    const orgValid =
+      Boolean(urlOrg) && orgsWithProjects.some((o) => o.id === urlOrg);
+    const projectValid =
+      orgValid &&
+      Boolean(urlProject) &&
+      projects.some(
+        (p) => p.id === urlProject && p.organization_id === urlOrg
+      );
+
+    if (orgValid && projectValid) {
+      setMobileScopePhase("workspace");
+      mobileScopeInitializedRef.current = true;
+      return;
+    }
+
+    if (!mobileScopeInitializedRef.current) {
+      const saved = readMobileScopeSession();
+      const savedOrgValid =
+        Boolean(saved?.orgId) &&
+        orgsWithProjects.some((o) => o.id === saved!.orgId);
+      const savedProjectValid =
+        savedOrgValid &&
+        Boolean(saved?.projectId) &&
+        projects.some(
+          (p) =>
+            p.id === saved!.projectId &&
+            p.organization_id === saved!.orgId
+        );
+
+      if (
+        saved?.phase === "workspace" &&
+        savedOrgValid &&
+        savedProjectValid &&
+        saved.orgId &&
+        saved.projectId
+      ) {
+        setCanonicalOrgId(saved.orgId);
+        setSelectedProjectId(saved.projectId);
+        setSelectedTaskId(null);
+        setMobileScopePhase("workspace");
+        const p = new URLSearchParams(searchParams.toString());
+        p.set("org", saved.orgId);
+        p.set("project", saved.projectId);
+        p.delete("task");
+        if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+        const qs = p.toString();
+        window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+        mobileScopeInitializedRef.current = true;
+        return;
+      }
+
+      if (
+        saved?.phase === "project" &&
+        savedOrgValid &&
+        saved.orgId &&
+        !projectValid
+      ) {
+        setCanonicalOrgId(saved.orgId);
+        setSelectedProjectId(null);
+        setSelectedTaskId(null);
+        setMobileScopePhase("project");
+        const p = new URLSearchParams(searchParams.toString());
+        p.set("org", saved.orgId);
+        p.delete("project");
+        p.delete("task");
+        if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+        const qs = p.toString();
+        window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+        mobileScopeInitializedRef.current = true;
+        return;
+      }
+
+      if (orgsWithProjects.length === 1) {
+        const onlyOrgId = orgsWithProjects[0]!.id;
+        setCanonicalOrgId(onlyOrgId);
+        setSelectedProjectId(null);
+        setSelectedTaskId(null);
+        setMobileScopePhase("project");
+      } else if (orgValid && urlOrg) {
+        setCanonicalOrgId(urlOrg);
+        setSelectedProjectId(null);
+        setSelectedTaskId(null);
+        setMobileScopePhase("project");
+      } else {
+        setCanonicalOrgId(null);
+        setSelectedProjectId(null);
+        setSelectedTaskId(null);
+        setMobileScopePhase("org");
+      }
+      mobileScopeInitializedRef.current = true;
+    }
+  }, [
+    isBelowMd,
+    searchParams,
+    orgsWithProjects,
+    projects,
+  ]);
+
+  useEffect(() => {
+    if (!isBelowMd || mobileScopePhase == null) {
+      clearMobileScopeSession();
+      return;
+    }
+    writeMobileScopeSession({
+      phase: mobileScopePhase,
+      orgId: canonicalOrgId,
+      projectId: selectedProjectId,
+    });
+  }, [isBelowMd, mobileScopePhase, canonicalOrgId, selectedProjectId]);
 
   useEffect(() => {
     if (isBelowMd) setIsSidebarCollapsed(true);
@@ -2161,7 +2299,6 @@ export function WorkspaceClient({
 
   const activeViewFromUrl = useMemo((): ViewId => {
     const viewParam = searchParams.get("view");
-    if (viewParam?.toLowerCase() === "chat") return "Dashboard";
     const raw = parseViewParam(viewParam) ?? "Dashboard";
     const enabled = effectiveEnabledModuleCodes(
       canonicalOrgId,
@@ -2282,6 +2419,10 @@ export function WorkspaceClient({
       dirty = true;
     }
     const viewParsed = parseViewParam(p.get("view"));
+    if (viewParsed && !isViewAllowedForModules(viewParsed, enabled)) {
+      p.set("view", viewToParam("Dashboard"));
+      dirty = true;
+    }
     const berkasParam = p.get("berkas");
     const berkasAllowedViews = new Set(["Berkas", "Map"]);
     if (
@@ -3813,6 +3954,100 @@ export function WorkspaceClient({
   );
 
   useEffect(() => {
+    if (visibleViews.includes(activeView)) return;
+    handleActiveViewChange("Dashboard");
+  }, [visibleViews, activeView, handleActiveViewChange]);
+
+  useEffect(() => {
+    if (activeView === "Chat" && !isBelowMd) {
+      workspaceRightPanelApiRef.current?.closePanel();
+    }
+  }, [activeView, isBelowMd]);
+
+  const handleMobileSelectOrg = useCallback(
+    (orgId: string) => {
+      setCanonicalOrgId(orgId);
+      setSelectedProjectId(null);
+      setSelectedTaskId(null);
+      setMobileScopePhase("project");
+      const p = new URLSearchParams(searchParams.toString());
+      p.set("org", orgId);
+      p.delete("project");
+      p.delete("task");
+      if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+      const qs = p.toString();
+      window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+    },
+    [searchParams]
+  );
+
+  const handleMobileBackToOrg = useCallback(() => {
+    setCanonicalOrgId(null);
+    setSelectedProjectId(null);
+    setSelectedTaskId(null);
+    setMobileScopePhase("org");
+    const p = new URLSearchParams(searchParams.toString());
+    p.delete("org");
+    p.delete("project");
+    p.delete("task");
+    const qs = p.toString();
+    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+  }, [searchParams]);
+
+  const handleMobileSelectProject = useCallback(
+    (projectId: string) => {
+      if (!canonicalOrgId) return;
+      setMobileScopePhase("workspace");
+      commitScopeInUrl(
+        (q) => {
+          q.set("org", canonicalOrgId);
+          q.set("project", projectId);
+          q.delete("task");
+          if (!q.get("view")) q.set("view", viewToParam("Dashboard"));
+        },
+        { syncView: false }
+      );
+    },
+    [canonicalOrgId, commitScopeInUrl]
+  );
+
+  const resetMobileWorkspaceOverlays = useCallback(() => {
+    setActiveVirtualTableSlug(null);
+    workspaceRightPanelApiRef.current?.closePanel();
+    setIsSidebarCollapsed(true);
+  }, []);
+
+  /** Dari workspace: kembali ke pemilih project (org tetap). */
+  const handleMobileOpenProjectPicker = useCallback(() => {
+    if (!canonicalOrgId) return;
+    resetMobileWorkspaceOverlays();
+    setSelectedProjectId(null);
+    setSelectedTaskId(null);
+    setMobileScopePhase("project");
+    const p = new URLSearchParams(searchParams.toString());
+    p.set("org", canonicalOrgId);
+    p.delete("project");
+    p.delete("task");
+    const qs = p.toString();
+    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+  }, [canonicalOrgId, searchParams, resetMobileWorkspaceOverlays]);
+
+  /** Dari workspace: kembali ke pemilih organisasi. */
+  const handleMobileOpenOrgPicker = useCallback(() => {
+    resetMobileWorkspaceOverlays();
+    setCanonicalOrgId(null);
+    setSelectedProjectId(null);
+    setSelectedTaskId(null);
+    setMobileScopePhase("org");
+    const p = new URLSearchParams(searchParams.toString());
+    p.delete("org");
+    p.delete("project");
+    p.delete("task");
+    const qs = p.toString();
+    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+  }, [searchParams, resetMobileWorkspaceOverlays]);
+
+  useEffect(() => {
     if (!scopeRoutePending) return;
     setScopeRoutePending(false);
   }, [searchParams, scopeRoutePending]);
@@ -3948,6 +4183,19 @@ export function WorkspaceClient({
     ]
   );
 
+  const userHasOrgStaffFor = useCallback(
+    (orgId: string | null | undefined) => {
+      if (!orgId || !userId) return false;
+      return organizationMembers.some(
+        (m) =>
+          m.organization_id === orgId &&
+          m.user_id === userId &&
+          ORG_STAFF_ROLES.has(m.role)
+      );
+    },
+    [organizationMembers, userId]
+  );
+
   const navigateFromNotification = useCallback(
     (n: UserNotificationRow) => {
       const payload = (n.payload ?? {}) as Record<string, unknown>;
@@ -3964,6 +4212,10 @@ export function WorkspaceClient({
           payload.has_geometry === true ||
           payload.from_map === true ||
           payload.scope_type == null);
+
+      if (isBelowMd) {
+        setMobileScopePhase("workspace");
+      }
 
       commitScopeInUrl(
         (q) => {
@@ -4006,27 +4258,57 @@ export function WorkspaceClient({
       if (n.kind === "chat_mention") {
         const scopeType =
           typeof payload.scope_type === "string" ? payload.scope_type : null;
+        if (isViewAllowedForModules("Chat", enabledModulesForOrg)) {
+          setActiveView("Chat");
+          commitScopeInUrl(
+            (q) => {
+              q.set("view", viewToParam("Chat"));
+            },
+            { syncView: false }
+          );
+        }
         const api = workspaceRightPanelApiRef.current;
         if (!api) return;
         if (scopeType === "organization") {
-          api.openOrganizationChat({
-            mentionOptions: workspaceChatMentionOptions,
-          });
+          const orgId = n.organization_id ?? canonicalOrgId;
+          if (!userHasOrgStaffFor(orgId)) return;
+          if (isBelowMd) {
+            api.openOrganizationChat({
+              mentionOptions: workspaceChatMentionOptions,
+            });
+          }
         } else if (scopeType === "project" && projectId) {
-          api.openProjectChat({
-            projectId,
-            mentionOptions: workspaceChatMentionOptions,
-          });
+          if (isBelowMd) {
+            api.openProjectChat({
+              projectId,
+              mentionOptions: workspaceChatMentionOptions,
+            });
+          }
         } else if (scopeType === "virtual_table") {
           const tableId =
             typeof payload.virtual_table_id === "string"
               ? payload.virtual_table_id
               : null;
           if (tableId) {
-            api.openTableChat({
-              tableId,
-              mentionOptions: workspaceChatMentionOptions,
-            });
+            if (
+              isBelowMd &&
+              isViewAllowedForModules("Tabel", enabledModulesForOrg)
+            ) {
+              setActiveView("Tabel");
+              commitScopeInUrl(
+                (q) => {
+                  q.set("view", viewToParam("Tabel"));
+                  q.delete("berkas");
+                },
+                { syncView: false }
+              );
+            }
+            if (isBelowMd) {
+              api.openTableChat({
+                tableId,
+                mentionOptions: workspaceChatMentionOptions,
+              });
+            }
             const vt = virtualTables.find((t) => t.id === tableId);
             if (vt) setActiveVirtualTableSlug(vt.slug);
           }
@@ -4038,6 +4320,10 @@ export function WorkspaceClient({
       openVirtualRowChatPanel,
       virtualTables,
       workspaceChatMentionOptions,
+      isBelowMd,
+      canonicalOrgId,
+      userHasOrgStaffFor,
+      enabledModulesForOrg,
     ]
   );
 
@@ -4229,6 +4515,11 @@ export function WorkspaceClient({
       selectedProjectId={selectedProjectId}
       mentionOptions={workspaceChatMentionOptions}
     />
+    <WorkspaceRightPanelMobileChatGuard
+      isBelowMd={isBelowMd}
+      mobileScopePhase={mobileScopePhase}
+      hasOrgStaffAccess={hasOrgStaffAccess}
+    />
     <div className="flex h-svh max-h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground max-md:min-h-[100dvh] max-md:max-h-[100dvh] max-md:pt-[env(safe-area-inset-top)] max-md:pl-[env(safe-area-inset-left)] max-md:pr-[env(safe-area-inset-right)]">
       {pilotBannerOn ? (
         <div
@@ -4239,6 +4530,36 @@ export function WorkspaceClient({
         </div>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
+      {showMobileScopeWizard ? (
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-border bg-background">
+          {mobileScopePhase === "org" ? (
+            <WorkspaceMobileOrgPicker
+              organizations={orgsWithProjects}
+              onSelectOrg={handleMobileSelectOrg}
+              userEmail={userEmail}
+            />
+          ) : mobileScopePhase === "project" ? (
+            <WorkspaceMobileSwipeBack
+              enabled={orgsWithProjects.length > 1}
+              onSwipeBack={handleMobileBackToOrg}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <WorkspaceMobileProjectPicker
+                organization={selectedOrganization}
+                projects={projectsInOrg}
+                onSelectProject={handleMobileSelectProject}
+                onBackToOrganizations={handleMobileBackToOrg}
+                showBackToOrg={orgsWithProjects.length > 1}
+              />
+            </WorkspaceMobileSwipeBack>
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
+              <Spinner className="mr-2 size-4" />
+              Memuat…
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-border bg-background">
       {isBelowMd && !isSidebarCollapsed ? (
         <button
@@ -4287,7 +4608,10 @@ export function WorkspaceClient({
               Organisasi
             </p>
             <div className="flex items-center gap-1">
-              {canonicalOrgId && hasOrgStaffAccess && userId ? (
+              {canonicalOrgId &&
+              hasOrgStaffAccess &&
+              userId &&
+              !isBelowMd ? (
                 <SidebarOrganizationChatButton
                   mentionOptions={workspaceChatMentionOptions}
                   disabled={workspaceActionPending}
@@ -4684,7 +5008,7 @@ export function WorkspaceClient({
                     <span className="min-w-0 flex-1 truncate">{p.name}</span>
                     <ProjectChatUnreadBadge projectId={p.id} />
                   </Button>
-                  {userId ? (
+                  {userId && !isBelowMd ? (
                     <SidebarProjectChatButton
                       projectId={p.id}
                       mentionOptions={workspaceChatMentionOptions}
@@ -5009,6 +5333,30 @@ export function WorkspaceClient({
                 >
                   {workspaceHeaderBreadcrumbTitle}
                 </p>
+                {isBelowMd && mobileScopePhase === "workspace" ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 min-h-9 px-2.5 text-xs"
+                      onClick={handleMobileOpenProjectPicker}
+                    >
+                      Ganti proyek
+                    </Button>
+                    {orgsWithProjects.length > 1 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 min-h-9 px-2.5 text-xs text-muted-foreground"
+                        onClick={handleMobileOpenOrgPicker}
+                      >
+                        Ganti organisasi
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
                 <ol className="hidden min-w-0 flex-wrap items-center gap-x-1.5 text-sm md:flex">
                   {workspaceHeaderBreadcrumb.map((segment, idx) => (
                     <li
@@ -5109,6 +5457,14 @@ export function WorkspaceClient({
                     </PopoverContent>
                   </Popover>
                 )}
+                {isBelowMd && mobileScopePhase === "workspace" && userId ? (
+                  <WorkspaceMobileHeaderChat
+                    hasOrgStaffAccess={hasOrgStaffAccess}
+                    selectedProjectId={selectedProjectId}
+                    mentionOptions={workspaceChatMentionOptions}
+                    disabled={workspaceActionPending}
+                  />
+                ) : null}
                 <NotificationsBell
                   userId={userId}
                   notifications={userNotifications}
@@ -5161,12 +5517,15 @@ export function WorkspaceClient({
           <ScrollArea
             className="min-h-0 flex-1"
             type="scroll"
-            fillAvailableHeight={activeView === "Map"}
+            fillAvailableHeight={
+              activeView === "Map" || (isBelowMd && activeView === "Chat")
+            }
           >
             <div
               className={cn(
                 "flex w-full flex-col p-6",
-                activeView === "Map"
+                activeView === "Map" ||
+                (isBelowMd && activeView === "Chat")
                   ? "box-border h-full min-h-0 flex-1 basis-0 overflow-hidden"
                   : "min-h-full"
               )}
@@ -5198,6 +5557,34 @@ export function WorkspaceClient({
               )}
               </TabPanelKeepAlive>
             </TabsContent>
+            <TabsContent value="Chat" className="min-h-0 w-full min-w-0 flex-none outline-none">
+              <TabPanelKeepAlive view="Chat" activeView={activeView}>
+              <div
+                className={cn(
+                  "min-h-0 w-full",
+                  isBelowMd
+                    ? "flex h-full min-h-0 flex-1 flex-col"
+                    : "mt-2"
+                )}
+              >
+                <WorkspaceChatInbox
+                  organizationId={canonicalOrgId}
+                  organizationName={selectedOrganization?.name ?? null}
+                  projectId={selectedProjectId}
+                  hasOrgStaffAccess={hasOrgStaffAccess}
+                  userId={userId}
+                  userEmail={userEmail}
+                  isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                  projectsForMention={projectsForMention}
+                  memberNameByUserId={memberNameByUserId}
+                  virtualTables={allAccessibleVtables}
+                  virtualColumns={virtualColumns}
+                  mentionOptions={workspaceChatMentionOptions}
+                  isBelowMd={isBelowMd}
+                />
+              </div>
+              </TabPanelKeepAlive>
+            </TabsContent>
             <TabsContent value="Tabel" className="min-h-0 w-full min-w-0 flex-none outline-none">
               <TabPanelKeepAlive view="Tabel" activeView={activeView}>
               {canonicalOrgId && !hasOrgStaffAccess ? (
@@ -5209,8 +5596,8 @@ export function WorkspaceClient({
               <p className="mt-5 text-sm text-muted-foreground">
                 {isBelowMd ? (
                   <>
-                    Ketuk kartu tabel untuk membuka editor penuh di layar ini. Chat
-                    baris dan detail kolom tersedia dari grid setelah tabel dibuka.
+                    Ketuk kartu tabel untuk melihat daftar baris. Ketuk baris untuk
+                    detail; edit dilakukan di layar detail (bukan di grid).
                   </>
                 ) : (
                   <>
@@ -7174,6 +7561,18 @@ export function WorkspaceClient({
 
         {/* Overlay tabel — hanya menutup area konten tab, bukan header workspace */}
         {activeVirtualTable && (
+          isBelowMd ? (
+            <WorkspaceMobileVirtualTableOverlay
+              table={activeVirtualTable}
+              columns={activeVirtualTableColumns}
+              organizationId={canonicalOrgId}
+              organizationName={selectedOrganization?.name ?? null}
+              userId={userId}
+              projectsForMention={projectsForMention}
+              memberNameByUserId={memberNameByUserId}
+              onBack={() => setActiveVirtualTableSlug(null)}
+            />
+          ) : (
           <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-background max-md:pb-[env(safe-area-inset-bottom)]">
             <div className="shrink-0 border-b border-border bg-card/90 px-4 py-2 max-md:pt-[env(safe-area-inset-top)]">
               <button
@@ -7207,6 +7606,7 @@ export function WorkspaceClient({
               />
             </div>
           </div>
+          )
         )}
         </section>
         </Tabs>
@@ -7220,18 +7620,20 @@ export function WorkspaceClient({
         ) : null}
       </main>
 
-      <WorkspaceRightPanel
-        organizationId={canonicalOrgId}
-        organizationName={selectedOrganization?.name ?? null}
-        projectId={selectedProjectId}
-        userId={userId}
-        userEmail={userEmail}
-        isOrgAdmin={isOrgAdminOfCanonicalOrg}
-        projectsForMention={projectsForMention}
-        memberNameByUserId={memberNameByUserId}
-        allVirtualTables={allAccessibleVtables}
-        virtualColumns={virtualColumns}
-      />
+      {activeView !== "Chat" || isBelowMd ? (
+        <WorkspaceRightPanel
+          organizationId={canonicalOrgId}
+          organizationName={selectedOrganization?.name ?? null}
+          projectId={selectedProjectId}
+          userId={userId}
+          userEmail={userEmail}
+          isOrgAdmin={isOrgAdminOfCanonicalOrg}
+          projectsForMention={projectsForMention}
+          memberNameByUserId={memberNameByUserId}
+          allVirtualTables={allAccessibleVtables}
+          virtualColumns={virtualColumns}
+        />
+      ) : null}
       </div>
 
       {/* Create virtual table dialog */}
@@ -7247,6 +7649,7 @@ export function WorkspaceClient({
         }}
       />
       </div>
+      )}
       </div>
     </div>
     </WorkspaceRightPanelProvider>

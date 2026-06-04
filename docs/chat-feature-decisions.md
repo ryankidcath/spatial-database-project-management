@@ -3,7 +3,9 @@
 Dokumen ini mencatat keputusan produk dan teknis untuk fitur chat bertingkat (room organisasi, project, virtual row, peta).  
 **Status:** diimplementasi (migration `0055_chat_schema.sql`+, UI panel kanan workspace + sidebar; tanpa tab Chat).
 
-Referensi diskusi: pilihan bernomor dari analisis awal (§1–§21).
+Referensi diskusi: pilihan bernomor dari analisis awal (§1–§21).  
+Opsi tab Chat / inbox (belum diputuskan): `docs/chat-tab-navigation-options.md`.  
+Rencana navigasi mobile v2 (wizard scope, edit di detail): `docs/mobile-scope-flow-v2.md`.
 
 ---
 

@@ -71,12 +71,18 @@ export type OpenRowPanelInput = {
   closeWhenOverlayCloses?: boolean;
 };
 
+export type PatchRowPanelInput = {
+  rowPayload?: Record<string, unknown>;
+  relationLabels?: Record<string, string>;
+};
+
 export type WorkspaceRightPanelApi = {
   panel: WorkspaceRightPanelState | null;
   openOrganizationChat: (input: OpenOrganizationChatInput) => void;
   openProjectChat: (input: OpenProjectChatInput) => void;
   openTableChat: (input: OpenTableChatInput) => void;
   openRowPanel: (input: OpenRowPanelInput) => void;
+  patchRowPanel: (patch: PatchRowPanelInput) => void;
   closePanel: () => void;
   setRowTab: (tab: WorkspaceRightPanelRowTab) => void;
   isOrganizationChatOpen: () => boolean;
@@ -146,6 +152,12 @@ export function WorkspaceRightPanelProvider({
 
   const closePanel = useCallback(() => setPanel(null), []);
 
+  const patchRowPanel = useCallback((patch: PatchRowPanelInput) => {
+    setPanel((prev) =>
+      prev?.kind === "row" ? { ...prev, ...patch } : prev
+    );
+  }, []);
+
   const setRowTab = useCallback((tab: WorkspaceRightPanelRowTab) => {
     setPanel((prev) =>
       prev?.kind === "row" ? { ...prev, tab } : prev
@@ -181,6 +193,7 @@ export function WorkspaceRightPanelProvider({
       openProjectChat,
       openTableChat,
       openRowPanel,
+      patchRowPanel,
       closePanel,
       setRowTab,
       isOrganizationChatOpen,
@@ -194,6 +207,7 @@ export function WorkspaceRightPanelProvider({
       openProjectChat,
       openTableChat,
       openRowPanel,
+      patchRowPanel,
       closePanel,
       setRowTab,
       isOrganizationChatOpen,

@@ -8,6 +8,7 @@ import { useIsBelowMd } from "@/lib/use-media-query";
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { rowLabelFromPath } from "@/lib/chat-row-context";
 import { formatVirtualTableValueForMapPopup } from "@/lib/virtual-table-map-popup";
+import { WorkspaceMobileRowDetailForm } from "./workspace-mobile-row-detail-form";
 import { ChatPanel } from "./chat-panel";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import {
@@ -48,7 +49,7 @@ export function WorkspaceRightPanel(props: Props) {
         {panel ? (
           <SheetContent
             side="bottom"
-            className="h-[min(90dvh,100%)] gap-0 p-0"
+            className="flex h-[100dvh] max-h-[100dvh] flex-col gap-0 rounded-none p-0 pb-[env(safe-area-inset-bottom)]"
             aria-labelledby="workspace-right-panel-title"
           >
             <WorkspaceRightPanelInner {...props} panel={panel} />
@@ -83,6 +84,7 @@ function WorkspaceRightPanelInner({
   virtualColumns,
   panel,
 }: Props & { panel: WorkspaceRightPanelState }) {
+  const isBelowMd = useIsBelowMd();
   const { closePanel, setRowTab } = useWorkspaceRightPanel();
   const { refresh: refreshTableChatBadges } = useVirtualTableChatUnread();
 
@@ -212,11 +214,15 @@ function WorkspaceRightPanelInner({
 
         {panel.kind === "row" ? (
           panel.tab === "detail" ? (
-            <RowDetailPlaceholder
+            <RowDetailSection
+              isBelowMd={isBelowMd}
+              rowId={panel.rowId}
+              tableId={panel.tableId}
               pathSegments={panel.pathSegments}
               rowPayload={panel.rowPayload}
               relationLabels={panel.relationLabels}
               memberNameByUserId={memberNameByUserId}
+              organizationId={organizationId}
               columns={
                 virtualColumns.filter((c) => c.table_id === panel.tableId)
               }
@@ -334,6 +340,52 @@ function PanelTabButton({
     >
       {label}
     </button>
+  );
+}
+
+function RowDetailSection({
+  isBelowMd,
+  rowId,
+  tableId,
+  pathSegments,
+  rowPayload,
+  relationLabels = {},
+  memberNameByUserId,
+  organizationId,
+  columns,
+}: {
+  isBelowMd: boolean;
+  rowId: string;
+  tableId: string;
+  pathSegments: string[];
+  rowPayload?: Record<string, unknown>;
+  relationLabels?: Record<string, string>;
+  memberNameByUserId: Map<string, string>;
+  organizationId: string | null;
+  columns: VirtualColumnRow[];
+}) {
+  if (isBelowMd) {
+    return (
+      <WorkspaceMobileRowDetailForm
+        rowId={rowId}
+        tableId={tableId}
+        columns={columns}
+        rowPayload={rowPayload}
+        relationLabels={relationLabels}
+        memberNameByUserId={memberNameByUserId}
+        organizationId={organizationId}
+      />
+    );
+  }
+
+  return (
+    <RowDetailPlaceholder
+      pathSegments={pathSegments}
+      rowPayload={rowPayload}
+      relationLabels={relationLabels}
+      memberNameByUserId={memberNameByUserId}
+      columns={columns}
+    />
   );
 }
 
