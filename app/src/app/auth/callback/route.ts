@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
   if (user?.id) {
-    await writeUserAuthAuditLog(supabase, {
+    void writeUserAuthAuditLog(supabase, {
       actorUserId: user.id,
       action: "user_logged_in",
       payload: { source: "auth_callback", email: user.email ?? null },

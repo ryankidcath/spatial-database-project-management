@@ -129,33 +129,46 @@ export default async function Home({ searchParams }: HomeProps) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (user?.id) {
-    const [{ count: membershipCount }, { count: orgMembershipCount }] =
-      await Promise.all([
-        supabase
-          .schema("core_pm")
-          .from("project_members")
-          .select("project_id", { count: "exact", head: true })
-          .eq("user_id", user.id),
-        supabase
-          .schema("core_pm")
-          .from("organization_members")
-          .select("organization_id", { count: "exact", head: true })
-          .eq("user_id", user.id),
-      ]);
-    if ((membershipCount ?? 0) === 0 && (orgMembershipCount ?? 0) === 0) {
-      await supabase.schema("core_pm").rpc("join_demo_org_projects");
-    }
-  }
+  const membershipBootstrapPromise = user?.id
+    ? (async (): Promise<boolean> => {
+        const [{ count: membershipCount }, { count: orgMembershipCount }] =
+          await Promise.all([
+            supabase
+              .schema("core_pm")
+              .from("project_members")
+              .select("project_id", { count: "exact", head: true })
+              .eq("user_id", user.id),
+            supabase
+              .schema("core_pm")
+              .from("organization_members")
+              .select("organization_id", { count: "exact", head: true })
+              .eq("user_id", user.id),
+          ]);
+        if ((membershipCount ?? 0) === 0 && (orgMembershipCount ?? 0) === 0) {
+          await supabase.schema("core_pm").rpc("join_demo_org_projects");
+          return true;
+        }
+        return false;
+      })()
+    : Promise.resolve(false);
 
-  // Jangan filter server by ?org=: anggota bisa tanpa project di org itu; RLS tetap membatasi baris.
-  const { data: projects, error: projectsError } = await supabase
-    .schema("core_pm")
-    .from("projects")
-    .select("id, name, key, organization_id, description, hierarchy_labels")
-    .is("deleted_at", null)
-    .eq("is_archived", false)
-    .order("name");
+  const fetchProjects = () =>
+    supabase
+      .schema("core_pm")
+      .from("projects")
+      .select("id, name, key, organization_id, description, hierarchy_labels")
+      .is("deleted_at", null)
+      .eq("is_archived", false)
+      .order("name");
+
+  const [{ data: projectsInitial, error: projectsError }, joinedDemo] =
+    await Promise.all([fetchProjects(), membershipBootstrapPromise]);
+
+  let projects = projectsInitial;
+  if (joinedDemo) {
+    const { data: projectsAfterDemo } = await fetchProjects();
+    projects = projectsAfterDemo;
+  }
 
   const projectList = (projects ?? []) as ProjectRow[];
   const selectedOrgId = projectList.some((p) => p.organization_id === selectedOrgIdFromQuery)

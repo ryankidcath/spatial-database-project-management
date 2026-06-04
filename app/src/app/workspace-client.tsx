@@ -136,6 +136,7 @@ import type {
 import { BerkasListPanel } from "./berkas-list-panel";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
+import { useIsBelowMd } from "@/lib/use-media-query";
 import type { BerkasPermohonanRow } from "./plm-berkas-types";
 import type {
   LegalisasiGuFileRow,
@@ -1988,7 +1989,12 @@ export function WorkspaceClient({
   const [collapsedIssueIds, setCollapsedIssueIds] = useState<Set<string>>(() =>
     parentIssueIdsWithChildren(issues)
   );
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const isBelowMd = useIsBelowMd();
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+
+  useEffect(() => {
+    setIsSidebarCollapsed(isBelowMd);
+  }, [isBelowMd]);
 
   useEffect(() => {
     setLiveUserPresence(userPresence);
@@ -2033,6 +2039,11 @@ export function WorkspaceClient({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     projectIdFromSearchParams
   );
+
+  useEffect(() => {
+    if (isBelowMd) setIsSidebarCollapsed(true);
+  }, [canonicalOrgId, selectedProjectId, isBelowMd]);
+
   const taskIdFromSearchParams = useMemo(() => {
     const q = searchParams.get("task");
     if (!q || !selectedProjectId) return null;
@@ -4138,15 +4149,34 @@ export function WorkspaceClient({
           {pilotBannerText}
         </div>
       ) : null}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 md:p-3">
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-border bg-background">
+      {isBelowMd && !isSidebarCollapsed ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          aria-label="Tutup sidebar"
+          onClick={() => setIsSidebarCollapsed(true)}
+        />
+      ) : null}
       <div
-        className={`relative flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden bg-sidebar/95 transition-[width] duration-300 ease-in-out motion-reduce:transition-none ${
-          isSidebarCollapsed ? "w-0 border-transparent" : "w-80 border-r border-sidebar-border/90"
-        }`}
+        className={cn(
+          "relative flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden bg-sidebar/95 transition-[width] duration-300 ease-in-out motion-reduce:transition-none",
+          isBelowMd
+            ? "w-0 border-transparent"
+            : isSidebarCollapsed
+              ? "w-0 border-transparent"
+              : "w-80 border-r border-sidebar-border/90"
+        )}
       >
       <aside
-        className="flex min-h-0 h-full min-w-0 w-80 flex-1 basis-0 flex-col overflow-hidden font-sans text-sidebar-foreground"
+        className={cn(
+          "flex min-h-0 h-full min-w-0 w-80 flex-1 basis-0 flex-col overflow-hidden font-sans text-sidebar-foreground",
+          isBelowMd && [
+            "fixed inset-y-0 left-0 z-50 max-w-[min(20rem,85vw)] shadow-xl transition-transform duration-300 ease-in-out motion-reduce:transition-none",
+            isSidebarCollapsed ? "-translate-x-full pointer-events-none" : "translate-x-0",
+          ]
+        )}
         aria-hidden={isSidebarCollapsed}
         inert={isSidebarCollapsed ? true : undefined}
       >
@@ -4879,7 +4909,7 @@ export function WorkspaceClient({
           }}
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
         >
-        <header className="shrink-0 border-b border-border bg-card/90 px-6 py-4">
+        <header className="shrink-0 border-b border-border bg-card/90 px-4 py-3 md:px-6 md:py-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex items-center gap-3">
               <button

@@ -18,6 +18,11 @@ export const metadata: Metadata = {
   description: "Core PM workspace with optional PLM, spatial, and finance modules",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{

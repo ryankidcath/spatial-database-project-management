@@ -4,10 +4,13 @@ import {
   shouldShowSignupForm,
   signupRestrictionDescription,
 } from "@/lib/pilot-config";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  AuthFormPendingFieldset,
+  AuthSubmitButton,
+} from "./auth-submit-button";
 
 type Props = {
   searchParams: Promise<{ error?: string; message?: string; mode?: string }>;
@@ -52,34 +55,34 @@ export default async function LoginPage({ searchParams }: Props) {
         )}
 
         {mode === "login" ? (
-          <form action={login} className="mt-6 space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="login-email">Email</Label>
-              <Input
-                id="login-email"
-                name="email"
-                type="email"
-                required
-                autoComplete="email"
-                placeholder="m@example.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="login-password">Password</Label>
-                <span className="text-sm text-muted-foreground">Forgot your password?</span>
+          <form action={login}>
+            <AuthFormPendingFieldset>
+              <div className="space-y-2">
+                <Label htmlFor="login-email">Email</Label>
+                <Input
+                  id="login-email"
+                  name="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  placeholder="m@example.com"
+                />
               </div>
-              <Input
-                id="login-password"
-                name="password"
-                type="password"
-                required
-                autoComplete="current-password"
-              />
-            </div>
-            <Button type="submit" className="h-11 w-full text-base">
-              Login
-            </Button>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="login-password">Password</Label>
+                  <span className="text-sm text-muted-foreground">Forgot your password?</span>
+                </div>
+                <Input
+                  id="login-password"
+                  name="password"
+                  type="password"
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
+              <AuthSubmitButton pendingLabel="Memproses…">Login</AuthSubmitButton>
+            </AuthFormPendingFieldset>
           </form>
         ) : (
           <>
@@ -90,56 +93,58 @@ export default async function LoginPage({ searchParams }: Props) {
               </p>
             )}
             {showSignup && (
-              <form action={signup} className="mt-6 space-y-5">
-                <div className="space-y-2">
-                  <Label htmlFor="signup-fullname">Full Name</Label>
-                  <Input
-                    id="signup-fullname"
-                    name="full_name"
-                    type="text"
-                    autoComplete="name"
-                    placeholder="John Doe"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-email">Email</Label>
-                  <Input
-                    id="signup-email"
-                    name="email"
-                    type="email"
-                    required
-                    autoComplete="email"
-                    placeholder="m@example.com"
-                  />
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
+              <form action={signup}>
+                <AuthFormPendingFieldset>
                   <div className="space-y-2">
-                    <Label htmlFor="signup-password">Password</Label>
+                    <Label htmlFor="signup-fullname">Full Name</Label>
                     <Input
-                      id="signup-password"
-                      name="password"
-                      type="password"
-                      required
-                      autoComplete="new-password"
-                      minLength={6}
+                      id="signup-fullname"
+                      name="full_name"
+                      type="text"
+                      autoComplete="name"
+                      placeholder="John Doe"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="signup-confirm-password">Confirm Password</Label>
+                    <Label htmlFor="signup-email">Email</Label>
                     <Input
-                      id="signup-confirm-password"
-                      name="confirm_password"
-                      type="password"
+                      id="signup-email"
+                      name="email"
+                      type="email"
                       required
-                      autoComplete="new-password"
-                      minLength={6}
+                      autoComplete="email"
+                      placeholder="m@example.com"
                     />
                   </div>
-                </div>
-                <p className="text-sm text-muted-foreground">Must be at least 8 characters long.</p>
-                <Button type="submit" className="h-11 w-full text-base">
-                  Create Account
-                </Button>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="signup-password">Password</Label>
+                      <Input
+                        id="signup-password"
+                        name="password"
+                        type="password"
+                        required
+                        autoComplete="new-password"
+                        minLength={6}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="signup-confirm-password">Confirm Password</Label>
+                      <Input
+                        id="signup-confirm-password"
+                        name="confirm_password"
+                        type="password"
+                        required
+                        autoComplete="new-password"
+                        minLength={6}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Must be at least 8 characters long.</p>
+                  <AuthSubmitButton pendingLabel="Memproses…">
+                    Create Account
+                  </AuthSubmitButton>
+                </AuthFormPendingFieldset>
               </form>
             )}
           </>

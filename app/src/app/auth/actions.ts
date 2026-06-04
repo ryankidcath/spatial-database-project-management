@@ -23,14 +23,13 @@ export async function login(formData: FormData) {
     redirect("/login?error=" + encodeURIComponent(error.message));
   }
   if (data.user?.id) {
-    await writeUserAuthAuditLog(supabase, {
+    void writeUserAuthAuditLog(supabase, {
       actorUserId: data.user.id,
       action: "user_logged_in",
       payload: { source: "password_login", email },
     });
   }
 
-  revalidatePath("/", "layout");
   redirect("/");
 }
 
@@ -84,7 +83,6 @@ export async function signup(formData: FormData) {
   }
 
   if (data.session) {
-    revalidatePath("/", "layout");
     redirect("/");
   }
 

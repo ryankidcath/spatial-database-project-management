@@ -2,7 +2,9 @@
 
 import { X } from "lucide-react";
 import { RowChatContextPath } from "@/components/row-chat-context-path";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { useIsBelowMd } from "@/lib/use-media-query";
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { rowLabelFromPath } from "@/lib/chat-row-context";
 import { formatVirtualTableValueForMapPopup } from "@/lib/virtual-table-map-popup";
@@ -11,6 +13,7 @@ import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import {
   useWorkspaceRightPanel,
   type WorkspaceRightPanelRowTab,
+  type WorkspaceRightPanelState,
 } from "./workspace-right-panel-context";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
 
@@ -27,7 +30,43 @@ type Props = {
   virtualColumns: VirtualColumnRow[];
 };
 
-export function WorkspaceRightPanel({
+export function WorkspaceRightPanel(props: Props) {
+  const { panel, closePanel } = useWorkspaceRightPanel();
+  const isBelowMd = useIsBelowMd();
+
+  if (!props.organizationId || !props.userId) return null;
+
+  if (isBelowMd) {
+    return (
+      <Sheet
+        open={panel != null}
+        onOpenChange={(open) => {
+          if (!open) closePanel();
+        }}
+        side="bottom"
+      >
+        {panel ? (
+          <SheetContent side="bottom" className="h-[min(90dvh,100%)] gap-0 p-0">
+            <WorkspaceRightPanelInner {...props} panel={panel} />
+          </SheetContent>
+        ) : null}
+      </Sheet>
+    );
+  }
+
+  if (!panel) return null;
+
+  return (
+    <aside
+      className="relative z-30 flex w-96 shrink-0 flex-col border-l border-border bg-card"
+      aria-label="Panel sisi kanan"
+    >
+      <WorkspaceRightPanelInner {...props} panel={panel} />
+    </aside>
+  );
+}
+
+function WorkspaceRightPanelInner({
   organizationId,
   organizationName = null,
   projectId,
@@ -38,11 +77,10 @@ export function WorkspaceRightPanel({
   memberNameByUserId,
   allVirtualTables,
   virtualColumns,
-}: Props) {
-  const { panel, closePanel, setRowTab } = useWorkspaceRightPanel();
+  panel,
+}: Props & { panel: WorkspaceRightPanelState }) {
+  const { closePanel, setRowTab } = useWorkspaceRightPanel();
   const { refresh: refreshTableChatBadges } = useVirtualTableChatUnread();
-
-  if (!panel || !organizationId || !userId) return null;
 
   const table =
     panel.kind === "table-chat" || panel.kind === "row"
@@ -71,19 +109,14 @@ export function WorkspaceRightPanel({
       return organizationName ? [organizationName] : ["Organisasi"];
     }
     if (panel.kind === "project-chat") {
-      return projectForPanel
-        ? [projectForPanel.name]
-        : ["Proyek"];
+      return projectForPanel ? [projectForPanel.name] : ["Proyek"];
     }
     if (panel.kind === "row") return panel.pathSegments;
     return tablePathSegments ?? ["Tabel"];
   })();
 
   return (
-    <aside
-      className="relative z-30 flex w-96 shrink-0 flex-col border-l border-border bg-card"
-      aria-label="Panel sisi kanan"
-    >
+    <>
       {panel.kind === "row" ? (
         <RightPanelHeader
           tabs={[
@@ -109,11 +142,11 @@ export function WorkspaceRightPanel({
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 pt-0">
             <ChatPanel
               scopeType="organization"
-              organizationId={organizationId}
+              organizationId={organizationId!}
               embedded
               title="Chat organisasi"
               subtitle="Tim inti organisasi"
-              userId={userId}
+              userId={userId!}
               userEmail={userEmail}
               authorNameByUserId={memberNameByUserId}
               mentionOptions={panel.mentionOptions}
@@ -128,12 +161,12 @@ export function WorkspaceRightPanel({
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 pt-0">
             <ChatPanel
               scopeType="project"
-              organizationId={organizationId}
+              organizationId={organizationId!}
               projectId={panel.projectId}
               embedded
               title={projectForPanel.name}
               subtitle="Diskusi proyek"
-              userId={userId}
+              userId={userId!}
               userEmail={userEmail}
               authorNameByUserId={memberNameByUserId}
               mentionOptions={panel.mentionOptions}
@@ -155,13 +188,13 @@ export function WorkspaceRightPanel({
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 pt-0">
             <ChatPanel
               scopeType="virtual_table"
-              organizationId={organizationId}
+              organizationId={organizationId!}
               projectId={tableProjectId}
               virtualTableId={table.id}
               embedded
               title={table.display_name}
               subtitle="Diskusi umum tentang tabel ini"
-              userId={userId}
+              userId={userId!}
               userEmail={userEmail}
               authorNameByUserId={memberNameByUserId}
               mentionOptions={panel.mentionOptions}
@@ -188,12 +221,12 @@ export function WorkspaceRightPanel({
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 pt-0">
               <ChatPanel
                 scopeType="virtual_row"
-                organizationId={organizationId}
+                organizationId={organizationId!}
                 projectId={tableProjectId}
                 virtualRowId={panel.rowId}
                 embedded
                 title={rowLabelFromPath(panel.pathSegments)}
-                userId={userId}
+                userId={userId!}
                 userEmail={userEmail}
                 authorNameByUserId={memberNameByUserId}
                 mentionOptions={panel.mentionOptions}
@@ -206,7 +239,7 @@ export function WorkspaceRightPanel({
           )
         ) : null}
       </div>
-    </aside>
+    </>
   );
 }
 
@@ -246,7 +279,7 @@ function RightPanelHeader({
         </div>
         <button
           type="button"
-          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
           onClick={onClose}
           aria-label="Tutup panel"
         >

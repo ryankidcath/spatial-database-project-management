@@ -1,0 +1,322 @@
+# Panduan mobile workspace — penerapan bertahap
+
+Dokumen ini menjadi **guide implementasi** responsif untuk Spatial PM workspace (sidebar, tab utama, panel kanan chat, tabel virtual, peta).  
+**Status:** Fase 0–1 diimplementasi (2026-06-03); Fase 2+ belum.
+
+Referensi terkait:
+
+- `docs/chat-feature-decisions.md` — model chat & panel kanan desktop
+- `docs/performance-notes-workspace-scope.md` — muat data workspace di server
+- `app/src/app/workspace-client.tsx`, `workspace-right-panel.tsx`, `virtual-table-view.tsx`
+
+---
+
+## Ringkasan produk
+
+| Platform | Peran utama |
+|----------|-------------|
+| **Desktop / tablet landscape** | Kerja penuh: grid tabel, edit sel, peta, PLM, chat samping |
+| **Tablet portrait / HP** | Navigasi, notifikasi, chat singkat, lihat status; **bukan** pengganti editor grid penuh |
+
+Prinsip: **satu layar aktif** di viewport sempit — jangan memaksa tiga kolom (sidebar + main + panel chat) sekaligus.
+
+---
+
+## Kondisi codebase saat ini (baseline)
+
+### Layout workspace
+
+```
+┌─────────────┬──────────────────────┬──────────────┐
+│  Sidebar    │       Main           │ Panel kanan  │
+│  w-80       │  (tabs + konten)     │  w-96        │
+│  (320px)    │                      │  (384px)     │
+└─────────────┴──────────────────────┴──────────────┘
+```
+
+- `workspace-client.tsx`: flex horizontal; sidebar `w-80`, toggle `isSidebarCollapsed` (default **terbuka**).
+- `WorkspaceRightPanel`: `aside` tetap `w-96 shrink-0` di samping `main` — **bukan** overlay di mobile.
+- Padding luar workspace: `p-3` pada container rounded.
+
+### Chat & tabel
+
+- Chat: panel kanan (`WorkspaceRightPanel`), scope org / project / tabel / baris — lihat chat-feature-decisions §7.
+- Tabel tab: preview embedded (paginated) + overlay **Tabel lengkap** (`layout="overlay"`).
+- Tombol chat baris di grid: ikon kecil, opacity rendah; `isRowPanelOpen` belum dipakai untuk highlight aktif.
+
+### Login
+
+- Halaman `/login`: sudah `max-w-sm`, form satu kolom; loading submit (`useFormStatus`) + `app/loading.tsx` setelah redirect.
+- Performa post-login: `page.tsx` masih memuat banyak modul sekaligus (lihat performance-notes).
+
+### Komponen UI
+
+- Belum ada `Sheet` / `Drawer` di `components/ui/` (hanya `Dialog`, `Popover`, dll.).
+- Breakpoint Tailwind dipakai sporadis (`sm:` di tab list, beberapa dialog); **tidak** ada pola mobile khusus workspace.
+
+### Risiko di layar ~390px
+
+- Main hampir tidak terlihat jika sidebar + panel chat terbuka.
+- Tap target kecil di aksi baris tabel.
+- Scroll horizontal tabel berat tetapi masih usable.
+
+---
+
+## Keputusan desain (target)
+
+### Breakpoint rekomendasi
+
+| Token | Lebar | Perilaku workspace |
+|-------|-------|-------------------|
+| default | `< 768px` | **Mobile** — satu layar aktif, overlay/sheet |
+| `md` | `≥ 768px` | **Tablet** — sidebar drawer; panel chat bisa sheet atau sempit |
+| `lg` | `≥ 1024px` | **Desktop** — layout 3 kolom seperti sekarang (opsional: sidebar collapse) |
+
+**Keputusan awal:** gunakan **`md` (768px)** sebagai batas mobile ↔ desktop layout, kecuali uji lapangan meminta `lg`.
+
+### Satu layar aktif (mobile)
+
+| Konteks | Yang tampil |
+|---------|-------------|
+| Navigasi org/project/tabel | Sidebar **full-screen drawer** + backdrop; tutup setelah pilih |
+| Kerja (tab) | **Main** full width |
+| Chat / detail baris | **Sheet** ~`90dvh` (bawah atau kanan), menutupi main — bukan kolom ketiga |
+| Overlay tabel lengkap | Tetap full-bleed di `main`; panel chat sheet **di atas** overlay |
+
+### Chat mobile
+
+- Room & RLS **tidak berubah** — hanya shell UI.
+- Satu komponen isi: `ChatPanel` + header path (`RowChatContextPath`) + tab Detail | Chat untuk baris.
+- Buka dari: sidebar, header tabel, baris grid, popup peta → sheet yang sama (`virtual_row` dari peta = dari tabel).
+
+### Tabel mobile
+
+- Tab **Tabel**: daftar kartu per tabel (bukan banyak preview grid stacked).
+- Tap tabel → layar penuh overlay / route dedicated (reuse `VirtualTableView` `layout="overlay"`).
+- Edit intensif: prioritaskan tab **Detail** di sheet baris; inline edit grid opsional fase belakang.
+- Chat baris: ikon lebih besar, state aktif jelas, min touch target **44×44px**.
+
+### Login mobile
+
+- Pertahankan pola sekarang; pastikan tombol submit ≥ 44px tinggi efektif.
+- Loading workspace: `loading.tsx` sudah cukup; pertimbangkan skeleton ringan fase 2.
+
+### Performa (paralel dengan layout)
+
+- Lazy-load data per tab/modul di `page.tsx` (tidak blocking layout mobile).
+- Lihat `performance-notes-workspace-scope.md`.
+
+---
+
+## Fase implementasi
+
+Setiap fase bisa PR terpisah. Centang `[ ]` saat selesai.
+
+### Fase 0 — Persiapan (tanpa ubah UX besar)
+
+- [x] Tambah komponen `Sheet` (Base UI `Drawer`) ke `components/ui/sheet.tsx`
+- [x] Hook utilitas `useMediaQuery` / `useIsBelowMd` — `lib/use-media-query.ts`, `lib/breakpoints.ts`
+- [ ] Dokumentasi breakpoint di Storybook / catatan QA manual (opsional)
+- [x] Viewport meta di `app/src/app/layout.tsx` (`export const viewport`)
+
+**File sentuh:** `components/ui/sheet.tsx`, `lib/use-media-query.ts`, `lib/breakpoints.ts`.
+
+---
+
+### Fase 1 — Quick wins (dampak langsung di HP)
+
+**Tujuan:** layar tidak “pecah” tiga kolom; user tahu sesuatu terjadi saat tap.
+
+| Item | Perubahan | File utama |
+|------|-----------|------------|
+| Sidebar default tutup di mobile | `useState` awal atau `useEffect` set collapsed jika `< md` | `workspace-client.tsx` |
+| Sidebar sebagai drawer | Di mobile: `fixed inset-0 z-40`, backdrop klik tutup; di desktop: perilaku sekarang | `workspace-client.tsx` |
+| Panel kanan → sheet | `< md`: `WorkspaceRightPanel` render di `Sheet` full height; `≥ md`: `aside` `w-96` | `workspace-right-panel.tsx`, mungkin wrapper baru |
+| Padding responsif | `p-3` → `p-2 md:p-3`; header `px-4 md:px-6` | `workspace-client.tsx` |
+| Chat baris — feedback | Pakai `isRowPanelOpen(rowId)`; opacity/touch target tombol | `virtual-table-view.tsx` |
+
+**Acceptance criteria (Fase 1):**
+
+- [x] iPhone/Android portrait: hanya **main** yang terlihat saat mulai; sidebar tidak memakan 320px permanen.
+- [x] Buka chat tabel/baris: sheet `90dvh`, tutup via X / swipe / backdrop (`WorkspaceRightPanel` + `Sheet`).
+- [x] Toggle sidebar: overlay + backdrop; tidak mendorong main ke lebar ~0.
+- [x] Regresi desktop `≥ md`: layout 3 kolom masih berfungsi seperti sekarang.
+- [x] Chat baris: `isRowPanelOpen`, touch target 44px, highlight aktif.
+
+**Implementasi (2026-06-03):** `workspace-client.tsx` (drawer sidebar), `workspace-right-panel.tsx` (sheet mobile), `virtual-table-view.tsx` (tombol chat baris).
+
+**Risiko / catatan:**
+
+- `WorkspaceRightPanelCloser` / `TableSync` — pastikan sheet open/close tetap sinkron dengan state context yang ada.
+- `z-index`: overlay tabel (`z-20`) vs sheet chat (`z-30`+) — urutan harus konsisten.
+
+---
+
+### Fase 2 — Navigasi & tab utama
+
+| Item | Perubahan |
+|------|-----------|
+| Bottom tab bar (opsional) | 4–5 tab sering dipakai: Dashboard, Map, Tabel, Berkas, … — hanya `< md` |
+| Tab list atas | Tetap wrap atau disembunyikan jika bottom bar ada |
+| Breadcrumb header | Truncate + satu baris di mobile |
+| Notifikasi bell | Popover lebar penuh `max-w-[calc(100vw-2rem)]` di mobile |
+
+**File utama:** `workspace-client.tsx`, komponen baru `workspace-mobile-tabs.tsx` (opsional).
+
+**Acceptance criteria:**
+
+- [ ] Ganti tab tanpa membuka sidebar panjang.
+- [ ] Scope org/project masih jelas di header.
+
+---
+
+### Fase 3 — Tabel virtual mobile-first
+
+| Item | Perubahan |
+|------|-----------|
+| Daftar tabel di tab Tabel | Kartu ringkas per tabel; tap → overlay lengkap |
+| Kurangi preview embedded | Opsional: sembunyikan grid 50-baris di `< md`, hanya daftar + CTA “Buka” |
+| Overlay tabel | Toolbar wrap; tombol Chat tabel / Filter touch-friendly |
+| Detail baris | Tab Detail di sheet sebagai form read-only / edit field vertikal |
+
+**File utama:** `virtual-table-view.tsx`, `workspace-client.tsx` (TabsContent Tabel).
+
+**Acceptance criteria:**
+
+- [ ] Satu tabel per layar penuh; scroll horizontal masih jalan untuk banyak kolom.
+- [ ] Chat baris dari grid membuka sheet yang sama seperti desktop panel.
+
+---
+
+### Fase 4 — Peta & notifikasi
+
+| Item | Perubahan |
+|------|-----------|
+| Map | Kontrol peta tidak tertutup sheet; popup “Chat baris” buka sheet |
+| Mention notification | Deep link → sheet chat + tab Map jika geometri |
+
+**File utama:** `workspace-map.tsx`, `workspace-client.tsx` (handler notifikasi).
+
+---
+
+### Fase 5 — Performa & polish
+
+| Item | Perubahan |
+|------|-----------|
+| Data loading | Lazy per tab; kurangi payload awal `page.tsx` di mobile (jika terukur perlu) |
+| `100dvh` / safe area | Sheet & overlay hormati `env(safe-area-inset-*)` |
+| E2E | Playwright viewport mobile untuk smoke: login, buka sheet chat, tutup sidebar |
+| A11y | Focus trap di sheet; `aria-modal`; tombol tutup terlihat |
+
+---
+
+## Pola teknis (implementasi)
+
+### Deteksi mobile
+
+```tsx
+// Contoh kontrak — implementasi di lib/
+export function useIsBelowMd(): boolean;
+// true jika window.matchMedia("(max-width: 767px)").matches
+```
+
+Hindari duplikasi breakpoint di banyak file — satu hook atau context `WorkspaceLayoutMode: "mobile" | "desktop"`.
+
+### Panel kanan responsif (sketsa)
+
+```tsx
+// Pseudocode — bukan kode final
+const isMobile = useIsBelowMd();
+const { panel, closePanel, ... } = useWorkspaceRightPanel();
+
+if (!panel) return null;
+
+if (isMobile) {
+  return (
+    <Sheet open onOpenChange={(o) => !o && closePanel()}>
+      <SheetContent side="bottom" className="h-[90dvh] p-0">
+        <RightPanelContent ... />
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+return <aside className="w-96 ...">...</aside>;
+```
+
+Ekstrak isi panel ke komponen bersama (`RightPanelContent`) agar `ChatPanel` / header tidak duplikat.
+
+### Sidebar drawer (sketsa)
+
+- Mobile + sidebar open: `fixed inset-y-0 left-0 w-80 z-50` + `fixed inset-0 bg-black/50 z-40` onClick close.
+- Mobile + collapsed: sidebar `w-0` atau off-screen (sama seperti desktop collapsed).
+- Desktop: pertahankan transisi `w-80` / `w-0` di flow dokumen.
+
+### State yang sudah ada (jangan rusak)
+
+| State / komponen | Perilaku yang dipertahankan |
+|------------------|----------------------------|
+| `WorkspaceRightPanelProvider` | Satu sumber panel state |
+| `WorkspaceRightPanelCloser` | Tutup chat baris saat overlay tabel ditutup (`closeWhenOverlayCloses`) |
+| `WorkspaceRightPanelTableSync` | Tutup panel jika tabel sidebar tidak cocok |
+| `openRowPanel` / `openTableChat` | API tetap; hanya shell UI yang berubah |
+
+---
+
+## QA manual (checklist)
+
+Uji di Chrome DevTools + satu perangkat fisik jika bisa.
+
+### Layout
+
+- [ ] 390×844 — workspace load, sidebar tidak permanen 320px
+- [ ] 768px — transisi desktop/mobile tidak “melompat” aneh
+- [ ] 1280px — regresi layout 3 kolom
+
+### Chat
+
+- [ ] Chat tabel dari header overlay → sheet/panel
+- [ ] Chat baris dari grid → sheet, tab Detail & Chat
+- [ ] Tutup overlay tabel (← Kembali) → chat baris ikut tutup (desktop & mobile)
+- [ ] Chat dari popup peta → room baris sama
+
+### Tabel
+
+- [ ] Scroll horizontal banyak kolom
+- [ ] Tap tidak memicu edit sel saat tap ikon chat (stopPropagation tetap)
+
+### Login
+
+- [ ] Tombol Login → “Memproses…” → loading workspace → masuk
+
+---
+
+## Di luar scope (v1 mobile)
+
+- Aplikasi native / PWA offline penuh
+- Edit geometri kompleks di peta via touch gestures khusus
+- Markdown / rich text chat
+- Dua panel chat sekaligus di mobile
+- Rotasi landscape khusus (cukup responsif umum)
+
+---
+
+## Urutan PR yang disarankan
+
+1. **PR-A:** Fase 0 + hook media query  
+2. **PR-B:** Fase 1 (sidebar drawer + panel sheet + padding)  
+3. **PR-C:** Fase 1 sisa — tombol chat baris touch-friendly  
+4. **PR-D:** Fase 2 navigasi  
+5. **PR-E:** Fase 3 tabel  
+6. **PR-F:** Fase 4–5  
+
+Setiap PR: screenshot before/after mobile + desktop smoke.
+
+---
+
+## Changelog dokumen
+
+| Tanggal | Perubahan |
+|---------|-----------|
+| 2026-06-03 | Draft awal — baseline codebase, fase 0–5, QA checklist |
+| 2026-06-03 | Fase 0–1 selesai — Sheet, `useIsBelowMd`, sidebar drawer, panel chat sheet |

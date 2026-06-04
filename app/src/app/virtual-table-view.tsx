@@ -418,6 +418,7 @@ type DataRowProps = {
   setGeometryEditor: (v: { rowId: string; colSlug: string; currentGeoJSON: string } | null) => void;
   setUserPicker: (v: { rowId: string; colSlug: string; currentUserId: string | null } | null) => void;
   onOpenRowChat: (rowId: string, rowTitle: string) => void;
+  isRowChatOpen?: boolean;
   hasUnreadChat?: boolean;
 };
 
@@ -545,6 +546,7 @@ function DataRow({
   setGeometryEditor,
   setUserPicker,
   onOpenRowChat,
+  isRowChatOpen = false,
   hasUnreadChat = false,
 }: DataRowProps) {
   return (
@@ -812,10 +814,12 @@ function DataRow({
         <div className="flex items-center justify-center gap-0.5">
           <button
             type="button"
-            className="inline-flex items-center justify-center rounded p-1 opacity-20 group-hover:opacity-100"
-            style={{ color: "var(--muted-foreground)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--primary)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--muted-foreground)"; }}
+            className={cn(
+              "inline-flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-md transition-colors",
+              isRowChatOpen
+                ? "bg-primary/15 text-primary"
+                : "text-muted-foreground opacity-70 group-hover:bg-muted/80 group-hover:text-primary group-hover:opacity-100"
+            )}
             onClick={(e) => {
               e.stopPropagation();
               const title = pickMapRowTitle(
@@ -832,8 +836,9 @@ function DataRow({
               onOpenRowChat(row.id, title);
             }}
             title="Chat baris"
+            aria-pressed={isRowChatOpen}
           >
-            <MessageSquare className="h-3.5 w-3.5" />
+            <MessageSquare className="size-4" />
           </button>
           <button
             type="button"
@@ -881,6 +886,7 @@ export function VirtualTableView({
     openRowPanel,
     closePanel,
     isTableChatOpen,
+    isRowPanelOpen,
   } = useWorkspaceRightPanel();
   const [pending, startTransition] = useTransition();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -2811,6 +2817,7 @@ export function VirtualTableView({
                       setGeometryEditor={setGeometryEditor}
                       setUserPicker={setUserPicker}
                       onOpenRowChat={openRowChat}
+                      isRowChatOpen={isRowPanelOpen(row.id)}
                       hasUnreadChat={unreadChatRowIds.has(row.id)}
                     />
                   ))}
@@ -2836,6 +2843,7 @@ export function VirtualTableView({
                   setGeometryEditor={setGeometryEditor}
                   setUserPicker={setUserPicker}
                   onOpenRowChat={openRowChat}
+                  isRowChatOpen={isRowPanelOpen(row.id)}
                   hasUnreadChat={unreadChatRowIds.has(row.id)}
                 />
               ))
