@@ -80,7 +80,8 @@ Prinsip: **satu layar aktif** di viewport sempit — jangan memaksa tiga kolom (
 
 | Konteks | Yang tampil |
 |---------|-------------|
-| Navigasi org/project/tabel | Sidebar **full-screen drawer** + backdrop; tutup setelah pilih |
+| Navigasi org/project | Wizard + chip scope header (sidebar **tidak** dipakai di mobile) |
+| Tabel | Tab **Tabel** (kartu); bukan sidebar |
 | Kerja (tab) | **Main** full width |
 | Chat / detail baris | **Sheet** ~`90dvh` (bawah atau kanan), menutupi main — bukan kolom ketiga |
 | Overlay tabel lengkap | Tetap full-bleed di `main`; panel chat sheet **di atas** overlay |
@@ -333,7 +334,7 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 
 ### Mobile v2 — chat (Step 5–5b)
 
-- [ ] Header ringkas: chip scope + notif + menu ⋯ (online, tema, sidebar, keluar); chat lewat tab **Chat**
+- [ ] Header ringkas: chip scope + notif + menu ⋯ (online, tema, keluar); **tanpa** sidebar; chat lewat tab **Chat**
 - [ ] Tab **Chat** di bottom bar → inbox room → sheet obrolan
 - [ ] Mention notifikasi baris → Peta + chat; org/proyek/tabel → tab Chat
 
@@ -402,3 +403,4 @@ Setiap PR: screenshot before/after mobile + desktop smoke.
 | 2026-06-03 | v2 Step 5b — tab Chat inbox (`workspace-chat-inbox.tsx`, Opsi B) |
 | 2026-06-03 | v2 Step 6 — sessionStorage fase, swipe back, E2E wizard/tabel/detail, QA checklist |
 | 2026-06-03 | Header mobile ringkas — `workspace-mobile-compact-header.tsx` (scope sheet, menu ⋯) |
+| 2026-06-03 | Mobile v2: sidebar tidak dirender; navigasi lewat wizard, bottom bar, chip scope |

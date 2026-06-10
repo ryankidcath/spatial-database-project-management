@@ -59,21 +59,14 @@ async function isMobileWorkspaceChrome(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
-/** Buka sidebar (header desktop atau menu ⋯ di mobile). */
+/** Buka sidebar (desktop header). Mobile v2 tidak punya sidebar. */
 export async function openWorkspaceSidebar(page: Page) {
   const headerSidebar = page.getByRole("button", {
     name: "Buka sidebar",
     exact: true,
   });
-  if (
-    (await headerSidebar.count()) > 0 &&
-    (await headerSidebar.first().isVisible())
-  ) {
-    await headerSidebar.first().click();
-    return;
-  }
-  await page.getByRole("button", { name: "Menu lainnya" }).click();
-  await page.getByRole("button", { name: "Buka sidebar" }).click();
+  await expect(headerSidebar.first()).toBeVisible({ timeout: 15_000 });
+  await headerSidebar.first().click();
 }
 
 /** Buka chat: tab Chat inbox (mobile) atau sidebar (desktop). */

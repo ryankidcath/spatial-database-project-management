@@ -35,9 +35,10 @@ Login
 
 | Area | Sekarang (mobile) | Target v2 |
 |------|-------------------|-----------|
-| Scope org/project | Sidebar drawer + URL | Wizard full screen bertingkat |
+| Scope org/project | ~~Sidebar drawer~~ | Wizard full screen + chip scope header |
+| Sidebar | Drawer opsional | **Tidak** dirender di mobile (`!isBelowMd`) |
 | Setelah login | Langsung shell workspace | Org → project → baru shell |
-| Ganti project | Buka sidebar | Tombol/slide **Ganti proyek** → layar project |
+| Ganti project | ~~Buka sidebar~~ | Chip scope → **Ganti proyek** (sheet) |
 | Tab Tabel | Kartu tabel ✓ | Tetap kartu |
 | Tap tabel | ~~Overlay grid~~ → **daftar baris** (Step 3) | **Daftar baris** (kartu/row list) ✓ |
 | Tap baris | Sheet: Detail **editable** (mobile) + Chat | Layar/stack **detail vertikal editable** + Chat ✓ |

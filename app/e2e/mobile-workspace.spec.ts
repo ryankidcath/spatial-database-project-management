@@ -6,7 +6,6 @@ import {
   loginToWorkspace,
   openFirstMobileTableRowDetail,
   openWorkspaceChat,
-  openWorkspaceSidebar,
 } from "./workspace-shell";
 
 const e2eEmail = process.env.E2E_EMAIL?.trim();
@@ -38,17 +37,21 @@ test.describe("Mobile workspace smoke (viewport HP)", () => {
     }
   });
 
-  test("sidebar drawer: buka lalu tutup backdrop", async ({ page }) => {
+  test("workspace mobile: tidak ada pintu sidebar", async ({ page }) => {
     await page.goto("/");
     const mode = await detectRootShell(page);
     if (mode !== "workspace") return;
 
-    await openWorkspaceSidebar(page);
-    await expect(page.getByText("Spatial PM").first()).toBeVisible();
-    await page.getByRole("button", { name: "Tutup sidebar" }).click();
+    const tablist = page.getByRole("tablist", { name: "Navigasi tab utama" });
+    if (!(await tablist.isVisible().catch(() => false))) return;
+
     await expect(
-      page.getByRole("button", { name: "Menu lainnya" })
-    ).toBeVisible();
+      page.getByRole("button", { name: "Buka sidebar" })
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Menu lainnya" }).click();
+    await expect(
+      page.getByRole("button", { name: "Buka sidebar" })
+    ).toHaveCount(0);
   });
 });
 

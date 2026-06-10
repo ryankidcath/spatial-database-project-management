@@ -1,13 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import {
-  ChevronDown,
-  LogOut,
-  MoreHorizontal,
-  PanelLeft,
-  Users,
-} from "lucide-react";
+import { ChevronDown, LogOut, MoreHorizontal, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import {
@@ -32,7 +26,6 @@ type Props = {
   showOrgSwitcher: boolean;
   onOpenProjectPicker: () => void;
   onOpenOrgPicker: () => void;
-  onToggleSidebar: () => void;
   userEmail: string | null;
   userId: string | null;
   notifications: UserNotificationRow[];
@@ -49,7 +42,6 @@ export function WorkspaceMobileCompactHeader({
   showOrgSwitcher,
   onOpenProjectPicker,
   onOpenOrgPicker,
-  onToggleSidebar,
   userEmail,
   userId,
   notifications,
@@ -161,18 +153,6 @@ export function WorkspaceMobileCompactHeader({
             <span className="text-sm text-foreground">Tema</span>
             <ThemeToggle iconOnly />
           </div>
-
-          <button
-            type="button"
-            className="flex w-full min-h-11 items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
-            onClick={() => {
-              setMenuOpen(false);
-              onToggleSidebar();
-            }}
-          >
-            <PanelLeft className="size-4 shrink-0 text-muted-foreground" />
-            Buka sidebar
-          </button>
 
           {userEmail ? (
             <p className="truncate px-2 py-1 text-xs text-muted-foreground">

@@ -4561,33 +4561,17 @@ export function WorkspaceClient({
         </div>
       ) : (
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-border bg-background">
-      {isBelowMd && !isSidebarCollapsed ? (
-        <button
-          type="button"
-          className="fixed inset-0 z-40 bg-black/50 md:hidden"
-          aria-label="Tutup sidebar"
-          onClick={() => setIsSidebarCollapsed(true)}
-        />
-      ) : null}
+      {!isBelowMd ? (
       <div
         className={cn(
           "relative flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden bg-sidebar/95 transition-[width] duration-300 ease-in-out motion-reduce:transition-none",
-          isBelowMd
+          isSidebarCollapsed
             ? "w-0 border-transparent"
-            : isSidebarCollapsed
-              ? "w-0 border-transparent"
-              : "w-80 border-r border-sidebar-border/90"
+            : "w-80 border-r border-sidebar-border/90"
         )}
       >
       <aside
-        className={cn(
-          "flex min-h-0 h-full min-w-0 w-80 flex-1 basis-0 flex-col overflow-hidden font-sans text-sidebar-foreground",
-          isBelowMd && [
-            "fixed inset-y-0 left-0 z-50 max-w-[min(20rem,85vw)] shadow-xl transition-transform duration-300 ease-in-out motion-reduce:transition-none",
-            "pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]",
-            isSidebarCollapsed ? "-translate-x-full pointer-events-none" : "translate-x-0",
-          ]
-        )}
+        className="flex min-h-0 h-full min-w-0 w-80 flex-1 basis-0 flex-col overflow-hidden font-sans text-sidebar-foreground"
         aria-hidden={isSidebarCollapsed}
         inert={isSidebarCollapsed ? true : undefined}
       >
@@ -5301,6 +5285,7 @@ export function WorkspaceClient({
         </ScrollArea>
       </aside>
       </div>
+      ) : null}
 
       <div className="relative flex min-h-0 min-w-0 flex-1">
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/30">
@@ -5316,7 +5301,6 @@ export function WorkspaceClient({
               showOrgSwitcher={orgsWithProjects.length > 1}
               onOpenProjectPicker={handleMobileOpenProjectPicker}
               onOpenOrgPicker={handleMobileOpenOrgPicker}
-              onToggleSidebar={() => setIsSidebarCollapsed(false)}
               userEmail={userEmail}
               userId={userId}
               notifications={userNotifications}
@@ -5522,7 +5506,9 @@ export function WorkspaceClient({
               <TabPanelKeepAlive view="Dashboard" activeView={activeView}>
               {!selectedProjectId ? (
                 <p className="mt-5 text-sm text-muted-foreground">
-                  Pilih project di sidebar untuk melihat dashboard.
+                  {isBelowMd
+                    ? "Pilih project dari menu scope di header untuk melihat dashboard."
+                    : "Pilih project di sidebar untuk melihat dashboard."}
                 </p>
               ) : (
                 <VirtualDashboardView
