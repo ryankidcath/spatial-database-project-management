@@ -10,6 +10,7 @@ import type { UserNotificationRow } from "./user-notification-types";
 import { formatShortDate } from "./schedule-utils";
 import { viewToParam } from "./workspace-url";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
+import { Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsBelowMd } from "@/lib/use-media-query";
 
@@ -20,6 +21,8 @@ type Props = {
   notifications: UserNotificationRow[];
   /** Sinkron scope + tab dengan workspace (hindari Link yang tidak memicu state). */
   onNavigate?: (n: UserNotificationRow) => void;
+  /** Ikon lonceng saja (header mobile ringkas). */
+  compact?: boolean;
 };
 
 function rowFromRealtimeRecord(
@@ -59,7 +62,12 @@ function projectIdForNotification(n: UserNotificationRow): string | null {
   return typeof fromPayload === "string" ? fromPayload : null;
 }
 
-export function NotificationsBell({ userId, notifications, onNavigate }: Props) {
+export function NotificationsBell({
+  userId,
+  notifications,
+  onNavigate,
+  compact = false,
+}: Props) {
   const isBelowMd = useIsBelowMd();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -223,9 +231,18 @@ export function NotificationsBell({ userId, notifications, onNavigate }: Props) 
             return next;
           });
         }}
-        className="relative rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-950 hover:bg-amber-100"
+        className={cn(
+          "relative shrink-0",
+          compact
+            ? "inline-flex size-11 items-center justify-center rounded-lg border border-border bg-background text-foreground transition-colors hover:bg-muted active:bg-muted/80"
+            : "rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-950 hover:bg-amber-100"
+        )}
       >
-        Notifikasi
+        {compact ? (
+          <Bell className="size-5" aria-hidden />
+        ) : (
+          "Notifikasi"
+        )}
         {unread.length > 0 ? (
           <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-600 px-1 text-[10px] font-bold text-white">
             {unread.length > 9 ? "9+" : unread.length}

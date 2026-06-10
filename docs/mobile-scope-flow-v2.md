@@ -204,9 +204,9 @@ Centang `[ ]` → `[x]` saat selesai. Jangan loncat step tanpa acceptance terpen
 
 | Task | File / area |
 |------|-------------|
-| [x] Chat org: `hasOrgStaffAccess`, header mobile (`WorkspaceMobileHeaderChat`) | `workspace-mobile-header-chat.tsx` |
+| [x] Chat org/proyek: tab **Chat** inbox (bukan header) | `workspace-chat-inbox.tsx` |
 | [x] Sidebar mobile: tombol chat org/proyek disembunyikan | `workspace-client.tsx` |
-| [x] Chat proyek: header setelah project dipilih | `WorkspaceMobileHeaderChat` |
+| [x] Header mobile ringkas: scope + notif + menu ⋯ | `workspace-mobile-compact-header.tsx` |
 | [x] Chat baris: detail baris tab Chat + tombol di daftar baris | Step 3–4 |
 | [x] Guard: tutup panel chat di wizard / tanpa akses org | `workspace-right-panel-mobile-guard.tsx` |
 | [x] Notifikasi mention → `workspace` + Map/Tabel + sheet | `navigateFromNotification` |
@@ -216,7 +216,7 @@ Centang `[ ]` → `[x]` saat selesai. Jangan loncat step tanpa acceptance terpen
 
 - [x] Mention baris → Map + sheet chat baris (`navigateFromNotification` + `openVirtualRowChatPanel`).
 - [x] Chat org tidak dibuka untuk non–tim inti (guard + cek di notifikasi).
-- [ ] QA manual: header Chat Org/Proyek di workspace mobile.
+- [x] QA manual: header ringkas (scope chip, notif, menu ⋯); chat lewat tab Chat.
 
 **Perkiraan:** 1–3 hari (+ opsi inbox jika pilih B).
 
@@ -276,7 +276,7 @@ Isi tabel **Keputusan** di chat MD setelah Step 5 review.
 | `workspace-virtual-table-list.tsx` | 3 (reuse kartu tabel) |
 | `virtual-table-view.tsx` | 3, 4 (matikan edit mobile; extract save) |
 | `workspace-right-panel.tsx` | 4, 5, 5b |
-| `workspace-mobile-header-chat.tsx` | 5 |
+| `workspace-mobile-compact-header.tsx` | 5 |
 | `workspace-right-panel-mobile-guard.tsx` | 5 |
 | `workspace-mobile-tabs.tsx` | 1, 5, 5b |
 | `workspace-chat-inbox.tsx` | 5b |

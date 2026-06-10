@@ -108,7 +108,7 @@ Setelah disembunyikan, urutan mobile umum: **Home, Peta, Tabel, Berkas** di bar;
 | Item | Pilihan | Tanggal | Catatan |
 |------|---------|---------|---------|
 | Opsi Chat mobile/desktop | **B** — inbox mobile + master–detail desktop | 2026-06-04 | `workspace-chat-inbox.tsx` |
-| Chat mobile v2 (kontekstual) | Header org/proyek, guard akses, notifikasi | 2026-06-03 | `workspace-mobile-header-chat.tsx` |
+| Chat mobile v2 (kontekstual) | Tab Chat inbox; header ringkas (scope/notif/menu); guard akses | 2026-06-03 | `workspace-chat-inbox.tsx`, `workspace-mobile-compact-header.tsx` |
 | Tab Chat di bottom bar (4 slot) | **Chat** di bar (Home, Peta, Tabel, Chat) | 2026-06-03 | `workspace-mobile-tabs.tsx` |
 | Panel kanan saat tab Chat (desktop) | **Off** saat `activeView === Chat`; konteks tabel/peta tetap panel | 2026-06-04 | Pola 2 |
 

@@ -59,25 +59,27 @@ async function isMobileWorkspaceChrome(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
-/** Buka chat: header mobile → tab Chat inbox → sidebar (desktop). */
+/** Buka sidebar (header desktop atau menu ⋯ di mobile). */
+export async function openWorkspaceSidebar(page: Page) {
+  const headerSidebar = page.getByRole("button", {
+    name: "Buka sidebar",
+    exact: true,
+  });
+  if (
+    (await headerSidebar.count()) > 0 &&
+    (await headerSidebar.first().isVisible())
+  ) {
+    await headerSidebar.first().click();
+    return;
+  }
+  await page.getByRole("button", { name: "Menu lainnya" }).click();
+  await page.getByRole("button", { name: "Buka sidebar" }).click();
+}
+
+/** Buka chat: tab Chat inbox (mobile) atau sidebar (desktop). */
 export async function openWorkspaceChat(
   page: Page
 ): Promise<"organization" | "project" | "inbox"> {
-  const orgHeader = page.getByRole("button", { name: "Chat organisasi" });
-  if ((await orgHeader.count()) > 0 && (await orgHeader.first().isVisible())) {
-    await orgHeader.first().click();
-    return "organization";
-  }
-
-  const projectHeader = page.getByRole("button", { name: "Chat proyek" });
-  if (
-    (await projectHeader.count()) > 0 &&
-    (await projectHeader.first().isVisible())
-  ) {
-    await projectHeader.first().click();
-    return "project";
-  }
-
   const mobile = await isMobileWorkspaceChrome(page);
   if (mobile) {
     const chatTab = page.getByRole("tab", { name: "Chat" });
@@ -93,7 +95,7 @@ export async function openWorkspaceChat(
     );
   }
 
-  await page.getByRole("button", { name: "Buka sidebar" }).click();
+  await openWorkspaceSidebar(page);
   const sidebar = page.locator("aside");
   const orgSidebar = sidebar.getByRole("button", { name: "Chat organisasi" });
   if ((await orgSidebar.count()) > 0 && (await orgSidebar.first().isVisible())) {

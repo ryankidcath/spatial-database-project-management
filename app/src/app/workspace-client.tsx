@@ -213,7 +213,7 @@ import {
 import { WorkspaceMobileOrgPicker } from "./workspace-mobile-org-picker";
 import { WorkspaceMobileProjectPicker } from "./workspace-mobile-project-picker";
 import { WorkspaceMobileVirtualTableOverlay } from "./workspace-mobile-virtual-table-overlay";
-import { WorkspaceMobileHeaderChat } from "./workspace-mobile-header-chat";
+import { WorkspaceMobileCompactHeader } from "./workspace-mobile-compact-header";
 import { WorkspaceChatInbox } from "./workspace-chat-inbox";
 import {
   type MobileScopePhase,
@@ -5310,6 +5310,24 @@ export function WorkspaceClient({
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
         >
         <header className="shrink-0 border-b border-border bg-card/90 px-4 py-3 md:px-6 md:py-4">
+          {isBelowMd && !showMobileScopeWizard && userEmail ? (
+            <WorkspaceMobileCompactHeader
+              scopeTitle={workspaceHeaderBreadcrumbTitle}
+              showOrgSwitcher={orgsWithProjects.length > 1}
+              onOpenProjectPicker={handleMobileOpenProjectPicker}
+              onOpenOrgPicker={handleMobileOpenOrgPicker}
+              onToggleSidebar={() => setIsSidebarCollapsed(false)}
+              userEmail={userEmail}
+              userId={userId}
+              notifications={userNotifications}
+              onNavigate={navigateFromNotification}
+              memberPresenceRows={memberPresenceRowsForSelectedProject}
+              selectedProjectId={selectedProjectId}
+              formatDateTime={formatDateTime}
+              signOutAction={signOut}
+              disabled={workspaceActionPending}
+            />
+          ) : (
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <button
@@ -5327,37 +5345,7 @@ export function WorkspaceClient({
               </button>
               <div className="h-6 w-px bg-border" aria-hidden="true" />
               <nav aria-label="Lokasi workspace" className="min-w-0 flex-1">
-                <p
-                  className="truncate text-sm font-medium text-foreground md:hidden"
-                  title={workspaceHeaderBreadcrumbTitle}
-                >
-                  {workspaceHeaderBreadcrumbTitle}
-                </p>
-                {isBelowMd && mobileScopePhase === "workspace" ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-9 min-h-9 px-2.5 text-xs"
-                      onClick={handleMobileOpenProjectPicker}
-                    >
-                      Ganti proyek
-                    </Button>
-                    {orgsWithProjects.length > 1 ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-9 min-h-9 px-2.5 text-xs text-muted-foreground"
-                        onClick={handleMobileOpenOrgPicker}
-                      >
-                        Ganti organisasi
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
-                <ol className="hidden min-w-0 flex-wrap items-center gap-x-1.5 text-sm md:flex">
+                <ol className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm">
                   {workspaceHeaderBreadcrumb.map((segment, idx) => (
                     <li
                       key={`${segment}-${idx}`}
@@ -5457,14 +5445,6 @@ export function WorkspaceClient({
                     </PopoverContent>
                   </Popover>
                 )}
-                {isBelowMd && mobileScopePhase === "workspace" && userId ? (
-                  <WorkspaceMobileHeaderChat
-                    hasOrgStaffAccess={hasOrgStaffAccess}
-                    selectedProjectId={selectedProjectId}
-                    mentionOptions={workspaceChatMentionOptions}
-                    disabled={workspaceActionPending}
-                  />
-                ) : null}
                 <NotificationsBell
                   userId={userId}
                   notifications={userNotifications}
@@ -5485,6 +5465,7 @@ export function WorkspaceClient({
               </div>
             )}
           </div>
+          )}
           {joinError && (
             <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
               {joinError}

@@ -20,7 +20,7 @@ function applyTheme(theme: ThemeMode): void {
   root.classList.toggle("dark", theme === "dark");
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ iconOnly = false }: { iconOnly?: boolean }) {
   const [theme, setTheme] = useState<ThemeMode>("light");
   const [mounted, setMounted] = useState(false);
 
@@ -38,6 +38,26 @@ export function ThemeToggle() {
     applyTheme(next);
     window.localStorage.setItem("theme", next);
   };
+
+  const isDark = mounted && theme === "dark";
+  const label = !mounted ? "Ubah tema" : isDark ? "Mode terang" : "Mode gelap";
+  const Icon = !mounted || !isDark ? Moon : Sun;
+
+  if (iconOnly) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-9 shrink-0"
+        onClick={toggleTheme}
+        aria-label={label}
+        title={label}
+      >
+        <Icon className="size-4" aria-hidden />
+      </Button>
+    );
+  }
 
   return (
     <Button type="button" variant="outline" size="sm" onClick={toggleTheme}>

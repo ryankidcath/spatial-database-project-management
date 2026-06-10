@@ -333,7 +333,7 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 
 ### Mobile v2 — chat (Step 5–5b)
 
-- [ ] Header: Chat Org (tim inti) / Chat Proyek — tidak di sidebar mobile
+- [ ] Header ringkas: chip scope + notif + menu ⋯ (online, tema, sidebar, keluar); chat lewat tab **Chat**
 - [ ] Tab **Chat** di bottom bar → inbox room → sheet obrolan
 - [ ] Mention notifikasi baris → Peta + chat; org/proyek/tabel → tab Chat
 
@@ -401,3 +401,4 @@ Setiap PR: screenshot before/after mobile + desktop smoke.
 | 2026-06-03 | v2 Step 5 — chat header mobile, guard org, notifikasi → workspace/Map/Tabel |
 | 2026-06-03 | v2 Step 5b — tab Chat inbox (`workspace-chat-inbox.tsx`, Opsi B) |
 | 2026-06-03 | v2 Step 6 — sessionStorage fase, swipe back, E2E wizard/tabel/detail, QA checklist |
+| 2026-06-03 | Header mobile ringkas — `workspace-mobile-compact-header.tsx` (scope sheet, menu ⋯) |
