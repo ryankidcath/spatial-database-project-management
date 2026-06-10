@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -23,8 +23,9 @@ import {
   type VirtualTableRowsMutatedDetail,
 } from "@/lib/workspace-virtual-table-mutations";
 import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
+import { WORKSPACE_MOBILE_TAB_BAR_PADDING } from "./workspace-mobile-tabs";
 
-const MOBILE_ROW_PAGE_SIZE = 50;
+const MOBILE_ROW_BATCH_SIZE = 50;
 
 type Props = {
   table: VirtualTableRow;
@@ -58,76 +59,115 @@ export function WorkspaceMobileVirtualTableOverlay({
 
   const [rows, setRows] = useState<VirtualDataRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [relationLabels, setRelationLabels] = useState<Record<string, string>>(
     {}
   );
   const [unreadRowIds, setUnreadRowIds] = useState<Set<string>>(() => new Set());
+  const rowsLengthRef = useRef(0);
+  rowsLengthRef.current = rows.length;
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / MOBILE_ROW_PAGE_SIZE));
-  const pageStart =
-    totalCount === 0 ? 0 : pageIndex * MOBILE_ROW_PAGE_SIZE + 1;
-  const pageEnd = Math.min(totalCount, (pageIndex + 1) * MOBILE_ROW_PAGE_SIZE);
+  const hasMore = rows.length < totalCount;
 
-  const loadRows = useCallback(async () => {
+  const mapCols = useMemo(
+    () =>
+      columns.map((c) => ({
+        slug: c.slug,
+        display_name: c.display_name,
+        data_type: c.data_type,
+        position: c.position,
+      })),
+    [columns]
+  );
+
+  const mergeRelationLabels = useCallback(
+    async (batch: VirtualDataRow[]) => {
+      const relationIds = collectRelationIdsFromVirtualPayloads(
+        batch.map((r) => ({ payload: r.payload ?? {} })),
+        mapCols
+      );
+      if (relationIds.length === 0) return;
+      const resolved = await resolveRelationLabelsAction(relationIds);
+      if (!resolved.error) {
+        setRelationLabels((prev) => ({ ...prev, ...resolved.labels }));
+      }
+    },
+    [mapCols]
+  );
+
+  const applyFetchResult = useCallback(
+    async (
+      result: Awaited<ReturnType<typeof fetchVirtualRowsAction>>,
+      append: boolean
+    ) => {
+      if (result.error) {
+        if (!append) {
+          setRows([]);
+          setTotalCount(0);
+          setRelationLabels({});
+        }
+        return;
+      }
+      const nextRows = result.rows as VirtualDataRow[];
+      setTotalCount(result.totalCount);
+      setRows((prev) => (append ? [...prev, ...nextRows] : nextRows));
+      if (!append && nextRows.length === 0) {
+        setRelationLabels({});
+      } else {
+        await mergeRelationLabels(nextRows);
+      }
+    },
+    [mergeRelationLabels]
+  );
+
+  const loadInitial = useCallback(async () => {
+    setLoading(true);
+    setRows([]);
+    setRelationLabels({});
+    const result = await fetchVirtualRowsAction(table.id, {
+      limit: MOBILE_ROW_BATCH_SIZE,
+      offset: 0,
+    });
+    await applyFetchResult(result, false);
+    setLoading(false);
+  }, [table.id, applyFetchResult]);
+
+  const reloadVisible = useCallback(async () => {
+    const limit = Math.max(rowsLengthRef.current, MOBILE_ROW_BATCH_SIZE);
     setLoading(true);
     const result = await fetchVirtualRowsAction(table.id, {
-      limit: MOBILE_ROW_PAGE_SIZE,
-      offset: pageIndex * MOBILE_ROW_PAGE_SIZE,
+      limit,
+      offset: 0,
     });
-    if (result.error) {
-      setRows([]);
-      setTotalCount(0);
-      setLoading(false);
-      return;
-    }
-    const nextRows = result.rows as VirtualDataRow[];
-    setRows(nextRows);
-    setTotalCount(result.totalCount);
-
-    const mapCols = columns.map((c) => ({
-      slug: c.slug,
-      display_name: c.display_name,
-      data_type: c.data_type,
-      position: c.position,
-    }));
-    const relationIds = collectRelationIdsFromVirtualPayloads(
-      nextRows.map((r) => ({ payload: r.payload ?? {} })),
-      mapCols
-    );
-    if (relationIds.length > 0) {
-      const resolved = await resolveRelationLabelsAction(relationIds);
-      if (!resolved.error) setRelationLabels(resolved.labels);
-    } else {
-      setRelationLabels({});
-    }
+    await applyFetchResult(result, false);
     setLoading(false);
-  }, [table.id, pageIndex, columns]);
+  }, [table.id, applyFetchResult]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || loading) return;
+    setLoadingMore(true);
+    const result = await fetchVirtualRowsAction(table.id, {
+      limit: MOBILE_ROW_BATCH_SIZE,
+      offset: rowsLengthRef.current,
+    });
+    await applyFetchResult(result, true);
+    setLoadingMore(false);
+  }, [table.id, applyFetchResult, loadingMore, loading]);
 
   useEffect(() => {
-    void loadRows();
-  }, [loadRows]);
+    void loadInitial();
+  }, [loadInitial]);
 
   useEffect(() => {
     const onMutated = (e: Event) => {
       const detail = (e as CustomEvent<VirtualTableRowsMutatedDetail>).detail;
-      if (detail?.tableId === table.id) void loadRows();
+      if (detail?.tableId === table.id) void reloadVisible();
     };
     window.addEventListener(VIRTUAL_TABLE_ROWS_MUTATED, onMutated);
     return () =>
       window.removeEventListener(VIRTUAL_TABLE_ROWS_MUTATED, onMutated);
-  }, [table.id, loadRows]);
-
-  useEffect(() => {
-    setPageIndex(0);
-  }, [table.id]);
-
-  useEffect(() => {
-    if (pageIndex > totalPages - 1) {
-      setPageIndex(Math.max(0, totalPages - 1));
-    }
-  }, [pageIndex, totalPages]);
+  }, [table.id, reloadVisible]);
 
   const refreshUnread = useCallback(async () => {
     if (!userId) {
@@ -240,7 +280,7 @@ export function WorkspaceMobileVirtualTableOverlay({
   );
 
   return (
-    <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-background max-md:pb-[env(safe-area-inset-bottom)]">
+    <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-background">
       <div className="shrink-0 border-b border-border bg-card/90 px-4 py-3 max-md:pt-[max(0.75rem,env(safe-area-inset-top))]">
         <button
           type="button"
@@ -260,6 +300,13 @@ export function WorkspaceMobileVirtualTableOverlay({
             {table.description ? (
               <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
                 {table.description}
+              </p>
+            ) : null}
+            {totalCount > 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {rows.length < totalCount
+                  ? `Menampilkan ${rows.length} dari ${totalCount} baris`
+                  : `${totalCount} baris`}
               </p>
             ) : null}
           </div>
@@ -291,11 +338,13 @@ export function WorkspaceMobileVirtualTableOverlay({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+      <div
+        className={`min-h-0 flex-1 overflow-auto px-4 py-4 ${WORKSPACE_MOBILE_TAB_BAR_PADDING}`}
+      >
         {loading && rows.length > 0 ? (
           <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
             <Spinner className="size-3" />
-            Memuat…
+            Memperbarui…
           </div>
         ) : null}
         <WorkspaceMobileRowList
@@ -307,41 +356,32 @@ export function WorkspaceMobileVirtualTableOverlay({
           isRowPanelOpen={isRowPanelOpen}
           onOpenRow={(rowId, title) => openRow(rowId, title, "detail")}
           onOpenRowChat={(rowId, title) => openRow(rowId, title, "chat")}
-          loading={loading}
+          loading={loading && rows.length === 0}
         />
-      </div>
 
-      {totalCount > MOBILE_ROW_PAGE_SIZE ? (
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-card/90 px-4 py-3">
+        {hasMore ? (
           <Button
             type="button"
             variant="outline"
-            size="sm"
-            className="h-10"
-            disabled={pageIndex <= 0 || loading}
-            onClick={() => setPageIndex((p) => Math.max(0, p - 1))}
+            className="mt-4 h-11 w-full"
+            disabled={loadingMore || loading}
+            onClick={() => void loadMore()}
           >
-            Sebelumnya
+            {loadingMore ? (
+              <>
+                <Spinner className="mr-2 size-4" />
+                Memuat…
+              </>
+            ) : (
+              `Muat lebih (${rows.length} dari ${totalCount})`
+            )}
           </Button>
-          <p className="text-center text-xs text-muted-foreground">
-            {pageStart}–{pageEnd} dari {totalCount}
+        ) : rows.length > 0 && totalCount > 0 ? (
+          <p className="mt-4 pb-2 text-center text-xs text-muted-foreground">
+            Semua {totalCount} baris ditampilkan
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-10"
-            disabled={pageIndex >= totalPages - 1 || loading}
-            onClick={() => setPageIndex((p) => p + 1)}
-          >
-            Berikutnya
-          </Button>
-        </div>
-      ) : totalCount > 0 ? (
-        <p className="shrink-0 border-t border-border px-4 py-2 text-center text-xs text-muted-foreground">
-          {totalCount} baris
-        </p>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }

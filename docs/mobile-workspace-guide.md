@@ -327,7 +327,7 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 
 ### Mobile v2 — tabel & baris (Step 3–4)
 
-- [ ] Tab Tabel → kartu tabel → daftar baris (tanpa grid horizontal)
+- [ ] Tab Tabel → kartu tabel → daftar baris (tanpa grid horizontal); **Muat lebih** jika >50 baris
 - [ ] Tap baris → sheet Detail (form editable) + tab Chat
 - [ ] Simpan field → daftar baris ter-update
 - [ ] ← Daftar tabel menutup overlay

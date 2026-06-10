@@ -40,7 +40,7 @@ Login
 | Setelah login | Langsung shell workspace | Org → project → baru shell |
 | Ganti project | ~~Buka sidebar~~ | Chip scope → **Ganti proyek** (sheet) |
 | Tab Tabel | Kartu tabel ✓ | Tetap kartu |
-| Tap tabel | ~~Overlay grid~~ → **daftar baris** (Step 3) | **Daftar baris** (kartu/row list) ✓ |
+| Tap tabel | ~~Overlay grid~~ → **daftar baris** (Step 3) | **Daftar baris** + **Muat lebih** (50/batch) ✓ |
 | Tap baris | Sheet: Detail **editable** (mobile) + Chat | Layar/stack **detail vertikal editable** + Chat ✓ |
 | Chat | Sheet / konteks | Tetap sheet atau tab di layar detail; lihat chat MD **setelah Step 4–5** |
 
