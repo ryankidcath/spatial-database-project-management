@@ -11,8 +11,13 @@ import { formatShortDate } from "./schedule-utils";
 import { viewToParam } from "./workspace-url";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import { Bell } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { useIsBelowMd } from "@/lib/use-media-query";
 
 const MAX_NOTIFICATIONS = 50;
 
@@ -68,7 +73,6 @@ export function NotificationsBell({
   onNavigate,
   compact = false,
 }: Props) {
-  const isBelowMd = useIsBelowMd();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [items, setItems] = useState<UserNotificationRow[]>(notifications);
@@ -217,142 +221,148 @@ export function NotificationsBell({
     });
   };
 
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-haspopup="true"
-        aria-label="Notifikasi"
-        onClick={() => {
-          setOpen((v) => {
-            const next = !v;
-            if (next) void fetchNotifications();
-            return next;
-          });
-        }}
-        className={cn(
-          "relative shrink-0",
-          compact
-            ? "inline-flex size-11 items-center justify-center rounded-lg border border-border bg-background text-foreground transition-colors hover:bg-muted active:bg-muted/80"
-            : "rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-950 hover:bg-amber-100"
-        )}
-      >
-        {compact ? (
-          <Bell className="size-5" aria-hidden />
-        ) : (
-          "Notifikasi"
-        )}
-        {unread.length > 0 ? (
-          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-600 px-1 text-[10px] font-bold text-white">
-            {unread.length > 9 ? "9+" : unread.length}
-          </span>
-        ) : null}
-      </button>
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) void fetchNotifications();
+  };
 
-      {open ? (
-        <>
+  const unreadBadge =
+    unread.length > 0 ? (
+      <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-600 px-1 text-[10px] font-bold text-white">
+        {unread.length > 9 ? "9+" : unread.length}
+      </span>
+    ) : null;
+
+  const panelContent = (
+    <>
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <span className="text-xs font-semibold text-foreground">
+          Kotak masuk
+          {unread.length > 0 ? (
+            <span className="ml-1 font-normal text-amber-700 dark:text-amber-500">
+              ({unread.length} baru)
+            </span>
+          ) : null}
+        </span>
+        {unread.length > 0 ? (
           <button
             type="button"
-            aria-label="Tutup"
-            className="fixed inset-0 z-40 cursor-default bg-transparent"
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className={cn(
-              "z-50 rounded-lg border border-slate-200 bg-white py-2 shadow-lg",
-              isBelowMd
-                ? "fixed inset-x-2 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] max-h-[min(55dvh,22rem)] w-auto overflow-hidden"
-                : "absolute right-0 mt-1 w-[min(22rem,calc(100vw-2rem))]"
-            )}
+            disabled={pending}
+            onClick={markAllRead}
+            className="text-[10px] text-primary hover:underline disabled:opacity-50"
           >
-            <div className="flex items-center justify-between border-b border-slate-100 px-3 pb-2">
-              <span className="text-xs font-semibold text-slate-700">
-                Kotak masuk
-                {unread.length > 0 ? (
-                  <span className="ml-1 font-normal text-amber-700">
-                    ({unread.length} baru)
-                  </span>
-                ) : null}
-              </span>
-              {unread.length > 0 ? (
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={markAllRead}
-                  className="text-[10px] text-blue-600 hover:underline disabled:opacity-50"
-                >
-                  Tandai semua dibaca
-                </button>
-              ) : null}
-            </div>
-            <ul className="max-h-72 overflow-y-auto text-xs">
-              {sorted.length === 0 ? (
-                <li className="px-3 py-4 text-slate-500">Tidak ada notifikasi.</li>
-              ) : (
-                sorted.map((n) => {
-                  const isUnread = n.read_at == null;
-                  const isChat = n.kind === "chat_mention";
-                  return (
-                    <li
-                      key={n.id}
-                      className={`border-b border-slate-50 px-3 py-2 last:border-0 ${
-                        isUnread ? "bg-amber-50/50" : ""
-                      }`}
+            Tandai semua dibaca
+          </button>
+        ) : null}
+      </div>
+      <ul className="max-h-72 overflow-y-auto text-xs">
+        {sorted.length === 0 ? (
+          <li className="px-3 py-4 text-muted-foreground">Tidak ada notifikasi.</li>
+        ) : (
+          sorted.map((n) => {
+            const isUnread = n.read_at == null;
+            const isChat = n.kind === "chat_mention";
+            return (
+              <li
+                key={n.id}
+                className={cn(
+                  "border-b border-border/60 px-3 py-2 last:border-0",
+                  isUnread && "bg-amber-50/50 dark:bg-amber-950/20"
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <Link
+                    href={hrefForNotification(n)}
+                    className="min-w-0 flex-1 hover:underline"
+                    onClick={(e) => {
+                      if (onNavigate) {
+                        e.preventDefault();
+                        onNavigate(n);
+                      }
+                      if (isUnread) markOneRead(n.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <p className="font-medium text-foreground">
+                      {n.title}
+                      {isChat ? (
+                        <span className="ml-1 font-normal text-muted-foreground">
+                          · chat
+                        </span>
+                      ) : null}
+                    </p>
+                    {n.body ? (
+                      <p className="mt-0.5 line-clamp-3 text-muted-foreground">
+                        {n.body}
+                      </p>
+                    ) : null}
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {formatShortDate(n.created_at)}
+                      {n.severity === "warning" ? " · peringatan" : null}
+                    </p>
+                  </Link>
+                  {isUnread ? (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      className="shrink-0 text-[10px] text-primary hover:underline disabled:opacity-50"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        markOneRead(n.id);
+                      }}
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <Link
-                          href={hrefForNotification(n)}
-                          className="min-w-0 flex-1 hover:underline"
-                          onClick={(e) => {
-                            if (onNavigate) {
-                              e.preventDefault();
-                              onNavigate(n);
-                            }
-                            if (isUnread) markOneRead(n.id);
-                            setOpen(false);
-                          }}
-                        >
-                          <p className="font-medium text-slate-900">
-                            {n.title}
-                            {isChat ? (
-                              <span className="ml-1 font-normal text-slate-500">
-                                · chat
-                              </span>
-                            ) : null}
-                          </p>
-                          {n.body ? (
-                            <p className="mt-0.5 line-clamp-3 text-slate-600">
-                              {n.body}
-                            </p>
-                          ) : null}
-                          <p className="mt-1 text-[10px] text-slate-400">
-                            {formatShortDate(n.created_at)}
-                            {n.severity === "warning" ? " · peringatan" : null}
-                          </p>
-                        </Link>
-                        {isUnread ? (
-                          <button
-                            type="button"
-                            disabled={pending}
-                            className="shrink-0 text-[10px] text-blue-600 hover:underline disabled:opacity-50"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              markOneRead(n.id);
-                            }}
-                          >
-                            Dibaca
-                          </button>
-                        ) : null}
-                      </div>
-                    </li>
-                  );
-                })
-              )}
-            </ul>
-          </div>
-        </>
-      ) : null}
-    </div>
+                      Dibaca
+                    </button>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })
+        )}
+      </ul>
+    </>
+  );
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger
+        render={
+          compact ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="relative size-11 shrink-0"
+              aria-label="Notifikasi"
+            >
+              <Bell className="size-5" aria-hidden />
+              {unreadBadge}
+            </Button>
+          ) : (
+            <button
+              type="button"
+              aria-label="Notifikasi"
+              className="relative shrink-0 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-950 transition-colors hover:bg-amber-100"
+            >
+              Notifikasi
+              {unreadBadge}
+            </button>
+          )
+        }
+      />
+      <PopoverContent
+        align="end"
+        side="bottom"
+        sideOffset={4}
+        className={cn(
+          "gap-0 p-0",
+          compact
+            ? "w-[min(18rem,calc(100vw-2rem))]"
+            : "w-[min(22rem,calc(100vw-2rem))]"
+        )}
+      >
+        {panelContent}
+      </PopoverContent>
+    </Popover>
   );
 }
