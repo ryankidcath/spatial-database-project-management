@@ -1750,6 +1750,8 @@ export function WorkspaceClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const clientNavReadyRef = useRef(false);
+  /** Tab yang dipilih user — sumber kebenaran saat URL/searchParams tertinggal. */
+  const committedViewRef = useRef<ViewId>("Dashboard");
   /** Cegah efek sinkron URL menimpa tab yang baru dipilih (race replaceState vs searchParams). */
   const viewChangeLockUntilRef = useRef(0);
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
@@ -2310,6 +2312,13 @@ export function WorkspaceClient({
     return raw;
   }, [searchParams, canonicalOrgId, organizationModules]);
   const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
+  committedViewRef.current = activeViewFromUrl;
+
+  const applyActiveView = useCallback((v: ViewId) => {
+    committedViewRef.current = v;
+    setActiveView(v);
+  }, []);
+
   /** Sinkron dari URL hanya saat navigasi eksternal (back/forward, notifikasi, RSC). */
   useEffect(() => {
     if (Date.now() < viewChangeLockUntilRef.current) return;
@@ -2318,19 +2327,30 @@ export function WorkspaceClient({
       canonicalOrgId,
       organizationModules
     );
-    if (typeof window !== "undefined") {
-      const windowParams = new URLSearchParams(window.location.search);
-      const windowViewRaw = windowParams.get("view");
-      const winView = parseViewParam(windowViewRaw);
-      if (winView && isViewAllowedForModules(winView, enabled)) {
-        setActiveView((current) => (current === winView ? current : winView));
-        return;
-      }
-      if (windowViewRaw) return;
+    const committed = committedViewRef.current;
+    if (!isViewAllowedForModules(committed, enabled)) return;
+
+    const winView =
+      typeof window !== "undefined"
+        ? parseViewParam(
+            new URLSearchParams(window.location.search).get("view")
+          )
+        : null;
+
+    if (winView === committed) {
+      setActiveView((current) => (current === committed ? current : committed));
+      return;
     }
-    setActiveView((current) =>
-      current === activeViewFromUrl ? current : activeViewFromUrl
-    );
+
+    if (activeViewFromUrl === committed) {
+      setActiveView((current) => (current === committed ? current : committed));
+      return;
+    }
+
+    // URL/searchParams masih view lama — pertahankan tab committed, jangan revert.
+    if (winView && winView !== committed) {
+      setActiveView((current) => (current === committed ? current : committed));
+    }
   }, [activeViewFromUrl, canonicalOrgId, organizationModules]);
 
   const enabledModulesForOrg = useMemo(
@@ -2404,6 +2424,14 @@ export function WorkspaceClient({
       canonicalOrgId,
       organizationModules
     );
+    const committed = committedViewRef.current;
+    if (isViewAllowedForModules(committed, enabled)) {
+      const viewInP = parseViewParam(p.get("view"));
+      if (viewInP !== committed) {
+        p.set("view", viewToParam(committed));
+        dirty = true;
+      }
+    }
     if (parseViewParam(p.get("view")) === "Map" && !enabled.has("spatial")) {
       p.set("view", viewToParam("Dashboard"));
       dirty = true;
@@ -3878,11 +3906,9 @@ export function WorkspaceClient({
         !options?.refresh && urlScopeKey(prevParams) === urlScopeKey(p);
 
       if (viewOnlyNav) {
-        window.history.replaceState(
-          null,
-          "",
-          nextQuery ? `/?${nextQuery}` : "/"
-        );
+        startScopeNavTransition(() => {
+          void router.replace(`/?${nextQuery}`, { scroll: false });
+        });
         return;
       }
 
@@ -3896,6 +3922,7 @@ export function WorkspaceClient({
             effectiveEnabledModuleCodes(orgForModules, organizationModules)
           )
         ) {
+          committedViewRef.current = viewParsed;
           setActiveView(viewParsed);
         }
       }
@@ -3941,7 +3968,8 @@ export function WorkspaceClient({
   const handleActiveViewChange = useCallback(
     (v: ViewId) => {
       if (!isViewAllowedForModules(v, enabledModulesForOrg)) return;
-      viewChangeLockUntilRef.current = Date.now() + 500;
+      viewChangeLockUntilRef.current = Date.now() + 1500;
+      committedViewRef.current = v;
       setActiveView(v);
       commitScopeInUrl(
         (q) => {
@@ -4083,7 +4111,8 @@ export function WorkspaceClient({
           effectiveEnabledModuleCodes(orgForModules, organizationModules)
         )
       ) {
-        setActiveView(viewParsed);
+        committedViewRef.current = viewParsed;
+        applyActiveView(viewParsed);
       }
     };
     window.addEventListener("popstate", syncScopeFromWindowUrl);
@@ -4095,6 +4124,7 @@ export function WorkspaceClient({
     projects,
     resolveProjectIdInParams,
     resolveTaskIdInParams,
+    applyActiveView,
   ]);
 
   const openVirtualRowChatPanel = useCallback(
@@ -4113,7 +4143,8 @@ export function WorkspaceClient({
         switchToMap &&
         isViewAllowedForModules("Map", enabledModulesForOrg)
       ) {
-        setActiveView("Map");
+        viewChangeLockUntilRef.current = Date.now() + 1500;
+        applyActiveView("Map");
         commitScopeInUrl(
           (q) => {
             q.set("view", viewToParam("Map"));
@@ -4184,6 +4215,7 @@ export function WorkspaceClient({
       activeVirtualTable?.id,
       workspaceChatMentionOptions,
       virtualColumns,
+      applyActiveView,
     ]
   );
 
@@ -4263,7 +4295,8 @@ export function WorkspaceClient({
         const scopeType =
           typeof payload.scope_type === "string" ? payload.scope_type : null;
         if (isViewAllowedForModules("Chat", enabledModulesForOrg)) {
-          setActiveView("Chat");
+          viewChangeLockUntilRef.current = Date.now() + 1500;
+          applyActiveView("Chat");
           commitScopeInUrl(
             (q) => {
               q.set("view", viewToParam("Chat"));
@@ -4298,7 +4331,8 @@ export function WorkspaceClient({
               isBelowMd &&
               isViewAllowedForModules("Tabel", enabledModulesForOrg)
             ) {
-              setActiveView("Tabel");
+              viewChangeLockUntilRef.current = Date.now() + 1500;
+              applyActiveView("Tabel");
               commitScopeInUrl(
                 (q) => {
                   q.set("view", viewToParam("Tabel"));
@@ -4328,6 +4362,7 @@ export function WorkspaceClient({
       canonicalOrgId,
       userHasOrgStaffFor,
       enabledModulesForOrg,
+      applyActiveView,
     ]
   );
 
