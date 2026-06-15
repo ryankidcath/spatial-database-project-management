@@ -17,8 +17,10 @@ import {
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { fileAttachmentOptionsFromRowPayload } from "@/lib/chat-row-panel";
 import {
-  fetchVirtualTableChatUnreadRowsAction,
+  fetchChatInboxActiveRowRoomsAction,
+  fetchChatInboxActivityAtAction,
   resolveVirtualRowChatContextAction,
+  resolveVirtualRowChatContextsBatchAction,
 } from "./chat-actions";
 import { ChatPanel } from "./chat-panel";
 import type { ChatInboxEntry } from "./workspace-chat-inbox-types";
@@ -45,6 +47,9 @@ type Props = {
 
 function sortEntries(entries: ChatInboxEntry[]): ChatInboxEntry[] {
   return [...entries].sort((a, b) => {
+    const aActivity = a.lastActivityAt ?? "";
+    const bActivity = b.lastActivityAt ?? "";
+    if (aActivity !== bActivity) return bActivity.localeCompare(aActivity);
     if (a.unreadCount !== b.unreadCount) return b.unreadCount - a.unreadCount;
     return a.title.localeCompare(b.title, "id");
   });
@@ -63,6 +68,8 @@ function entryMatchesRoomSearch(entry: ChatInboxEntry, query: string): boolean {
   return haystack.includes(needle);
 }
 
+const ROW_INBOX_PAGE_SIZE = 25;
+
 export function WorkspaceChatInbox({
   organizationId,
   organizationName,
@@ -79,14 +86,17 @@ export function WorkspaceChatInbox({
   isBelowMd,
   onMobileChatKeyboardOpenChange,
 }: Props) {
-  const { unreadByTableId, tableRoomUnreadByTableId, unreadByProjectId, refresh } =
+  const { tableRoomUnreadByTableId, unreadByProjectId, refresh } =
     useVirtualTableChatUnread();
   const vvLayout = useVisualViewportLayout();
   const [rowEntries, setRowEntries] = useState<ChatInboxEntry[]>([]);
+  const [rowTotalCount, setRowTotalCount] = useState(0);
   const [rowLoading, setRowLoading] = useState(false);
+  const [rowLoadingMore, setRowLoadingMore] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
   const [roomSearchQuery, setRoomSearchQuery] = useState("");
+  const [activityByKey, setActivityByKey] = useState<Record<string, string>>({});
 
   const mobileChatKeyboardActive =
     isBelowMd && mobileConversationOpen && vvLayout.keyboardOpen;
@@ -116,6 +126,11 @@ export function WorkspaceChatInbox({
       return false;
     });
   }, [virtualTables, organizationId, projectId]);
+
+  const tableIdsInScope = useMemo(
+    () => tablesInScope.map((t) => t.id),
+    [tablesInScope]
+  );
 
   const staticEntries = useMemo((): ChatInboxEntry[] => {
     if (!organizationId) return [];
@@ -190,87 +205,113 @@ export function WorkspaceChatInbox({
     tableRoomUnreadByTableId,
   ]);
 
-  useEffect(() => {
-    if (!organizationId || !userId) {
-      setRowEntries([]);
-      return;
-    }
-    const tablesWithRowUnread = tablesInScope.filter(
-      (t) => (unreadByTableId[t.id] ?? 0) > (tableRoomUnreadByTableId[t.id] ?? 0)
-    );
-    if (tablesWithRowUnread.length === 0) {
-      setRowEntries([]);
-      return;
-    }
+  const loadRowEntries = useCallback(
+    async (offset: number, append: boolean) => {
+      if (!organizationId || !userId || tableIdsInScope.length === 0) {
+        setRowEntries([]);
+        setRowTotalCount(0);
+        return;
+      }
 
-    let cancelled = false;
-    setRowLoading(true);
+      if (append) setRowLoadingMore(true);
+      else setRowLoading(true);
 
-    void (async () => {
-      const next: ChatInboxEntry[] = [];
-      for (const table of tablesWithRowUnread) {
-        const res = await fetchVirtualTableChatUnreadRowsAction(table.id);
-        if (cancelled || res.error || !res.data) continue;
-        const tblProjectName = table.project_id
-          ? (projectsForMention.find((p) => p.id === table.project_id)?.name ??
-            null)
-          : null;
-        for (const row of res.data) {
-          let rowTitle = "Baris";
-          let pathSegments: string[] | undefined;
-          const ctx = await resolveVirtualRowChatContextAction(row.virtualRowId);
-          let rowPayload: Record<string, unknown> | undefined;
-          if (!ctx.error && ctx.data) {
-            pathSegments = ctx.data.pathSegments;
-            rowPayload = ctx.data.rowPayload;
-            rowTitle =
-              ctx.data.pathSegments[ctx.data.pathSegments.length - 1] ?? rowTitle;
+      try {
+        const res = await fetchChatInboxActiveRowRoomsAction({
+          tableIds: tableIdsInScope,
+          limit: ROW_INBOX_PAGE_SIZE,
+          offset,
+        });
+        if (res.error || !res.data) {
+          if (!append) {
+            setRowEntries([]);
+            setRowTotalCount(0);
           }
-          next.push({
+          return;
+        }
+
+        const rowIds = res.data.rows.map((r) => r.virtualRowId);
+        const ctxRes = await resolveVirtualRowChatContextsBatchAction(rowIds);
+        const ctxByRowId = ctxRes.error ? {} : (ctxRes.data ?? {});
+
+        const next: ChatInboxEntry[] = res.data.rows.map((row) => {
+          const ctx = ctxByRowId[row.virtualRowId];
+          const table = tablesInScope.find((t) => t.id === row.virtualTableId);
+          const rowTitle =
+            ctx?.pathSegments[ctx.pathSegments.length - 1] ?? "Baris";
+          return {
             key: `row:${row.virtualRowId}`,
-            kind: "virtual_row",
-            scopeType: "virtual_row",
+            kind: "virtual_row" as const,
+            scopeType: "virtual_row" as const,
             title: rowTitle,
-            subtitle: table.display_name,
+            subtitle: row.tableDisplayName,
             unreadCount: row.unreadCount,
+            lastActivityAt: row.lastMessageAt,
             organizationId,
-            projectId: table.project_id,
+            projectId: table?.project_id ?? null,
             virtualTableId: null,
             virtualRowId: row.virtualRowId,
-            tableIdForRow: table.id,
-            pathSegments,
-            rowPayload,
-          });
-        }
-      }
-      if (!cancelled) {
-        setRowEntries(sortEntries(next));
-        setRowLoading(false);
-      }
-    })();
+            tableIdForRow: row.virtualTableId,
+            pathSegments: ctx?.pathSegments,
+            rowPayload: ctx?.rowPayload ?? row.rowPayload,
+          };
+        });
 
+        setRowTotalCount(res.data.totalCount);
+        setRowEntries((prev) => (append ? [...prev, ...next] : next));
+      } finally {
+        setRowLoading(false);
+        setRowLoadingMore(false);
+      }
+    },
+    [organizationId, userId, tableIdsInScope, tablesInScope]
+  );
+
+  useEffect(() => {
+    void loadRowEntries(0, false);
+  }, [loadRowEntries, refresh]);
+
+  useEffect(() => {
+    if (!organizationId) {
+      setActivityByKey({});
+      return;
+    }
+    let cancelled = false;
+    void fetchChatInboxActivityAtAction({ organizationId }).then((res) => {
+      if (cancelled || res.error || !res.data) return;
+      setActivityByKey(res.data);
+    });
     return () => {
       cancelled = true;
     };
-  }, [
-    organizationId,
-    userId,
-    tablesInScope,
-    unreadByTableId,
-    tableRoomUnreadByTableId,
-    projectsForMention,
-    refresh,
-  ]);
+  }, [organizationId, projectId, refresh, mobileConversationOpen]);
 
-  const entries = useMemo(
-    () => sortEntries([...staticEntries, ...rowEntries]),
-    [staticEntries, rowEntries]
-  );
+  const entries = useMemo(() => {
+    const withActivity = [...staticEntries, ...rowEntries].map((entry) => ({
+      ...entry,
+      lastActivityAt:
+        entry.lastActivityAt ?? activityByKey[entry.key] ?? null,
+    }));
+    return sortEntries(withActivity);
+  }, [staticEntries, rowEntries, activityByKey]);
 
   const filteredEntries = useMemo(
     () => entries.filter((e) => entryMatchesRoomSearch(e, roomSearchQuery)),
     [entries, roomSearchQuery]
   );
+
+  const hasMoreRowEntries = rowEntries.length < rowTotalCount;
+
+  const loadMoreRowEntries = useCallback(() => {
+    if (rowLoading || rowLoadingMore || !hasMoreRowEntries) return;
+    void loadRowEntries(rowEntries.length, true);
+  }, [
+    rowLoading,
+    rowLoadingMore,
+    hasMoreRowEntries,
+    loadRowEntries,
+    rowEntries.length,
+  ]);
 
   const selected = useMemo(
     () => entries.find((e) => e.key === selectedKey) ?? null,
@@ -428,8 +469,8 @@ export function WorkspaceChatInbox({
             type="search"
             value={roomSearchQuery}
             onChange={(e) => setRoomSearchQuery(e.target.value)}
-            placeholder="Cari room obrolan…"
-            aria-label="Cari room obrolan"
+            placeholder="Cari obrolan…"
+            aria-label="Cari obrolan"
             data-testid="chat-inbox-search"
             className="h-10 border-border bg-muted/30 pl-9"
           />
@@ -490,6 +531,31 @@ export function WorkspaceChatInbox({
             );
           })
         )}
+        {hasMoreRowEntries && !roomSearchQuery.trim() ? (
+          <li className="px-2 py-2">
+            <button
+              type="button"
+              data-testid="chat-inbox-load-more"
+              onClick={loadMoreRowEntries}
+              disabled={rowLoadingMore}
+              className={cn(
+                "flex w-full items-center justify-center rounded-lg border border-border px-3 py-2.5 text-sm font-medium transition-colors",
+                rowLoadingMore
+                  ? "cursor-wait text-muted-foreground"
+                  : "text-foreground hover:bg-muted/60"
+              )}
+            >
+              {rowLoadingMore ? (
+                <>
+                  <Spinner className="mr-2 size-4" />
+                  Memuat…
+                </>
+              ) : (
+                `Muat lebih (${rowEntries.length} / ${rowTotalCount})`
+              )}
+            </button>
+          </li>
+        ) : null}
       </ul>
     </div>
   );

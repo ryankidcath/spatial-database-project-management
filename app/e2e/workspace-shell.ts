@@ -75,7 +75,7 @@ export async function openWorkspaceChat(
 ): Promise<"organization" | "project" | "inbox"> {
   const mobile = await isMobileWorkspaceChrome(page);
   if (mobile) {
-    const chatTab = page.getByRole("tab", { name: "Chat" });
+    const chatTab = page.getByRole("tab", { name: "Obrolan" });
     if (await chatTab.isVisible().catch(() => false)) {
       await chatTab.click();
       const room = page.getByTestId("chat-inbox-room").first();

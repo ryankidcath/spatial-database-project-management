@@ -20,4 +20,6 @@ export type ChatInboxEntry = {
   tableIdForRow?: string;
   pathSegments?: string[];
   rowPayload?: Record<string, unknown>;
+  /** Waktu pesan terakhir (atau pembuatan room) untuk urutan inbox. */
+  lastActivityAt?: string | null;
 };

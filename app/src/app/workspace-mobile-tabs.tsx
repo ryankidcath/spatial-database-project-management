@@ -45,7 +45,7 @@ const VIEW_META: Record<
 > = {
   Dashboard: { label: "Dashboard", shortLabel: "Home", icon: LayoutDashboard },
   Tabel: { label: "Tabel", shortLabel: "Tabel", icon: Table2 },
-  Chat: { label: "Chat", shortLabel: "Chat", icon: MessageSquare },
+  Chat: { label: "Obrolan", shortLabel: "Obrolan", icon: MessageSquare },
   Berkas: { label: "Berkas", shortLabel: "Berkas", icon: FolderOpen },
   Laporan: { label: "Laporan", shortLabel: "Laporan", icon: BarChart3 },
   Keuangan: { label: "Keuangan", shortLabel: "Keuangan", icon: Wallet },

@@ -65,11 +65,11 @@ test.describe("Mobile workspace smoke (viewport HP)", () => {
     });
     test.describe.configure({ timeout: 60_000 });
 
-    test("tab Chat tampil di bottom bar", async ({ page }) => {
+    test("tab Obrolan tampil di bottom bar", async ({ page }) => {
       await loginToWorkspace(page, e2eEmail!, e2ePassword!);
       await ensureMobileWorkspaceReady(page);
       await expect(
-        page.getByRole("tab", { name: "Chat" })
+        page.getByRole("tab", { name: "Obrolan" })
       ).toBeVisible({ timeout: 15_000 });
     });
 
