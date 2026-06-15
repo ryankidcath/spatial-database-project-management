@@ -9,6 +9,10 @@ import {
 import { MessageSquare } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import {
+  useLockDocumentScrollWhile,
+  useVisualViewportLayout,
+} from "@/lib/use-visual-viewport-layout";
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { fileAttachmentOptionsFromRowPayload } from "@/lib/chat-row-panel";
 import {
@@ -35,6 +39,7 @@ type Props = {
   virtualColumns: VirtualColumnRow[];
   mentionOptions: ChatMentionOption[];
   isBelowMd: boolean;
+  onMobileChatKeyboardOpenChange?: (open: boolean) => void;
 };
 
 function sortEntries(entries: ChatInboxEntry[]): ChatInboxEntry[] {
@@ -58,13 +63,30 @@ export function WorkspaceChatInbox({
   virtualColumns,
   mentionOptions,
   isBelowMd,
+  onMobileChatKeyboardOpenChange,
 }: Props) {
   const { unreadByTableId, tableRoomUnreadByTableId, unreadByProjectId, refresh } =
     useVirtualTableChatUnread();
+  const vvLayout = useVisualViewportLayout();
   const [rowEntries, setRowEntries] = useState<ChatInboxEntry[]>([]);
   const [rowLoading, setRowLoading] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
+
+  const mobileChatKeyboardActive =
+    isBelowMd && mobileConversationOpen && vvLayout.keyboardOpen;
+
+  useLockDocumentScrollWhile(mobileChatKeyboardActive);
+
+  useEffect(() => {
+    onMobileChatKeyboardOpenChange?.(mobileChatKeyboardActive);
+  }, [mobileChatKeyboardActive, onMobileChatKeyboardOpenChange]);
+
+  useEffect(() => {
+    if (!isBelowMd || mobileConversationOpen) return;
+    onMobileChatKeyboardOpenChange?.(false);
+  }, [isBelowMd, mobileConversationOpen, onMobileChatKeyboardOpenChange]);
+
   const [rowPanelExtras, setRowPanelExtras] = useState<{
     pathSegments: string[];
     rowPayload?: Record<string, unknown>;
@@ -455,32 +477,51 @@ export function WorkspaceChatInbox({
   );
 
   if (isBelowMd) {
+    const roomHeader = selected ? (
+      <div className="z-10 shrink-0 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-sm">
+        <button
+          type="button"
+          className="mb-2 inline-flex min-h-10 items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+          onClick={closeMobileConversation}
+          data-testid="chat-inbox-back"
+        >
+          ← Daftar obrolan
+        </button>
+        <p className="text-base font-semibold text-foreground">
+          {selected.title}
+        </p>
+        {selected.subtitle ? (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {selected.subtitle}
+          </p>
+        ) : null}
+      </div>
+    ) : null;
+
     return (
       <div className="flex h-0 min-h-0 flex-1 flex-col overflow-hidden">
         {mobileConversationOpen && selected ? (
-          <div className="flex h-0 min-h-0 flex-1 flex-col overflow-hidden bg-background">
-            <div className="z-10 shrink-0 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-sm">
-              <button
-                type="button"
-                className="mb-2 inline-flex min-h-10 items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
-                onClick={closeMobileConversation}
-                data-testid="chat-inbox-back"
-              >
-                ← Daftar obrolan
-              </button>
-              <p className="text-base font-semibold text-foreground">
-                {selected.title}
-              </p>
-              {selected.subtitle ? (
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {selected.subtitle}
-                </p>
-              ) : null}
+          mobileChatKeyboardActive ? (
+            <div
+              className="fixed inset-x-0 z-[70] flex flex-col overflow-hidden bg-background"
+              style={{
+                top: vvLayout.offsetTop,
+                height: vvLayout.height,
+              }}
+            >
+              {roomHeader}
+              <div className="flex h-0 min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                {chatPanelForEntry(selected)}
+              </div>
             </div>
-            <div className="flex h-0 min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              {chatPanelForEntry(selected)}
+          ) : (
+            <div className="flex h-0 min-h-0 flex-1 flex-col overflow-hidden bg-background">
+              {roomHeader}
+              <div className="flex h-0 min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                {chatPanelForEntry(selected)}
+              </div>
             </div>
-          </div>
+          )
         ) : (
           list
         )}

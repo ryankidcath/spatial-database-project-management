@@ -24,7 +24,7 @@ import {
 import { getMentionTriggerAtCursor } from "@/lib/chat-mention-autocomplete";
 import { escapeHtml } from "@/lib/chat-mention";
 import { useIsBelowMd } from "@/lib/use-media-query";
-import { useVisualViewportBottomInset } from "@/lib/use-visual-viewport-bottom-inset";
+import { useVisualViewportLayout } from "@/lib/use-visual-viewport-layout";
 import { cn } from "@/lib/utils";
 import {
   deleteChatMessageAction,
@@ -121,8 +121,8 @@ export function ChatPanel({
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isBelowMd = useIsBelowMd();
+  const { keyboardOpen: mobileKeyboardOpen } = useVisualViewportLayout();
   const mobileStickyComposer = embedded && isBelowMd;
-  const keyboardBottomInset = useVisualViewportBottomInset();
 
   useLayoutEffect(() => {
     if (!mobileStickyComposer) return;
@@ -435,6 +435,7 @@ export function ChatPanel({
             ? mobileStickyComposer
               ? cn(
                   "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain py-2",
+                  "[-webkit-overflow-scrolling:touch]",
                   MOBILE_CHAT_X
                 )
               : "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-4 py-2"
@@ -539,14 +540,16 @@ export function ChatPanel({
       <div
         className={
           mobileStickyComposer
-            ? "z-10 shrink-0 border-t border-border bg-card/95 backdrop-blur-sm"
+            ? "z-10 shrink-0 touch-none overscroll-none border-t border-border bg-card/95 backdrop-blur-sm"
             : embedded
               ? "shrink-0 space-y-2 border-t border-border px-4 pt-3"
               : "border-t border-border px-4 py-3 space-y-2"
         }
-        style={
-          mobileStickyComposer && keyboardBottomInset > 0
-            ? { paddingBottom: keyboardBottomInset }
+        onTouchMove={
+          mobileStickyComposer
+            ? (e) => {
+                e.stopPropagation();
+              }
             : undefined
         }
       >
@@ -631,19 +634,17 @@ export function ChatPanel({
             className={cn(
               "w-full rounded-md border border-input bg-background text-sm",
               mobileStickyComposer
-                ? "max-h-40 min-h-11 flex-1 resize-none rounded-2xl px-4 py-2.5 leading-snug"
+                ? "max-h-40 min-h-11 flex-1 resize-none touch-manipulation rounded-2xl px-4 py-2.5 leading-snug"
                 : "min-h-[72px] resize-y px-3 py-2"
             )}
             placeholder="Tulis pesan… ketik @ lalu nama untuk menyebut"
             value={draft}
             onFocus={() => {
               if (!mobileStickyComposer) return;
+              bottomRef.current?.scrollIntoView({ block: "end" });
               window.setTimeout(() => {
-                textareaRef.current?.scrollIntoView({
-                  block: "nearest",
-                  behavior: "smooth",
-                });
-              }, 280);
+                bottomRef.current?.scrollIntoView({ block: "end" });
+              }, mobileKeyboardOpen ? 80 : 280);
             }}
             onChange={(e) =>
               mentionAutocomplete.onDraftChange(

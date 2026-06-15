@@ -2012,6 +2012,7 @@ export function WorkspaceClient({
     parentIssueIdsWithChildren(issues)
   );
   const isBelowMd = useIsBelowMd();
+  const [mobileChatKeyboardOpen, setMobileChatKeyboardOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [mobileScopePhase, setMobileScopePhase] = useState<MobileScopePhase | null>(
     null
@@ -5499,7 +5500,7 @@ export function WorkspaceClient({
         <section
           className={cn(
             "relative flex min-h-0 flex-1 flex-col overflow-hidden",
-            WORKSPACE_MOBILE_TAB_BAR_PADDING
+            isBelowMd && !mobileChatKeyboardOpen && WORKSPACE_MOBILE_TAB_BAR_PADDING
           )}
           aria-busy={workspaceActionPending}
         >
@@ -5603,6 +5604,7 @@ export function WorkspaceClient({
                   virtualColumns={virtualColumns}
                   mentionOptions={workspaceChatMentionOptions}
                   isBelowMd={isBelowMd}
+                  onMobileChatKeyboardOpenChange={setMobileChatKeyboardOpen}
                 />
               </div>
               </TabPanelKeepAlive>
@@ -7632,7 +7634,7 @@ export function WorkspaceClient({
         )}
         </section>
         </Tabs>
-        {isBelowMd ? (
+        {isBelowMd && !mobileChatKeyboardOpen ? (
           <WorkspaceMobileTabBar
             activeView={activeView}
             visibleViews={visibleViews}
