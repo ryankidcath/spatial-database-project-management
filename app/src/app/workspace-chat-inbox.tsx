@@ -457,9 +457,9 @@ export function WorkspaceChatInbox({
 
   if (isBelowMd) {
     return (
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="flex h-full min-h-0 flex-1 flex-col">
         {mobileConversationOpen && selected ? (
-          <div className="absolute inset-0 z-20 flex min-h-0 flex-col overflow-hidden bg-background">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
             <div className="shrink-0 border-b border-border bg-card/90 px-4 py-3">
               <button
                 type="button"

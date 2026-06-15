@@ -5492,11 +5492,11 @@ export function WorkspaceClient({
           >
             <div
               className={cn(
-                "flex w-full flex-col p-6",
+                "flex w-full flex-col",
                 activeView === "Map" ||
                 (isBelowMd && activeView === "Chat")
-                  ? "box-border h-full min-h-0 flex-1 basis-0 overflow-hidden"
-                  : "min-h-full"
+                  ? "box-border h-full min-h-0 flex-1 basis-0 overflow-hidden p-0"
+                  : "min-h-full p-6"
               )}
             >
             <TabsList className="mb-4 hidden h-auto min-h-9 w-full max-w-full shrink-0 flex-wrap justify-start gap-1 rounded-lg bg-muted p-1 text-muted-foreground md:flex md:flex-nowrap">
@@ -5529,7 +5529,11 @@ export function WorkspaceClient({
               </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Chat" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelKeepAlive view="Chat" activeView={activeView}>
+              <TabPanelKeepAlive
+                view="Chat"
+                activeView={activeView}
+                className="flex h-full min-h-0 flex-1 flex-col"
+              >
               <div
                 className={cn(
                   "min-h-0 w-full",
