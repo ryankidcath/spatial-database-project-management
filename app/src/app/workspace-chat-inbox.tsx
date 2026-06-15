@@ -478,23 +478,18 @@ export function WorkspaceChatInbox({
 
   if (isBelowMd) {
     const roomHeader = selected ? (
-      <div className="z-10 shrink-0 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-sm">
+      <div className="z-10 flex min-h-11 shrink-0 items-center gap-2 border-b border-border bg-card/95 px-3 py-2 backdrop-blur-sm">
         <button
           type="button"
-          className="mb-2 inline-flex min-h-10 items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex shrink-0 items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
           onClick={closeMobileConversation}
           data-testid="chat-inbox-back"
         >
           ← Daftar obrolan
         </button>
-        <p className="text-base font-semibold text-foreground">
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-foreground">
           {selected.title}
-        </p>
-        {selected.subtitle ? (
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {selected.subtitle}
-          </p>
-        ) : null}
+        </h1>
       </div>
     ) : null;
 

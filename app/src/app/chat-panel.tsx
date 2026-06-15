@@ -553,48 +553,26 @@ export function ChatPanel({
             : undefined
         }
       >
-        {dedupedMentionOptions.length > 0 ? (
-          mobileStickyComposer ? (
-            <div className={cn("pt-2 pb-1", MOBILE_CHAT_X)}>
-              <p className="mb-1.5 text-[10px] text-muted-foreground">
-                Sebut (@nama):
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {dedupedMentionOptions.slice(0, 8).map((opt) => (
-                  <Button
-                    key={`${opt.kind}-${opt.id}`}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 shrink-0 px-2 text-[10px]"
-                    onClick={() => insertMention(opt)}
-                  >
-                    {opt.label}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-1">
-              <span className="shrink-0 self-center text-[10px] text-muted-foreground">
-                Sebut (@nama):
-              </span>
-              {dedupedMentionOptions.slice(0, 8).map((opt) => (
-                <Button
-                  key={`${opt.kind}-${opt.id}`}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-6 shrink-0 px-2 text-[10px]"
-                  onClick={() => insertMention(opt)}
-                >
-                  {opt.label}
-                </Button>
-              ))}
-            </div>
-          )
+        {dedupedMentionOptions.length > 0 && !mobileStickyComposer ? (
+          <div className="flex flex-wrap gap-1">
+            <span className="shrink-0 self-center text-[10px] text-muted-foreground">
+              Sebut (@nama):
+            </span>
+            {dedupedMentionOptions.slice(0, 8).map((opt) => (
+              <Button
+                key={`${opt.kind}-${opt.id}`}
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-6 shrink-0 px-2 text-[10px]"
+                onClick={() => insertMention(opt)}
+              >
+                {opt.label}
+              </Button>
+            ))}
+          </div>
         ) : null}
-        {fileAttachmentOptions.length > 0 ? (
+        {fileAttachmentOptions.length > 0 && !mobileStickyComposer ? (
           <select
             className={cn(
               "w-full rounded-md border border-input bg-background px-2 py-1 text-xs",
@@ -615,7 +593,7 @@ export function ChatPanel({
           className={cn(
             "relative",
             mobileStickyComposer
-              ? cn("flex items-end gap-2 pb-2", MOBILE_CHAT_X)
+              ? cn("flex items-end gap-2 py-2", MOBILE_CHAT_X)
               : ""
           )}
         >
@@ -637,7 +615,11 @@ export function ChatPanel({
                 ? "max-h-40 min-h-11 flex-1 resize-none touch-manipulation rounded-2xl px-4 py-2.5 leading-snug"
                 : "min-h-[72px] resize-y px-3 py-2"
             )}
-            placeholder="Tulis pesan… ketik @ lalu nama untuk menyebut"
+            placeholder={
+              mobileStickyComposer
+                ? "Tulis pesan…"
+                : "Tulis pesan… ketik @ lalu nama untuk menyebut"
+            }
             value={draft}
             onFocus={() => {
               if (!mobileStickyComposer) return;
