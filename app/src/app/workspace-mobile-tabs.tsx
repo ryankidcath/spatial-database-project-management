@@ -206,3 +206,7 @@ export function WorkspaceMobileTabBar({
 /** Padding bawah konten utama agar tidak tertutup bottom bar. */
 export const WORKSPACE_MOBILE_TAB_BAR_PADDING =
   "pb-[calc(3.75rem+env(safe-area-inset-bottom))] md:pb-0";
+
+/** Nilai CSS untuk inset composer di atas bottom bar (tanpa class pb-). */
+export const WORKSPACE_MOBILE_TAB_BAR_INSET =
+  "calc(3.75rem + env(safe-area-inset-bottom))";

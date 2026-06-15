@@ -3,12 +3,13 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useTransition,
 } from "react";
-import { Trash2 } from "lucide-react";
+import { Send, Trash2 } from "lucide-react";
 import { RowChatContextPath } from "@/components/row-chat-context-path";
 import { Button } from "@/components/ui/button";
 import { ChatMentionSuggestions } from "@/components/chat-mention-suggestions";
@@ -22,6 +23,10 @@ import {
 } from "@/lib/chat-mention";
 import { getMentionTriggerAtCursor } from "@/lib/chat-mention-autocomplete";
 import { escapeHtml } from "@/lib/chat-mention";
+import { useIsBelowMd } from "@/lib/use-media-query";
+import { useVisualViewportBottomInset } from "@/lib/use-visual-viewport-bottom-inset";
+import { cn } from "@/lib/utils";
+import { WORKSPACE_MOBILE_TAB_BAR_INSET } from "./workspace-mobile-tabs";
 import {
   deleteChatMessageAction,
   getOrCreateChatRoomAction,
@@ -113,6 +118,21 @@ export function ChatPanel({
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isBelowMd = useIsBelowMd();
+  const mobileStickyComposer = embedded && isBelowMd;
+  const keyboardBottomInset = useVisualViewportBottomInset();
+
+  useLayoutEffect(() => {
+    if (!mobileStickyComposer) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    const minH = 44;
+    const maxH = 160;
+    const next = Math.min(Math.max(el.scrollHeight, minH), maxH);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
+  }, [draft, mobileStickyComposer]);
 
   const dedupedMentionOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -407,10 +427,14 @@ export function ChatPanel({
         ref={listRef}
         className={
           embedded
-            ? "min-h-0 flex-1 space-y-3 overflow-y-auto py-2"
+            ? mobileStickyComposer
+              ? "min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2"
+              : "min-h-0 flex-1 space-y-3 overflow-y-auto py-2"
             : "min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3"
         }
-        style={embedded ? undefined : { maxHeight: "min(50vh, 420px)" }}
+        style={
+          embedded ? undefined : { maxHeight: "min(50vh, 420px)" }
+        }
       >
         {hasOlder ? (
           <button
@@ -506,14 +530,33 @@ export function ChatPanel({
 
       <div
         className={
-          embedded
-            ? "shrink-0 space-y-2 border-t border-border pt-3"
-            : "border-t border-border px-4 py-3 space-y-2"
+          mobileStickyComposer
+            ? "shrink-0 border-t border-border bg-card/95 backdrop-blur-sm"
+            : embedded
+              ? "shrink-0 space-y-2 border-t border-border pt-3"
+              : "border-t border-border px-4 py-3 space-y-2"
+        }
+        style={
+          mobileStickyComposer
+            ? {
+                paddingBottom:
+                  keyboardBottomInset > 0
+                    ? keyboardBottomInset
+                    : WORKSPACE_MOBILE_TAB_BAR_INSET,
+              }
+            : undefined
         }
       >
         {dedupedMentionOptions.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            <span className="text-[10px] text-muted-foreground self-center">
+          <div
+            className={cn(
+              "flex gap-1",
+              mobileStickyComposer
+                ? "overflow-x-auto px-2 pt-2 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                : "flex-wrap"
+            )}
+          >
+            <span className="shrink-0 self-center text-[10px] text-muted-foreground">
               Sebut (@nama):
             </span>
             {dedupedMentionOptions.slice(0, 8).map((opt) => (
@@ -522,7 +565,10 @@ export function ChatPanel({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-6 px-2 text-[10px]"
+                className={cn(
+                  "shrink-0 text-[10px]",
+                  mobileStickyComposer ? "h-7 px-2" : "h-6 px-2"
+                )}
                 onClick={() => insertMention(opt)}
               >
                 {opt.label}
@@ -532,7 +578,10 @@ export function ChatPanel({
         ) : null}
         {fileAttachmentOptions.length > 0 ? (
           <select
-            className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+            className={cn(
+              "w-full rounded-md border border-input bg-background px-2 py-1 text-xs",
+              mobileStickyComposer ? "mx-2 mb-1" : ""
+            )}
             value={selectedFileUrl}
             onChange={(e) => setSelectedFileUrl(e.target.value)}
           >
@@ -544,7 +593,12 @@ export function ChatPanel({
             ))}
           </select>
         ) : null}
-        <div className="relative">
+        <div
+          className={cn(
+            "relative",
+            mobileStickyComposer ? "flex items-end gap-2 px-2 pb-2" : ""
+          )}
+        >
           {mentionAutocomplete.isOpen ? (
             <ChatMentionSuggestions
               suggestions={mentionAutocomplete.suggestions}
@@ -556,9 +610,24 @@ export function ChatPanel({
           ) : null}
           <textarea
             ref={textareaRef}
-            className="min-h-[72px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm"
+            rows={mobileStickyComposer ? 1 : undefined}
+            className={cn(
+              "w-full rounded-md border border-input bg-background text-sm",
+              mobileStickyComposer
+                ? "max-h-40 min-h-11 flex-1 resize-none rounded-2xl px-4 py-2.5 leading-snug"
+                : "min-h-[72px] resize-y px-3 py-2"
+            )}
             placeholder="Tulis pesan… ketik @ lalu nama untuk menyebut"
             value={draft}
+            onFocus={() => {
+              if (!mobileStickyComposer) return;
+              window.setTimeout(() => {
+                textareaRef.current?.scrollIntoView({
+                  block: "nearest",
+                  behavior: "smooth",
+                });
+              }, 280);
+            }}
             onChange={(e) =>
               mentionAutocomplete.onDraftChange(
                 e.target.value,
@@ -576,17 +645,42 @@ export function ChatPanel({
               }
             }}
           />
+          {mobileStickyComposer ? (
+            <Button
+              type="button"
+              size="icon"
+              className="size-11 shrink-0 rounded-full"
+              disabled={pending || !draft.trim()}
+              aria-label="Kirim pesan"
+              onClick={handleSend}
+            >
+              <Send className="size-5" aria-hidden />
+            </Button>
+          ) : null}
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-muted-foreground">
-            Ctrl+Enter untuk kirim
-          </span>
-          <Button type="button" size="sm" disabled={pending || !draft.trim()} onClick={handleSend}>
-            Kirim
-          </Button>
-        </div>
+        {!mobileStickyComposer ? (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] text-muted-foreground">
+              Ctrl+Enter untuk kirim
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              disabled={pending || !draft.trim()}
+              onClick={handleSend}
+            >
+              Kirim
+            </Button>
+          </div>
+        ) : null}
         {error ? (
-          <p className="text-xs text-destructive" role="alert">
+          <p
+            className={cn(
+              "text-xs text-destructive",
+              mobileStickyComposer ? "px-2 pb-1" : ""
+            )}
+            role="alert"
+          >
             {error}
           </p>
         ) : null}

@@ -20,7 +20,6 @@ import type { ChatInboxEntry } from "./workspace-chat-inbox-types";
 import type { ChatMentionOption } from "./chat-types";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
-import { WORKSPACE_MOBILE_TAB_BAR_PADDING } from "./workspace-mobile-tabs";
 
 type Props = {
   organizationId: string | null;
@@ -478,12 +477,7 @@ export function WorkspaceChatInbox({
                 </p>
               ) : null}
             </div>
-            <div
-              className={cn(
-                "flex min-h-0 flex-1 flex-col overflow-hidden px-3 pt-2",
-                WORKSPACE_MOBILE_TAB_BAR_PADDING
-              )}
-            >
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {chatPanelForEntry(selected)}
             </div>
           </div>
