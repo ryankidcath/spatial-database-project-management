@@ -134,7 +134,9 @@ export function WorkspaceMobileTabBar({
           key={view}
           view={view}
           active={activeView === view}
-          onSelect={() => onViewChange(view)}
+          onSelect={() => {
+            if (activeView !== view) onViewChange(view);
+          }}
         />
       ))}
 
@@ -183,7 +185,7 @@ export function WorkspaceMobileTabBar({
                           : "text-foreground hover:bg-muted"
                       )}
                       onClick={() => {
-                        onViewChange(view);
+                        if (activeView !== view) onViewChange(view);
                         setMoreOpen(false);
                       }}
                     >

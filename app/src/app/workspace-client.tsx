@@ -1750,6 +1750,8 @@ export function WorkspaceClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const clientNavReadyRef = useRef(false);
+  /** Cegah efek sinkron URL menimpa tab yang baru dipilih (race replaceState vs searchParams). */
+  const viewChangeLockUntilRef = useRef(0);
   const [taskMsg, setTaskMsg] = useState<string | null>(null);
   const [taskPending, startTaskTransition] = useTransition();
   const [, startStatusTransition] = useTransition();
@@ -2310,18 +2312,21 @@ export function WorkspaceClient({
   const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
   /** Sinkron dari URL hanya saat navigasi eksternal (back/forward, notifikasi, RSC). */
   useEffect(() => {
+    if (Date.now() < viewChangeLockUntilRef.current) return;
+
     const enabled = effectiveEnabledModuleCodes(
       canonicalOrgId,
       organizationModules
     );
     if (typeof window !== "undefined") {
-      const winView = parseViewParam(
-        new URLSearchParams(window.location.search).get("view")
-      );
+      const windowParams = new URLSearchParams(window.location.search);
+      const windowViewRaw = windowParams.get("view");
+      const winView = parseViewParam(windowViewRaw);
       if (winView && isViewAllowedForModules(winView, enabled)) {
         setActiveView((current) => (current === winView ? current : winView));
         return;
       }
+      if (windowViewRaw) return;
     }
     setActiveView((current) =>
       current === activeViewFromUrl ? current : activeViewFromUrl
@@ -2356,6 +2361,7 @@ export function WorkspaceClient({
 
   useEffect(() => {
     if (!clientNavReadyRef.current) return;
+    if (Date.now() < viewChangeLockUntilRef.current) return;
     if (projects.length === 0 || !canonicalOrgId || !selectedProjectId) return;
     if (scopeRoutePending) return;
     const p = workspaceUrlParamsBaseline(
@@ -2411,10 +2417,6 @@ export function WorkspaceClient({
       dirty = true;
     }
     if (parseViewParam(p.get("view")) === "Keuangan" && !enabled.has("finance")) {
-      p.set("view", viewToParam("Dashboard"));
-      dirty = true;
-    }
-    if (p.get("view")?.toLowerCase() === "chat") {
       p.set("view", viewToParam("Dashboard"));
       dirty = true;
     }
@@ -3939,6 +3941,7 @@ export function WorkspaceClient({
   const handleActiveViewChange = useCallback(
     (v: ViewId) => {
       if (!isViewAllowedForModules(v, enabledModulesForOrg)) return;
+      viewChangeLockUntilRef.current = Date.now() + 500;
       setActiveView(v);
       commitScopeInUrl(
         (q) => {
@@ -3954,6 +3957,7 @@ export function WorkspaceClient({
   );
 
   useEffect(() => {
+    if (Date.now() < viewChangeLockUntilRef.current) return;
     if (visibleViews.includes(activeView)) return;
     handleActiveViewChange("Dashboard");
   }, [visibleViews, activeView, handleActiveViewChange]);
