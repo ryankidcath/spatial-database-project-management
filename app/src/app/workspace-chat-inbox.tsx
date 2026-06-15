@@ -456,10 +456,10 @@ export function WorkspaceChatInbox({
 
   if (isBelowMd) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col">
+      <div className="flex h-0 min-h-0 flex-1 flex-col overflow-hidden">
         {mobileConversationOpen && selected ? (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-            <div className="shrink-0 border-b border-border bg-card/90 px-4 py-3">
+          <div className="flex h-0 min-h-0 flex-1 flex-col overflow-hidden bg-background">
+            <div className="z-10 shrink-0 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-sm">
               <button
                 type="button"
                 className="mb-2 inline-flex min-h-10 items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -477,7 +477,7 @@ export function WorkspaceChatInbox({
                 </p>
               ) : null}
             </div>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="flex h-0 min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
               {chatPanelForEntry(selected)}
             </div>
           </div>

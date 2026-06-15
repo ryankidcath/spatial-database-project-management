@@ -57,8 +57,9 @@ const ScrollArea = React.forwardRef<
       <ScrollAreaPrimitive.Viewport
         className={cn(
           "relative z-0 size-full rounded-[inherit]",
+          fillAvailableHeight && "overflow-hidden",
           fillAvailableHeight
-            ? "[&>div]:box-border [&>div]:flex [&>div]:h-full [&>div]:min-h-0 [&>div]:w-full [&>div]:flex-col"
+            ? "[&>div]:box-border [&>div]:flex [&>div]:h-full [&>div]:min-h-0 [&>div]:w-full [&>div]:flex-col [&>div]:overflow-hidden"
             : "[&>div]:!block"
         )}
       >

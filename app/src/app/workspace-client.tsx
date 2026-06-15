@@ -5563,17 +5563,29 @@ export function WorkspaceClient({
               )}
               </TabPanelKeepAlive>
             </TabsContent>
-            <TabsContent value="Chat" className="min-h-0 w-full min-w-0 flex-none outline-none">
+            <TabsContent
+              value="Chat"
+              className={cn(
+                "min-h-0 w-full min-w-0 outline-none",
+                isBelowMd
+                  ? "flex flex-1 basis-0 flex-col overflow-hidden"
+                  : "flex-none"
+              )}
+            >
               <TabPanelKeepAlive
                 view="Chat"
                 activeView={activeView}
-                className="flex h-full min-h-0 flex-1 flex-col"
+                className={cn(
+                  isBelowMd
+                    ? "flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+                    : "flex h-full min-h-0 flex-1 flex-col"
+                )}
               >
               <div
                 className={cn(
                   "min-h-0 w-full",
                   isBelowMd
-                    ? "flex h-full min-h-0 flex-1 flex-col"
+                    ? "flex h-0 min-h-0 flex-1 basis-0 flex-col overflow-hidden"
                     : "mt-2"
                 )}
               >

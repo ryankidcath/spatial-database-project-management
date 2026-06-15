@@ -26,7 +26,6 @@ import { escapeHtml } from "@/lib/chat-mention";
 import { useIsBelowMd } from "@/lib/use-media-query";
 import { useVisualViewportBottomInset } from "@/lib/use-visual-viewport-bottom-inset";
 import { cn } from "@/lib/utils";
-import { WORKSPACE_MOBILE_TAB_BAR_INSET } from "./workspace-mobile-tabs";
 import {
   deleteChatMessageAction,
   getOrCreateChatRoomAction,
@@ -41,6 +40,9 @@ import type {
 } from "./chat-types";
 
 const PAGE_SIZE = 50;
+
+/** Padding horizontal chat mobile — selaras header workspace (`px-4`). */
+const MOBILE_CHAT_X = "px-4";
 
 type Props = {
   scopeType: ChatScopeType;
@@ -397,7 +399,10 @@ export function ChatPanel({
     <div
       className={
         embedded
-          ? `flex min-h-0 flex-1 flex-col ${className}`
+          ? cn(
+              "flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden",
+              className
+            )
           : `flex min-h-[320px] flex-col rounded-xl border border-border bg-card shadow-sm ${className}`
       }
     >
@@ -428,9 +433,12 @@ export function ChatPanel({
         className={
           embedded
             ? mobileStickyComposer
-              ? "min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2"
-              : "min-h-0 flex-1 space-y-3 overflow-y-auto py-2"
-            : "min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3"
+              ? cn(
+                  "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain py-2",
+                  MOBILE_CHAT_X
+                )
+              : "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-4 py-2"
+            : "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-4 py-3"
         }
         style={
           embedded ? undefined : { maxHeight: "min(50vh, 420px)" }
@@ -531,56 +539,63 @@ export function ChatPanel({
       <div
         className={
           mobileStickyComposer
-            ? "shrink-0 border-t border-border bg-card/95 backdrop-blur-sm"
+            ? "z-10 shrink-0 border-t border-border bg-card/95 backdrop-blur-sm"
             : embedded
-              ? "shrink-0 space-y-2 border-t border-border pt-3"
+              ? "shrink-0 space-y-2 border-t border-border px-4 pt-3"
               : "border-t border-border px-4 py-3 space-y-2"
         }
         style={
-          mobileStickyComposer
-            ? {
-                paddingBottom:
-                  keyboardBottomInset > 0
-                    ? keyboardBottomInset
-                    : WORKSPACE_MOBILE_TAB_BAR_INSET,
-              }
+          mobileStickyComposer && keyboardBottomInset > 0
+            ? { paddingBottom: keyboardBottomInset }
             : undefined
         }
       >
         {dedupedMentionOptions.length > 0 ? (
-          <div
-            className={cn(
-              "flex gap-1",
-              mobileStickyComposer
-                ? "overflow-x-auto px-2 pt-2 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                : "flex-wrap"
-            )}
-          >
-            <span className="shrink-0 self-center text-[10px] text-muted-foreground">
-              Sebut (@nama):
-            </span>
-            {dedupedMentionOptions.slice(0, 8).map((opt) => (
-              <Button
-                key={`${opt.kind}-${opt.id}`}
-                type="button"
-                variant="outline"
-                size="sm"
-                className={cn(
-                  "shrink-0 text-[10px]",
-                  mobileStickyComposer ? "h-7 px-2" : "h-6 px-2"
-                )}
-                onClick={() => insertMention(opt)}
-              >
-                {opt.label}
-              </Button>
-            ))}
-          </div>
+          mobileStickyComposer ? (
+            <div className={cn("pt-2 pb-1", MOBILE_CHAT_X)}>
+              <p className="mb-1.5 text-[10px] text-muted-foreground">
+                Sebut (@nama):
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {dedupedMentionOptions.slice(0, 8).map((opt) => (
+                  <Button
+                    key={`${opt.kind}-${opt.id}`}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 shrink-0 px-2 text-[10px]"
+                    onClick={() => insertMention(opt)}
+                  >
+                    {opt.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              <span className="shrink-0 self-center text-[10px] text-muted-foreground">
+                Sebut (@nama):
+              </span>
+              {dedupedMentionOptions.slice(0, 8).map((opt) => (
+                <Button
+                  key={`${opt.kind}-${opt.id}`}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 shrink-0 px-2 text-[10px]"
+                  onClick={() => insertMention(opt)}
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </div>
+          )
         ) : null}
         {fileAttachmentOptions.length > 0 ? (
           <select
             className={cn(
               "w-full rounded-md border border-input bg-background px-2 py-1 text-xs",
-              mobileStickyComposer ? "mx-2 mb-1" : ""
+              mobileStickyComposer ? cn("mb-1", MOBILE_CHAT_X) : ""
             )}
             value={selectedFileUrl}
             onChange={(e) => setSelectedFileUrl(e.target.value)}
@@ -596,7 +611,9 @@ export function ChatPanel({
         <div
           className={cn(
             "relative",
-            mobileStickyComposer ? "flex items-end gap-2 px-2 pb-2" : ""
+            mobileStickyComposer
+              ? cn("flex items-end gap-2 pb-2", MOBILE_CHAT_X)
+              : ""
           )}
         >
           {mentionAutocomplete.isOpen ? (
@@ -677,7 +694,7 @@ export function ChatPanel({
           <p
             className={cn(
               "text-xs text-destructive",
-              mobileStickyComposer ? "px-2 pb-1" : ""
+              mobileStickyComposer ? cn("pb-1", MOBILE_CHAT_X) : ""
             )}
             role="alert"
           >
