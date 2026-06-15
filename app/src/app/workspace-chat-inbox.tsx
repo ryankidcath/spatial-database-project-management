@@ -6,7 +6,8 @@ import {
   useMemo,
   useState,
 } from "react";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Search } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
@@ -49,6 +50,19 @@ function sortEntries(entries: ChatInboxEntry[]): ChatInboxEntry[] {
   });
 }
 
+function entryMatchesRoomSearch(entry: ChatInboxEntry, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  const haystack = [
+    entry.title,
+    entry.subtitle ?? "",
+    ...(entry.pathSegments ?? []),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(needle);
+}
+
 export function WorkspaceChatInbox({
   organizationId,
   organizationName,
@@ -72,6 +86,7 @@ export function WorkspaceChatInbox({
   const [rowLoading, setRowLoading] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
+  const [roomSearchQuery, setRoomSearchQuery] = useState("");
 
   const mobileChatKeyboardActive =
     isBelowMd && mobileConversationOpen && vvLayout.keyboardOpen;
@@ -252,6 +267,11 @@ export function WorkspaceChatInbox({
     [staticEntries, rowEntries]
   );
 
+  const filteredEntries = useMemo(
+    () => entries.filter((e) => entryMatchesRoomSearch(e, roomSearchQuery)),
+    [entries, roomSearchQuery]
+  );
+
   const selected = useMemo(
     () => entries.find((e) => e.key === selectedKey) ?? null,
     [entries, selectedKey]
@@ -398,14 +418,22 @@ export function WorkspaceChatInbox({
         isBelowMd ? "flex-1" : "w-full max-w-[22rem] shrink-0 border-r border-border"
       )}
     >
-      <div className="shrink-0 border-b border-border px-4 py-3">
-        <h2 className="text-base font-semibold text-foreground">Obrolan</h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {organizationName ?? "Organisasi"}
-          {projectId
-            ? ` · ${projectsForMention.find((p) => p.id === projectId)?.name ?? "Proyek"}`
-            : ""}
-        </p>
+      <div className="shrink-0 border-b border-border px-3 py-2.5">
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            type="search"
+            value={roomSearchQuery}
+            onChange={(e) => setRoomSearchQuery(e.target.value)}
+            placeholder="Cari room obrolan…"
+            aria-label="Cari room obrolan"
+            data-testid="chat-inbox-search"
+            className="h-10 border-border bg-muted/30 pl-9"
+          />
+        </div>
       </div>
       <ul className="min-h-0 flex-1 overflow-auto p-2">
         {rowLoading && entries.length === staticEntries.length ? (
@@ -413,12 +441,14 @@ export function WorkspaceChatInbox({
             <Spinner className="size-5" />
           </li>
         ) : null}
-        {entries.length === 0 ? (
+        {filteredEntries.length === 0 ? (
           <li className="px-2 py-6 text-center text-sm text-muted-foreground">
-            Belum ada room obrolan di scope ini.
+            {entries.length === 0
+              ? "Belum ada room obrolan di scope ini."
+              : "Tidak ada room yang cocok dengan pencarian."}
           </li>
         ) : (
-          entries.map((entry) => {
+          filteredEntries.map((entry) => {
             const active = entry.key === selectedKey;
             return (
               <li key={entry.key}>

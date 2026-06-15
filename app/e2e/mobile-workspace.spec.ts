@@ -120,7 +120,7 @@ test.describe("Mobile workspace smoke (viewport HP)", () => {
 
       await page.getByTestId("chat-inbox-back").click();
       await expect(
-        page.getByRole("heading", { name: "Obrolan" })
+        page.getByTestId("chat-inbox-search")
       ).toBeVisible({ timeout: 10_000 });
       await expect(
         page.getByTestId("chat-inbox-room").first()
