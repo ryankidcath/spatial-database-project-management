@@ -335,7 +335,7 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 ### Mobile v2 — chat (Step 5–5b)
 
 - [ ] Header ringkas: chip scope + notif + menu ⋯ (online, tema, keluar); **tanpa** sidebar; chat lewat tab **Chat**
-- [ ] Tab **Chat** di bottom bar → inbox room → sheet obrolan
+- [ ] Tab **Chat** di bottom bar → inbox room → layar obrolan penuh + **← Daftar obrolan**
 - [ ] Mention notifikasi baris → Peta + chat; org/proyek/tabel → tab Chat
 
 ### Desktop regresi (v2 tidak mengubah wizard)

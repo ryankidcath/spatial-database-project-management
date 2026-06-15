@@ -231,7 +231,7 @@ Centang `[ ]` → `[x]` saat selesai. Jangan loncat step tanpa acceptance terpen
 |------|-------------|
 | [x] `ViewId` Chat + URL `?view=chat` | `workspace-views.ts`, `workspace-url.ts` |
 | [x] `WorkspaceChatInbox` — daftar room scope + unread | `workspace-chat-inbox.tsx` |
-| [x] Mobile: tab Chat di bottom bar (slot ke-4); tap room → sheet obrolan | `workspace-mobile-tabs.tsx` |
+| [x] Mobile: tab Chat di bottom bar; tap room → layar obrolan penuh + kembali | `workspace-chat-inbox.tsx` |
 | [x] Desktop: master–detail (daftar ~22rem + `ChatPanel`) | `workspace-chat-inbox.tsx` |
 | [x] Panel kanan off saat tab Chat desktop | `workspace-client.tsx` |
 | [x] Unread: konteks tabel/proyek + baris belum dibaca per tabel | `virtual-table-chat-unread-context`, `chat-actions` |

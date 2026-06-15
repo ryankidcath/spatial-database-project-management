@@ -107,21 +107,24 @@ test.describe("Mobile workspace smoke (viewport HP)", () => {
       await expect(dialog).toBeHidden({ timeout: 10_000 });
     });
 
-    test("chat mobile membuka sheet obrolan dan bisa ditutup", async ({ page }) => {
+    test("chat mobile membuka obrolan full screen dan bisa kembali", async ({ page }) => {
       await loginToWorkspace(page, e2eEmail!, e2ePassword!);
       await ensureMobileWorkspaceReady(page);
 
       const chatKind = await openWorkspaceChat(page);
       expect(["organization", "project", "inbox"]).toContain(chatKind);
 
-      const dialog = page.getByRole("dialog");
-      await expect(dialog).toBeVisible({ timeout: 15_000 });
       await expect(
-        dialog.getByPlaceholder(/Tulis pesan/i)
-      ).toBeVisible();
+        page.getByPlaceholder(/Tulis pesan/i)
+      ).toBeVisible({ timeout: 15_000 });
 
-      await dialog.getByRole("button", { name: "Tutup panel" }).click();
-      await expect(dialog).toBeHidden({ timeout: 10_000 });
+      await page.getByTestId("chat-inbox-back").click();
+      await expect(
+        page.getByRole("heading", { name: "Obrolan" })
+      ).toBeVisible({ timeout: 10_000 });
+      await expect(
+        page.getByTestId("chat-inbox-room").first()
+      ).toBeVisible();
     });
   }
 );

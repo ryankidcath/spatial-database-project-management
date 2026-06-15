@@ -7,7 +7,6 @@ import {
   useState,
 } from "react";
 import { MessageSquare } from "lucide-react";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
@@ -21,6 +20,7 @@ import type { ChatInboxEntry } from "./workspace-chat-inbox-types";
 import type { ChatMentionOption } from "./chat-types";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
+import { WORKSPACE_MOBILE_TAB_BAR_PADDING } from "./workspace-mobile-tabs";
 
 type Props = {
   organizationId: string | null;
@@ -65,7 +65,7 @@ export function WorkspaceChatInbox({
   const [rowEntries, setRowEntries] = useState<ChatInboxEntry[]>([]);
   const [rowLoading, setRowLoading] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
   const [rowPanelExtras, setRowPanelExtras] = useState<{
     pathSegments: string[];
     rowPayload?: Record<string, unknown>;
@@ -274,10 +274,14 @@ export function WorkspaceChatInbox({
   const selectEntry = useCallback(
     (entry: ChatInboxEntry) => {
       setSelectedKey(entry.key);
-      if (isBelowMd) setMobileSheetOpen(true);
+      if (isBelowMd) setMobileConversationOpen(true);
     },
     [isBelowMd]
   );
+
+  const closeMobileConversation = useCallback(() => {
+    setMobileConversationOpen(false);
+  }, []);
 
   const mentionForEntry = useCallback(
     (entry: ChatInboxEntry): ChatMentionOption[] => {
@@ -453,31 +457,40 @@ export function WorkspaceChatInbox({
 
   if (isBelowMd) {
     return (
-      <>
-        {list}
-        <Sheet open={mobileSheetOpen} onOpenChange={setMobileSheetOpen}>
-          {selected ? (
-            <SheetContent
-              side="bottom"
-              className="flex h-[min(92dvh,100%)] flex-col gap-0 p-0"
-            >
-              <div className="shrink-0 border-b border-border px-4 py-3">
-                <p className="text-sm font-semibold text-foreground">
-                  {selected.title}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {mobileConversationOpen && selected ? (
+          <div className="absolute inset-0 z-20 flex min-h-0 flex-col overflow-hidden bg-background">
+            <div className="shrink-0 border-b border-border bg-card/90 px-4 py-3">
+              <button
+                type="button"
+                className="mb-2 inline-flex min-h-10 items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+                onClick={closeMobileConversation}
+                data-testid="chat-inbox-back"
+              >
+                ← Daftar obrolan
+              </button>
+              <p className="text-base font-semibold text-foreground">
+                {selected.title}
+              </p>
+              {selected.subtitle ? (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {selected.subtitle}
                 </p>
-                {selected.subtitle ? (
-                  <p className="text-xs text-muted-foreground">
-                    {selected.subtitle}
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">
-                {chatPanelForEntry(selected)}
-              </div>
-            </SheetContent>
-          ) : null}
-        </Sheet>
-      </>
+              ) : null}
+            </div>
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col overflow-hidden px-3 pt-2",
+                WORKSPACE_MOBILE_TAB_BAR_PADDING
+              )}
+            >
+              {chatPanelForEntry(selected)}
+            </div>
+          </div>
+        ) : (
+          list
+        )}
+      </div>
     );
   }
 
