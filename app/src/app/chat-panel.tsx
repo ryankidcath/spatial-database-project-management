@@ -16,6 +16,11 @@ import { ChatMentionSuggestions } from "@/components/chat-mention-suggestions";
 import { useChatMentionAutocomplete } from "@/hooks/use-chat-mention-autocomplete";
 import { dispatchChatUnreadInvalidate } from "@/lib/chat-unread-invalidate";
 import {
+  getOrCreateChatRoomClient,
+  markChatRoomReadClient,
+  sendChatMessageClient,
+} from "@/lib/chat-client";
+import {
   buildChatRoomCacheKey,
   getChatRoomCache,
   mergeChatMessageTail,
@@ -35,9 +40,6 @@ import { cn } from "@/lib/utils";
 import { WORKSPACE_MOBILE_TAB_BAR_COMPOSER_PADDING } from "./workspace-mobile-tabs";
 import {
   deleteChatMessageAction,
-  getOrCreateChatRoomAction,
-  markChatRoomReadAction,
-  sendChatMessageAction,
 } from "./chat-actions";
 import type {
   ChatAttachmentRef,
@@ -47,6 +49,10 @@ import type {
 } from "./chat-types";
 
 const PAGE_SIZE = 50;
+const PENDING_MSG_PREFIX = "pending:";
+const ROOM_POLL_MS = 20_000;
+const SEND_CONFIRM_MS = 1_000;
+const MARK_READ_RETRIES = 3;
 
 /** Padding horizontal chat mobile — selaras header workspace (`px-4`). */
 const MOBILE_CHAT_X = "px-4";
@@ -75,6 +81,8 @@ type Props = {
   onInvalidateTableUnread?: () => void;
   /** Kunci cache inbox (`org`, `project:…`, `table:…`, `row:…`); default dari scope. */
   roomCacheKey?: string;
+  /** Hanya mark-read + clear badge saat percakapan benar-benar terbuka (bukan panel tersembunyi). */
+  conversationActive?: boolean;
   className?: string;
 };
 
@@ -111,6 +119,7 @@ export function ChatPanel({
   onUnreadCountChange,
   onInvalidateTableUnread,
   roomCacheKey: roomCacheKeyProp,
+  conversationActive = true,
   className = "",
 }: Props) {
   const cacheKey =
@@ -125,12 +134,33 @@ export function ChatPanel({
 
   const onInvalidateTableUnreadRef = useRef(onInvalidateTableUnread);
   onInvalidateTableUnreadRef.current = onInvalidateTableUnread;
+  const conversationActiveRef = useRef(conversationActive);
+  conversationActiveRef.current = conversationActive;
 
-  const invalidateTableUnreadIfRow = useCallback(() => {
-    if (scopeType === "virtual_row" || scopeType === "virtual_table") {
-      onInvalidateTableUnreadRef.current?.();
-    }
-  }, [scopeType]);
+  const markRoomRead = useCallback(
+    async (
+      rid: string,
+      options?: { notifyBadges?: boolean }
+    ): Promise<boolean> => {
+      const notifyBadges = options?.notifyBadges ?? conversationActiveRef.current;
+      for (let attempt = 0; attempt < MARK_READ_RETRIES; attempt++) {
+        const res = await markChatRoomReadClient(rid);
+        if (!res.error) {
+          setLastReadAt(new Date().toISOString());
+          if (notifyBadges) {
+            dispatchChatUnreadInvalidate();
+            onInvalidateTableUnreadRef.current?.();
+          }
+          return true;
+        }
+        if (attempt < MARK_READ_RETRIES - 1) {
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        }
+      }
+      return false;
+    },
+    []
+  );
   const [roomId, setRoomId] = useState<string | null>(
     initialCache?.roomId ?? null
   );
@@ -229,7 +259,7 @@ export function ChatPanel({
   }, [unreadCount, onUnreadCountChange]);
 
   const ensureRoom = useCallback(async () => {
-    const res = await getOrCreateChatRoomAction({
+    const res = await getOrCreateChatRoomClient({
       scopeType,
       organizationId,
       projectId,
@@ -336,27 +366,37 @@ export function ChatPanel({
       if (cancelled) return;
 
       await loadReadState(rid);
-      await markChatRoomReadAction(rid);
-      setLastReadAt(new Date().toISOString());
-      dispatchChatUnreadInvalidate();
-      invalidateTableUnreadIfRow();
       setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [
-    cacheKey,
-    ensureRoom,
-    loadMessages,
-    loadReadState,
-    invalidateTableUnreadIfRow,
-  ]);
+  }, [cacheKey, ensureRoom, loadMessages, loadReadState]);
+
+  useEffect(() => {
+    if (!conversationActive || !roomId) return;
+    void markRoomRead(roomId, { notifyBadges: true });
+  }, [conversationActive, roomId, markRoomRead]);
 
   useEffect(() => {
     if (!roomId) return;
     const supabase = getBrowserSupabaseClient();
     if (!supabase) return;
+
+    const ingestMessage = (msg: ChatMessageRow) => {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        const next = prev.filter(
+          (m) =>
+            !(
+              m.id.startsWith(PENDING_MSG_PREFIX) &&
+              m.author_id === msg.author_id &&
+              m.body === msg.body
+            )
+        );
+        return [...next, msg];
+      });
+    };
 
     const channel = supabase
       .channel(`chat:${roomId}`)
@@ -378,16 +418,9 @@ export function ChatPanel({
             attachment_refs: parseAttachmentRefs(row.attachment_refs),
             created_at: String(row.created_at),
           };
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === msg.id)) return prev;
-            return [...prev, msg];
-          });
-          if (msg.author_id !== userId) {
-            dispatchChatUnreadInvalidate();
-            void markChatRoomReadAction(roomId).then(() => {
-              setLastReadAt(new Date().toISOString());
-              invalidateTableUnreadIfRow();
-            });
+          ingestMessage(msg);
+          if (msg.author_id !== userId && conversationActiveRef.current) {
+            void markRoomRead(roomId, { notifyBadges: true });
           }
         }
       )
@@ -406,12 +439,23 @@ export function ChatPanel({
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          void loadMessages(roomId);
+        }
+      });
+
+    const pollId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadMessages(roomId);
+      }
+    }, ROOM_POLL_MS);
 
     return () => {
+      window.clearInterval(pollId);
       void supabase.removeChannel(channel);
     };
-  }, [roomId, userId]);
+  }, [roomId, userId, loadMessages, markRoomRead]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -438,25 +482,51 @@ export function ChatPanel({
       const f = fileAttachmentOptions.find((x) => x.url === selectedFileUrl);
       if (f) attachmentRefs.push(f);
     }
-    startTransition(async () => {
-      const res = await sendChatMessageAction({
-        roomId,
+    const savedDraft = draft;
+    const savedFileUrl = selectedFileUrl;
+    const sendRoomId = roomId;
+    const optimisticId = `${PENDING_MSG_PREFIX}${crypto.randomUUID()}`;
+    const optimisticMsg: ChatMessageRow = {
+      id: optimisticId,
+      room_id: sendRoomId,
+      author_id: userId,
+      body,
+      attachment_refs: attachmentRefs,
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setDraft("");
+    setSelectedFileUrl("");
+    mentionAutocomplete.onClose();
+    setError(null);
+
+    void (async () => {
+      const res = await sendChatMessageClient({
+        roomId: sendRoomId,
         body,
         attachmentRefs,
       });
       if (res.error) {
+        setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+        setDraft(savedDraft);
+        setSelectedFileUrl(savedFileUrl);
         setError(res.error);
         return;
       }
-      setDraft("");
-      setSelectedFileUrl("");
-      mentionAutocomplete.onClose();
-      setError(null);
-      await markChatRoomReadAction(roomId);
-      setLastReadAt(new Date().toISOString());
-      dispatchChatUnreadInvalidate();
-      invalidateTableUnreadIfRow();
-    });
+
+      const realId = res.data!.messageId;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === optimisticId ? { ...m, id: realId } : m))
+      );
+
+      await markRoomRead(sendRoomId, { notifyBadges: true });
+
+      window.setTimeout(() => {
+        const hasMsg = messagesRef.current.some((m) => m.id === realId);
+        if (!hasMsg) void loadMessages(sendRoomId);
+      }, SEND_CONFIRM_MS);
+    })();
   };
 
   const handleDelete = (messageId: string) => {
@@ -541,6 +611,7 @@ export function ChatPanel({
         ) : (
           messages.map((msg) => {
             const isOwn = msg.author_id === userId;
+            const isPending = msg.id.startsWith(PENDING_MSG_PREFIX);
             const canDelete = isOwn || isOrgAdmin;
             const mentionsMe =
               !isOwn && messageMentionsUser(msg.body, userId, userEmail);
@@ -584,7 +655,7 @@ export function ChatPanel({
                 <div
                   className={`max-w-[min(85%,20rem)] min-w-0 rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-all [overflow-wrap:anywhere] ${
                     isOwn
-                      ? "bg-primary text-primary-foreground"
+                      ? `bg-primary text-primary-foreground${isPending ? " opacity-80" : ""}`
                       : mentionsMe
                         ? "border-l-4 border-amber-500 bg-amber-50 text-foreground"
                         : "bg-muted text-foreground"
@@ -731,7 +802,7 @@ export function ChatPanel({
               type="button"
               size="icon"
               className="size-11 shrink-0 rounded-full"
-              disabled={pending || !draft.trim()}
+              disabled={!draft.trim()}
               aria-label="Kirim pesan"
               onClick={handleSend}
             >
@@ -747,7 +818,7 @@ export function ChatPanel({
             <Button
               type="button"
               size="sm"
-              disabled={pending || !draft.trim()}
+              disabled={!draft.trim()}
               onClick={handleSend}
             >
               Kirim

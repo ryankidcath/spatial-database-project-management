@@ -171,7 +171,7 @@ export function VirtualTableChatUnreadProvider({
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const scheduleRefresh = () => {
       if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => refreshRef.current(), 300);
+      debounce = setTimeout(() => refreshRef.current(), 150);
     };
 
     const onInvalidate = () => scheduleRefresh();

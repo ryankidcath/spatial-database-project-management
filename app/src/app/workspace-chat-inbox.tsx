@@ -518,12 +518,9 @@ export function WorkspaceChatInbox({
     mobileConversationWasOpenRef.current = mobileConversationOpen;
   }, [mobileConversationOpen, loadRowEntries, loadRoomMeta, loadMentionKeys, inboxCacheKey]);
 
-  const handleChatMarkedRead = useCallback((virtualRowId: string | null) => {
-    if (!virtualRowId) return;
+  const handleRoomMarkedRead = useCallback((roomKey: string) => {
     setRowEntries((prev) =>
-      prev.map((e) =>
-        e.virtualRowId === virtualRowId ? { ...e, unreadCount: 0 } : e
-      )
+      prev.map((e) => (e.key === roomKey ? { ...e, unreadCount: 0 } : e))
     );
   }, []);
 
@@ -678,9 +675,8 @@ export function WorkspaceChatInbox({
         }
         isOrgAdmin={isOrgAdmin}
         embedded
-        onInvalidateTableUnread={() =>
-          handleChatMarkedRead(entry.virtualRowId)
-        }
+        conversationActive={!isBelowMd || mobileConversationOpen}
+        onInvalidateTableUnread={() => handleRoomMarkedRead(entry.key)}
         className="min-h-0 flex-1"
       />
     );

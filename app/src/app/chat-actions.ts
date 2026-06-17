@@ -64,7 +64,6 @@ export async function sendChatMessageAction(input: {
   });
 
   if (error) return { error: error.message };
-  revalidatePath("/", "layout");
   return { error: null, data: { messageId: String(data) } };
 }
 

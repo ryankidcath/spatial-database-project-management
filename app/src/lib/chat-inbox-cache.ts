@@ -60,6 +60,11 @@ function persist(cacheKey: string, snapshot: ChatInboxCacheSnapshot) {
   writeStorage(all);
 }
 
+/** Jangan simpan badge unread ke storage — selalu ambil dari server. */
+function stripUnreadFromEntries(entries: ChatInboxEntry[]): ChatInboxEntry[] {
+  return entries.map((e) => ({ ...e, unreadCount: 0 }));
+}
+
 export function getChatInboxCache(
   cacheKey: string
 ): ChatInboxCacheSnapshot | null {
@@ -76,7 +81,7 @@ export function setChatInboxCache(
   partial: Omit<ChatInboxCacheSnapshot, "updatedAt"> & { updatedAt?: number }
 ): void {
   const snapshot: ChatInboxCacheSnapshot = {
-    rowEntries: partial.rowEntries,
+    rowEntries: stripUnreadFromEntries(partial.rowEntries),
     rowTotalCount: partial.rowTotalCount,
     roomMetaByKey: partial.roomMetaByKey,
     mentionKeys: partial.mentionKeys,
