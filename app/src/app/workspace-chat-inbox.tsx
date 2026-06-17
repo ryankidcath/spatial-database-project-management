@@ -19,9 +19,11 @@ import {
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { fileAttachmentOptionsFromRowPayload } from "@/lib/chat-row-panel";
 import {
-  fetchChatInboxActiveRowRoomsAction,
-  fetchChatInboxRoomMetaAction,
-  fetchChatInboxUnreadMentionKeysAction,
+  fetchChatInboxActiveRowRoomsClient,
+  fetchChatInboxRoomMetaClient,
+  fetchChatInboxUnreadMentionKeysClient,
+} from "@/lib/chat-client";
+import {
   resolveVirtualRowChatContextAction,
   resolveVirtualRowChatContextsBatchAction,
 } from "./chat-actions";
@@ -355,7 +357,7 @@ export function WorkspaceChatInbox({
       }
 
       try {
-        const res = await fetchChatInboxActiveRowRoomsAction({
+        const res = await fetchChatInboxActiveRowRoomsClient({
           tableIds: tableIdsInScope,
           limit,
           offset,
@@ -420,7 +422,7 @@ export function WorkspaceChatInbox({
       setRoomMetaByKey({});
       return;
     }
-    const res = await fetchChatInboxRoomMetaAction({ organizationId });
+    const res = await fetchChatInboxRoomMetaClient({ organizationId });
     if (!res.error && res.data) setRoomMetaByKey(res.data);
   }, [organizationId]);
 
@@ -429,7 +431,7 @@ export function WorkspaceChatInbox({
       setMentionKeys(new Set());
       return;
     }
-    const res = await fetchChatInboxUnreadMentionKeysAction({ organizationId });
+    const res = await fetchChatInboxUnreadMentionKeysClient({ organizationId });
     if (!res.error && res.data) {
       setMentionKeys(new Set(res.data));
     }

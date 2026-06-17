@@ -11,9 +11,9 @@ import {
   type ReactNode,
 } from "react";
 import {
-  fetchChatStaticRoomsUnreadCountAction,
-  fetchVirtualTableChatUnreadCountsAction,
-} from "./chat-actions";
+  fetchChatStaticRoomsUnreadCountClient,
+  fetchVirtualTableChatUnreadCountsClient,
+} from "@/lib/chat-client";
 import { CHAT_UNREAD_INVALIDATE_EVENT } from "@/lib/chat-unread-invalidate";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -111,7 +111,7 @@ export function VirtualTableChatUnreadProvider({
               tableRoomByTableId: {} as Record<string, number>,
             },
           })
-        : fetchVirtualTableChatUnreadCountsAction(ids);
+        : fetchVirtualTableChatUnreadCountsClient(ids);
 
     const staticPromise =
       !userId || !scopeOrganizationId
@@ -119,7 +119,7 @@ export function VirtualTableChatUnreadProvider({
             error: null as string | null,
             data: { organizationUnread: 0, projectUnread: 0 },
           })
-        : fetchChatStaticRoomsUnreadCountAction({
+        : fetchChatStaticRoomsUnreadCountClient({
             organizationId: scopeOrganizationId,
             projectId: scopeProjectId,
           });

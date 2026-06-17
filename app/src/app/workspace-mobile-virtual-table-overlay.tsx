@@ -17,7 +17,7 @@ import {
   VirtualTableRoomChatUnreadBadge,
   useVirtualTableChatUnread,
 } from "./virtual-table-chat-unread-context";
-import { fetchVirtualTableChatUnreadRowsAction } from "./chat-actions";
+import { fetchVirtualTableChatUnreadRowsClient } from "@/lib/chat-client";
 import {
   VIRTUAL_TABLE_ROWS_MUTATED,
   type VirtualTableRowsMutatedDetail,
@@ -211,7 +211,7 @@ export function WorkspaceMobileVirtualTableOverlay({
       setUnreadRowIds(new Set());
       return;
     }
-    const res = await fetchVirtualTableChatUnreadRowsAction(table.id);
+    const res = await fetchVirtualTableChatUnreadRowsClient(table.id);
     if (res.error || !res.data) return;
     setUnreadRowIds(new Set(res.data.map((r) => r.virtualRowId)));
   }, [table.id, userId]);

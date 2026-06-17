@@ -124,7 +124,7 @@ import {
   buildChatRowPathSegments,
   buildChatTablePathSegments,
 } from "@/lib/chat-row-context";
-import { fetchVirtualTableChatUnreadRowsAction } from "./chat-actions";
+import { fetchVirtualTableChatUnreadRowsClient } from "@/lib/chat-client";
 import {
   useVirtualTableChatUnread,
   VirtualTableRoomChatUnreadBadge,
@@ -1125,7 +1125,7 @@ export function VirtualTableView({
       setUnreadChatRowIds(new Set());
       return;
     }
-    const res = await fetchVirtualTableChatUnreadRowsAction(table.id);
+    const res = await fetchVirtualTableChatUnreadRowsClient(table.id);
     if (res.error || !res.data) return;
     setUnreadChatRowIds(new Set(res.data.map((r) => r.virtualRowId)));
   }, [table.id, userId]);
