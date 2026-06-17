@@ -149,9 +149,9 @@ function WorkspaceRightPanelInner({
             <ChatPanel
               scopeType="organization"
               organizationId={organizationId!}
+              roomCacheKey="org"
               embedded
               title="Chat organisasi"
-              subtitle="Tim inti organisasi"
               userId={userId!}
               userEmail={userEmail}
               authorNameByUserId={memberNameByUserId}
@@ -169,9 +169,10 @@ function WorkspaceRightPanelInner({
               scopeType="project"
               organizationId={organizationId!}
               projectId={panel.projectId}
+              roomCacheKey={`project:${panel.projectId}`}
               embedded
               title={projectForPanel.name}
-              subtitle="Diskusi proyek"
+              subtitle={organizationName ?? undefined}
               userId={userId!}
               userEmail={userEmail}
               authorNameByUserId={memberNameByUserId}
@@ -197,6 +198,7 @@ function WorkspaceRightPanelInner({
               organizationId={organizationId!}
               projectId={tableProjectId}
               virtualTableId={table.id}
+              roomCacheKey={`table:${table.id}`}
               embedded
               title={table.display_name}
               subtitle="Diskusi umum tentang tabel ini"
@@ -234,6 +236,7 @@ function WorkspaceRightPanelInner({
                 organizationId={organizationId!}
                 projectId={tableProjectId}
                 virtualRowId={panel.rowId}
+                roomCacheKey={`row:${panel.rowId}`}
                 embedded
                 title={rowLabelFromPath(panel.pathSegments)}
                 userId={userId!}

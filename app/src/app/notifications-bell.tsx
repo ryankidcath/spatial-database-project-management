@@ -6,6 +6,8 @@ import {
   markAllNotificationsReadAction,
   markNotificationReadAction,
 } from "./user-notifications-actions";
+import { flushDueCellNotificationsAction } from "./user-notification-preferences-actions";
+import { NotificationPreferencesPanel } from "./notification-preferences-panel";
 import type { UserNotificationRow } from "./user-notification-types";
 import { formatShortDate } from "./schedule-utils";
 import { viewToParam } from "./workspace-url";
@@ -24,6 +26,8 @@ const MAX_NOTIFICATIONS = 50;
 type Props = {
   userId: string | null;
   notifications: UserNotificationRow[];
+  scopeOrganizationId?: string | null;
+  scopeProjectId?: string | null;
   /** Sinkron scope + tab dengan workspace (hindari Link yang tidak memicu state). */
   onNavigate?: (n: UserNotificationRow) => void;
   /** Ikon lonceng saja (header mobile ringkas). */
@@ -67,13 +71,61 @@ function projectIdForNotification(n: UserNotificationRow): string | null {
   return typeof fromPayload === "string" ? fromPayload : null;
 }
 
+function notificationInScope(
+  n: UserNotificationRow,
+  scopeOrganizationId: string | null | undefined,
+  scopeProjectId: string | null | undefined
+): boolean {
+  if (!scopeOrganizationId) return true;
+  if (n.organization_id !== scopeOrganizationId) return false;
+  if (!scopeProjectId) return true;
+  if (!n.project_id) return true;
+  return n.project_id === scopeProjectId;
+}
+
+function hrefForWorkspaceNotification(n: UserNotificationRow): string {
+  const q = new URLSearchParams();
+  if (n.organization_id) q.set("org", n.organization_id);
+  const projectId = projectIdForNotification(n);
+  if (projectId) q.set("project", projectId);
+
+  const payload = (n.payload ?? {}) as Record<string, unknown>;
+  const eventId =
+    typeof payload.event_id === "string" ? payload.event_id : "";
+
+  if (
+    n.kind === "virtual_table" ||
+    n.kind === "virtual_import" ||
+    n.kind === "virtual_column" ||
+    n.kind === "virtual_row" ||
+    eventId.startsWith("vtable.") ||
+    eventId.startsWith("vrow.")
+  ) {
+    q.set("view", viewToParam("Tabel"));
+  } else if (
+    n.kind === "workspace_member" ||
+    n.kind === "workspace_project"
+  ) {
+    q.set("view", viewToParam("Tabel"));
+  } else if (n.kind === "chat_mention") {
+    q.set("view", viewToParam("Chat"));
+  } else {
+    q.set("view", viewToParam("Tabel"));
+  }
+
+  return `/?${q.toString()}`;
+}
+
 export function NotificationsBell({
   userId,
   notifications,
+  scopeOrganizationId = null,
+  scopeProjectId = null,
   onNavigate,
   compact = false,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [items, setItems] = useState<UserNotificationRow[]>(notifications);
 
@@ -83,6 +135,7 @@ export function NotificationsBell({
 
   const fetchNotifications = useCallback(async () => {
     if (!userId) return;
+    void flushDueCellNotificationsAction();
     const supabase = getBrowserSupabaseClient();
     if (!supabase) return;
 
@@ -167,32 +220,29 @@ export function NotificationsBell({
     if (open) void fetchNotifications();
   }, [open, fetchNotifications]);
 
+  const scopedItems = useMemo(
+    () =>
+      items.filter((n) =>
+        notificationInScope(n, scopeOrganizationId, scopeProjectId)
+      ),
+    [items, scopeOrganizationId, scopeProjectId]
+  );
+
   const unread = useMemo(
-    () => items.filter((n) => n.read_at == null),
-    [items]
+    () => scopedItems.filter((n) => n.read_at == null),
+    [scopedItems]
   );
 
   const sorted = useMemo(
     () =>
-      [...items].sort((a, b) => b.created_at.localeCompare(a.created_at)),
-    [items]
+      [...scopedItems].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [scopedItems]
   );
 
-  const hrefForNotification = useCallback((n: UserNotificationRow) => {
-    const q = new URLSearchParams();
-    if (n.organization_id) q.set("org", n.organization_id);
-    const projectId = projectIdForNotification(n);
-    if (projectId) q.set("project", projectId);
-    if (n.kind === "chat_mention") {
-      const payload = n.payload as Record<string, unknown> | null;
-      if (payload?.virtual_row_id) {
-        q.set("view", viewToParam("Map"));
-      }
-    } else {
-      q.set("view", viewToParam("Map"));
-    }
-    return `/?${q.toString()}`;
-  }, []);
+  const hrefForNotification = useCallback(
+    (n: UserNotificationRow) => hrefForWorkspaceNotification(n),
+    []
+  );
 
   const markOneRead = (notificationId: string) => {
     const fd = new FormData();
@@ -216,7 +266,9 @@ export function NotificationsBell({
       const res = await markAllNotificationsReadAction();
       if (!res.error) {
         const now = new Date().toISOString();
-        setItems((prev) => prev.map((n) => ({ ...n, read_at: n.read_at ?? now })));
+        setItems((prev) =>
+          prev.map((n) => ({ ...n, read_at: n.read_at ?? now }))
+        );
       }
     });
   };
@@ -237,7 +289,7 @@ export function NotificationsBell({
     <>
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-xs font-semibold text-foreground">
-          Kotak masuk
+          Aktivitas
           {unread.length > 0 ? (
             <span className="ml-1 font-normal text-amber-700 dark:text-amber-500">
               ({unread.length} baru)
@@ -257,11 +309,13 @@ export function NotificationsBell({
       </div>
       <ul className="max-h-72 overflow-y-auto text-xs">
         {sorted.length === 0 ? (
-          <li className="px-3 py-4 text-muted-foreground">Tidak ada notifikasi.</li>
+          <li className="px-3 py-4 text-muted-foreground">
+            Tidak ada aktivitas di scope ini.
+          </li>
         ) : (
           sorted.map((n) => {
             const isUnread = n.read_at == null;
-            const isChat = n.kind === "chat_mention";
+            const isLegacyChat = n.kind === "chat_mention";
             return (
               <li
                 key={n.id}
@@ -285,9 +339,9 @@ export function NotificationsBell({
                   >
                     <p className="font-medium text-foreground">
                       {n.title}
-                      {isChat ? (
+                      {isLegacyChat ? (
                         <span className="ml-1 font-normal text-muted-foreground">
-                          · chat
+                          · obrolan
                         </span>
                       ) : null}
                     </p>
@@ -320,6 +374,21 @@ export function NotificationsBell({
           })
         )}
       </ul>
+      <p className="border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
+        <button
+          type="button"
+          className="text-primary hover:underline"
+          onClick={() => setPrefsOpen(true)}
+        >
+          Atur notifikasi
+        </button>
+        {" · "}
+        Default: proyek/anggota & import.
+      </p>
+      <NotificationPreferencesPanel
+        open={prefsOpen}
+        onOpenChange={setPrefsOpen}
+      />
     </>
   );
 
@@ -333,7 +402,7 @@ export function NotificationsBell({
               variant="outline"
               size="icon"
               className="relative size-11 shrink-0"
-              aria-label="Notifikasi"
+              aria-label="Notifikasi aktivitas"
             >
               <Bell className="size-5" aria-hidden />
               {unreadBadge}
@@ -341,10 +410,10 @@ export function NotificationsBell({
           ) : (
             <button
               type="button"
-              aria-label="Notifikasi"
+              aria-label="Notifikasi aktivitas"
               className="relative shrink-0 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-950 transition-colors hover:bg-amber-100"
             >
-              Notifikasi
+              Aktivitas
               {unreadBadge}
             </button>
           )

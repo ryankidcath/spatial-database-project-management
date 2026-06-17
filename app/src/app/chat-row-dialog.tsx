@@ -78,6 +78,7 @@ export function ChatRowDialog({
               organizationId={organizationId}
               projectId={projectId}
               virtualRowId={virtualRowId}
+              roomCacheKey={`row:${virtualRowId}`}
               embedded
               title={rowLabel}
               userId={userId}

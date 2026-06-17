@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog } from "./audit-log-actions";
+import { dispatchWorkspaceNotification } from "./workspace-notification-dispatch";
 
 export type CreateProjectTaskResult = { error: string | null };
 export type SetTaskDoneResult = { error: string | null };
@@ -843,6 +844,14 @@ export async function deleteProjectAction(
     return { error: "project_id kosong" };
   }
 
+  const { data: projectRow } = await supabase
+    .schema("core_pm")
+    .from("projects")
+    .select("name, organization_id")
+    .eq("id", projectId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
   const { error } = await supabase
     .schema("core_pm")
     .rpc("delete_project_soft", { p_project_id: projectId });
@@ -857,6 +866,22 @@ export async function deleteProjectAction(
     entity: "project",
     entityId: projectId,
   });
+
+  if (projectRow) {
+    const row = projectRow as { name: string; organization_id: string };
+    await dispatchWorkspaceNotification(supabase, {
+      preferenceCategory: "workspace_membership",
+      kind: "workspace_project",
+      organizationId: row.organization_id,
+      projectId,
+      actorUserId: user.id,
+      title: `Proyek ${row.name} dihapus`,
+      payload: {
+        event_id: "project.deleted",
+        project_name: row.name,
+      },
+    });
+  }
 
   revalidatePath("/", "layout");
   return { error: null };

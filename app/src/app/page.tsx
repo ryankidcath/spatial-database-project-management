@@ -3,7 +3,6 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   WorkspaceClient,
   type BidangHasilUkurMapRow,
-  type ActivityLogRow,
   type IssueFeatureAttributeRow,
   type IssueGeometryFeatureMapRow,
   type DemoFootprintRow,
@@ -33,7 +32,7 @@ import type {
   ModuleRegistryRow,
   OrganizationModuleRow,
 } from "./workspace-modules";
-import type { UserNotificationRow } from "./user-notification-types";
+import type { ActivityLogRow } from "./activity-log-types";
 import type {
   PlmBerkasStatusSummaryRow,
   PlmLegalisasiTahapSummaryRow,
@@ -222,9 +221,72 @@ export default async function Home({ searchParams }: HomeProps) {
     scopedProjectIds
   );
 
+  const auditLogSelect =
+    "id, organization_id, project_id, actor_user_id, action, entity, entity_id, payload, created_at";
+
+  const auditLogFetches = [];
+
+  if (scopedProjectIds.length > 0) {
+    auditLogFetches.push(
+      supabase
+        .schema("core_pm")
+        .from("audit_log")
+        .select(auditLogSelect)
+        .in("project_id", scopedProjectIds)
+        .order("created_at", { ascending: false })
+        .limit(400)
+    );
+  }
+
+  if (selectedOrgId) {
+    auditLogFetches.push(
+      supabase
+        .schema("core_pm")
+        .from("audit_log")
+        .select(auditLogSelect)
+        .eq("organization_id", selectedOrgId)
+        .is("project_id", null)
+        .order("created_at", { ascending: false })
+        .limit(150)
+    );
+  }
+
+  const auditLogResults =
+    auditLogFetches.length > 0 ? await Promise.all(auditLogFetches) : [];
+
+  const auditLogsRaw: Array<{
+    id: string;
+    organization_id: string;
+    project_id: string | null;
+    actor_user_id: string;
+    action: string;
+    entity: string;
+    entity_id: string;
+    payload: Record<string, unknown> | null;
+    created_at: string;
+  }> = [];
+  let auditLogsError: { message: string } | null = null;
+
+  const auditById = new Map<string, (typeof auditLogsRaw)[number]>();
+  for (const res of auditLogResults) {
+    if (res.error) {
+      auditLogsError = res.error;
+      break;
+    }
+    for (const row of res.data ?? []) {
+      const r = row as (typeof auditLogsRaw)[number];
+      auditById.set(r.id, r);
+    }
+  }
+  auditLogsRaw.push(
+    ...[...auditById.values()].sort(
+      (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
+    )
+  );
+  auditLogsRaw.splice(500);
+
   const [
     { data: statuses, error: statusesError },
-    { data: auditLogsRaw, error: auditLogsError },
     { data: projectMembersRaw, error: projectMembersError },
     { data: footprintsRaw, error: footprintsError },
     { data: registryRaw, error: registryError },
@@ -239,17 +301,6 @@ export default async function Home({ searchParams }: HomeProps) {
           .order("project_id")
           .order("position", { ascending: true })
       : Promise.resolve({ data: [] as StatusRow[], error: null }),
-    scopedProjectIds.length > 0
-      ? supabase
-          .schema("core_pm")
-          .from("audit_log")
-          .select(
-            "id, organization_id, project_id, actor_user_id, action, entity, entity_id, payload, created_at"
-          )
-          .in("project_id", scopedProjectIds)
-          .order("created_at", { ascending: false })
-          .limit(250)
-      : Promise.resolve({ data: [] as ActivityLogRow[], error: null }),
     scopedProjectIds.length > 0
       ? supabase
           .schema("core_pm")
@@ -281,17 +332,7 @@ export default async function Home({ searchParams }: HomeProps) {
   const footprints = (footprintsRaw ?? []) as DemoFootprintRow[];
   const issues = issuesResult.data;
   const issuesError = issuesResult.error;
-  const auditLogsBase = (auditLogsRaw ?? []) as Array<{
-    id: string;
-    organization_id: string;
-    project_id: string | null;
-    actor_user_id: string;
-    action: string;
-    entity: string;
-    entity_id: string;
-    payload: Record<string, unknown> | null;
-    created_at: string;
-  }>;
+  const auditLogsBase = auditLogsRaw;
   const projectMembersBase = (projectMembersRaw ?? []) as Array<{
     project_id: string;
     user_id: string;
@@ -651,23 +692,6 @@ export default async function Home({ searchParams }: HomeProps) {
   const financeInvoiceItems = (finItemRaw ?? []) as FinanceInvoiceItemRow[];
   const financePembayaran = (finPayRaw ?? []) as FinancePembayaranRow[];
 
-  const notifRes =
-    user?.id != null
-      ? await supabase
-          .schema("core_pm")
-          .from("user_notifications")
-          .select(
-            "id, user_id, organization_id, project_id, kind, severity, title, body, payload, read_at, created_at"
-          )
-          .eq("user_id", user.id)
-          .order("created_at", { ascending: false })
-          .limit(20)
-      : { data: [] as UserNotificationRow[], error: null };
-
-  const { data: notifRaw, error: notifError } = notifRes;
-
-  const userNotifications = (notifRaw ?? []) as UserNotificationRow[];
-
   // --- Virtual tables + columns (project-level + org-level) ---
   const vtableResults = await Promise.all([
     scopedProjectIds.length > 0
@@ -773,7 +797,6 @@ export default async function Home({ searchParams }: HomeProps) {
     pengAlatError?.message ??
     pengDokError?.message ??
     alatUkurError?.message ??
-    notifError?.message ??
     bSumErr?.message ??
     lSumErr?.message ??
     pSumErr?.message ??
@@ -828,7 +851,6 @@ export default async function Home({ searchParams }: HomeProps) {
         fetchError={fetchError}
         userEmail={user?.email ?? null}
         userId={user?.id ?? null}
-        userNotifications={userNotifications}
         virtualTables={virtualTables}
         virtualColumns={virtualColumns}
         virtualDashboardsByProjectId={virtualDashboardsByProjectId}

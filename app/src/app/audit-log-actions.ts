@@ -34,6 +34,29 @@ export async function writeProjectAuditLog(
   });
 }
 
+export async function writeOrgAuditLog(
+  supabase: any,
+  args: {
+    organizationId: string;
+    actorUserId: string;
+    action: string;
+    entity: string;
+    entityId: string;
+    payload?: Record<string, unknown>;
+  }
+): Promise<void> {
+  if (!args.organizationId) return;
+  await supabase.schema("core_pm").from("audit_log").insert({
+    organization_id: args.organizationId,
+    project_id: null,
+    actor_user_id: args.actorUserId,
+    action: args.action,
+    entity: args.entity,
+    entity_id: args.entityId,
+    payload: args.payload ?? {},
+  });
+}
+
 export async function writeUserAuthAuditLog(
   supabase: any,
   args: {

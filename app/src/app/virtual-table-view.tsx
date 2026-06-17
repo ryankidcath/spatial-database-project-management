@@ -102,6 +102,10 @@ import {
   virtualTableRowsCacheKey,
 } from "@/lib/virtual-table-rows-cache";
 import {
+  VIRTUAL_TABLE_ROWS_MUTATED,
+  type VirtualTableRowsMutatedDetail,
+} from "@/lib/workspace-virtual-table-mutations";
+import {
   parseFeatureCollectionForVirtualImport,
   pickDefaultVirtualTableMatchColumn,
 } from "@/lib/virtual-table-geojson-import";
@@ -156,6 +160,8 @@ type Props = {
   layout?: "embedded" | "overlay";
   /** Tab Tabel: buka overlay sidebar untuk tabel lengkap (tanpa batas halaman). */
   onOpenInOverlay?: () => void;
+  /** Setelah mutasi yang menulis audit_log — refresh tab Aktivitas. */
+  onActivityChange?: () => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -877,12 +883,16 @@ export function VirtualTableView({
   onLayerCreated,
   layout = "embedded",
   onOpenInOverlay,
+  onActivityChange,
 }: Props) {
   const isOverlayLayout = layout === "overlay";
   const isPaginatedEmbedded = layout === "embedded";
   const isBelowMd = useIsBelowMd();
   const overlayTouchToolbar = isOverlayLayout && isBelowMd;
   const router = useRouter();
+  const bumpActivity = useCallback(() => {
+    onActivityChange?.();
+  }, [onActivityChange]);
   const { refreshEpoch } = useVirtualTableChatUnread();
   const {
     openTableChat,
@@ -1024,6 +1034,16 @@ export function VirtualTableView({
     void loadRows();
   }, [isInView, loadRows]);
 
+  useEffect(() => {
+    const onMutated = (e: Event) => {
+      const detail = (e as CustomEvent<VirtualTableRowsMutatedDetail>).detail;
+      if (detail?.tableId === table.id) void loadRows();
+    };
+    window.addEventListener(VIRTUAL_TABLE_ROWS_MUTATED, onMutated);
+    return () =>
+      window.removeEventListener(VIRTUAL_TABLE_ROWS_MUTATED, onMutated);
+  }, [table.id, loadRows]);
+
   // --- Inline editing ---
   const [editingCell, setEditingCell] = useState<{
     rowId: string;
@@ -1047,10 +1067,11 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await updateVirtualRowCellAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         await loadRows();
       });
     },
-    [loadRows]
+    [loadRows, bumpActivity]
   );
 
   const toggleCheckbox = useCallback(
@@ -1063,10 +1084,11 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await updateVirtualRowCellAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         await loadRows();
       });
     },
-    [loadRows]
+    [loadRows, bumpActivity]
   );
 
   // --- Add row ---
@@ -1077,9 +1099,10 @@ export function VirtualTableView({
     startTransition(async () => {
       const r = await createVirtualRowAction(fd);
       if (r.error) toast.error(r.error);
+      else bumpActivity();
       await loadRows();
     });
-  }, [table.id, loadRows]);
+  }, [table.id, loadRows, bumpActivity]);
 
   // --- Delete row ---
   const [deleteRowConfirm, setDeleteRowConfirm] = useState<string | null>(null);
@@ -1196,10 +1219,11 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await deleteVirtualRowAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         await loadRows();
       });
     },
-    [loadRows]
+    [loadRows, bumpActivity]
   );
 
   // --- Column management ---
@@ -1270,19 +1294,18 @@ export function VirtualTableView({
     fd.set("table_id", table.id);
     fd.set("display_name", newColName.trim());
     fd.set("data_type", newColType);
+    const columnConfig: Record<string, unknown> = {};
     if (newColType === "relation") {
       const lookupSlug = newColLookupSlug.trim() || "title";
-      fd.set(
-        "config",
-        JSON.stringify({
-          target_table_id: newColTargetTable,
-          is_multi: newColIsMulti,
-          lookup_slug: lookupSlug,
-        })
-      );
+      columnConfig.target_table_id = newColTargetTable;
+      columnConfig.is_multi = newColIsMulti;
+      columnConfig.lookup_slug = lookupSlug;
     }
     if (newColType === "select" && newColIsMulti) {
-      fd.set("config", JSON.stringify({ is_multi: true }));
+      columnConfig.is_multi = true;
+    }
+    if (Object.keys(columnConfig).length > 0) {
+      fd.set("config", JSON.stringify(columnConfig));
     }
     startTransition(async () => {
       const r = await addVirtualColumnAction(fd);
@@ -1296,6 +1319,7 @@ export function VirtualTableView({
         setLookupColumnOptions([]);
         setNewColIsMulti(false);
         setShowAddColumn(false);
+        bumpActivity();
       }
       router.refresh();
     });
@@ -1307,6 +1331,7 @@ export function VirtualTableView({
     newColLookupSlug,
     newColIsMulti,
     router,
+    bumpActivity,
   ]);
 
   const removeColumn = useCallback(
@@ -1316,11 +1341,12 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await deleteVirtualColumnAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         router.refresh();
         await loadRows();
       });
     },
-    [router, loadRows]
+    [router, loadRows, bumpActivity]
   );
 
   const duplicateColumn = useCallback(
@@ -1334,10 +1360,11 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await addVirtualColumnAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         router.refresh();
       });
     },
-    [table.id, router]
+    [table.id, router, bumpActivity]
   );
 
   // --- Drag-and-drop column reorder ---
@@ -1391,11 +1418,12 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await reorderVirtualColumnsAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         router.refresh();
       });
       handleColDragEnd();
     },
-    [columns, router, handleColDragEnd]
+    [columns, router, handleColDragEnd, bumpActivity]
   );
 
   // --- Rename column (inline) ---
@@ -1449,9 +1477,10 @@ export function VirtualTableView({
         );
       }
       await loadRows();
+      bumpActivity();
       router.refresh();
     });
-  }, [renamingCol, loadRows, router]);
+  }, [renamingCol, loadRows, router, bumpActivity]);
 
   // --- Table settings ---
   const [showTableSettings, setShowTableSettings] = useState(false);
@@ -1469,10 +1498,11 @@ export function VirtualTableView({
         toast.error(r.error);
       } else {
         setShowTableSettings(false);
+        bumpActivity();
       }
       router.refresh();
     });
-  }, [table.id, editTableName, editTableDesc, router]);
+  }, [table.id, editTableName, editTableDesc, router, bumpActivity]);
 
   // --- Delete table ---
   const [showDeleteTable, setShowDeleteTable] = useState(false);
@@ -1487,10 +1517,11 @@ export function VirtualTableView({
       } else {
         setShowDeleteTable(false);
         onTableDeleted?.();
+        bumpActivity();
       }
       router.refresh();
     });
-  }, [table.id, router, onTableDeleted]);
+  }, [table.id, router, onTableDeleted, bumpActivity]);
 
   // --- Select options ---
   const selectOptionsBySlug = useMemo(() => {
@@ -1521,20 +1552,27 @@ export function VirtualTableView({
   const saveColOptions = useCallback(() => {
     if (!editingColOptions) return;
     const col = columns.find((c) => c.id === editingColOptions.columnId);
-    const existingConfig = col?.config ?? {};
+    const existingConfig = { ...(col?.config ?? {}) };
+    delete existingConfig.notify_on_change;
     const fd = new FormData();
     fd.set("column_id", editingColOptions.columnId);
     fd.set(
       "config",
-      JSON.stringify({ ...existingConfig, options: editingColOptions.options })
+      JSON.stringify({
+        ...existingConfig,
+        options: editingColOptions.options,
+      })
     );
     startTransition(async () => {
       const r = await updateVirtualColumnAction(fd);
       if (r.error) toast.error(r.error);
-      else setEditingColOptions(null);
+      else {
+        setEditingColOptions(null);
+        bumpActivity();
+      }
       router.refresh();
     });
-  }, [editingColOptions, router]);
+  }, [editingColOptions, columns, router, bumpActivity]);
 
   // --- Relation labels (resolved display names for related rows) ---
   const [relationLabels, setRelationLabels] = useState<Record<string, string>>({});
@@ -1638,10 +1676,11 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await updateVirtualRowCellAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         await loadRows();
       });
     },
-    [loadRows]
+    [loadRows, bumpActivity]
   );
 
   // --- User picker state ---
@@ -1701,10 +1740,11 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await updateVirtualRowCellAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         await loadRows();
       });
     },
-    [loadRows]
+    [loadRows, bumpActivity]
   );
 
   const clearUser = useCallback(
@@ -1717,10 +1757,11 @@ export function VirtualTableView({
       startTransition(async () => {
         const r = await updateVirtualRowCellAction(fd);
         if (r.error) toast.error(r.error);
+        else bumpActivity();
         await loadRows();
       });
     },
-    [loadRows]
+    [loadRows, bumpActivity]
   );
 
   // --- Sorted columns ---
@@ -2062,9 +2103,10 @@ export function VirtualTableView({
         return;
       }
       toast.success(`${r.deleted} baris dihapus.`);
+      bumpActivity();
       await loadRows();
     });
-  }, [processedRows, table.id, loadRows, router]);
+  }, [processedRows, table.id, loadRows, bumpActivity]);
 
   // --- Geometry editor ---
   const [geometryEditor, setGeometryEditor] = useState<{
@@ -2111,13 +2153,14 @@ export function VirtualTableView({
           toast.error(r.error);
         } else {
           setGeometryEditor(null);
+          bumpActivity();
         }
         await loadRows();
       });
     } catch (e) {
       setGeoEditorError(e instanceof Error ? e.message : "JSON tidak valid");
     }
-  }, [geometryEditor, geoEditorText, loadRows, saveCell]);
+  }, [geometryEditor, geoEditorText, loadRows, saveCell, bumpActivity]);
 
   const tableChatMentionOptions = useMemo((): ChatMentionOption[] => {
     const opts: ChatMentionOption[] = [];
@@ -3651,6 +3694,7 @@ export function VirtualTableView({
         table={table}
         columns={sortedColumns}
         onImported={() => {
+          bumpActivity();
           void loadRows();
         }}
       />
@@ -3662,6 +3706,7 @@ export function VirtualTableView({
         columns={sortedColumns}
         allVirtualTables={allVirtualTables}
         onImported={() => {
+          bumpActivity();
           void loadRows();
         }}
       />
@@ -3674,6 +3719,7 @@ export function VirtualTableView({
         allVirtualTables={allVirtualTables}
         rows={rows}
         onImported={() => {
+          bumpActivity();
           void loadRows();
         }}
       />
@@ -3685,6 +3731,7 @@ export function VirtualTableView({
           projectId={projectId}
           onCreated={(result) => {
             onLayerCreated?.(result);
+            bumpActivity();
             router.refresh();
           }}
         />

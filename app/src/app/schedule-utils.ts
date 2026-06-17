@@ -210,3 +210,13 @@ export function formatShortDate(iso: string | null): string {
     year: "numeric",
   });
 }
+
+export function formatActivityDateTime(iso: string | null): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("id-ID", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}

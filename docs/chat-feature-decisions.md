@@ -26,7 +26,7 @@ Rencana navigasi mobile v2 (wizard scope, edit di detail): `docs/mobile-scope-fl
 | 10 | Hapus pesan | **Hard delete** — penulis **atau** admin org (owner/admin) |
 | 10b | Edit pesan | **Tidak** — hanya hapus |
 | 11 | Realtime | **B** — Supabase Realtime |
-| 12 | Unread + mention | **B** — badge per room; mention → **notifikasi in-app** (`user_notifications`) |
+| 12 | Unread + mention | **B** — badge per room; mention → **ikon `@` di tab Obrolan** (bukan lonceng; lihat `docs/notifikasi-event-matrix.md`) |
 | 4b | Room organisasi | **1 room per org** (tanpa channel terpisah) |
 | 6b | Rate limit | **Tanpa batas** (mungkin ditambah nanti) |
 | 13 | Lampiran | **B** — link ke file di kolom virtual table (bukan upload baru) |
@@ -181,23 +181,20 @@ Tidak menambah kolom chat di setiap sel grid.
 ### Unread
 
 - Badge unread **per room**.
-- Perlu: `chat_room_reads` (`user_id`, `room_id`, `last_read_at`) atau setara.
+- `chat_room_reads` (`user_id`, `room_id`, `last_read_at`).
 
-### Mention (diminta user)
+### Mention (revisi 2026-06-15)
 
-Disetujui untuk disertakan; format usulan:
+| Mention | Perilaku |
+|---------|----------|
+| User / project / baris | Disimpan sebagai token di `body` pesan |
+| Lonceng notifikasi | **Tidak** — `dispatch_chat_mention_notifications` no-op |
+| Tab Obrolan | Ikon **`@`** pada baris room jika ada mention **belum dibaca** (RPC `get_chat_inbox_unread_mention_keys`) |
 
-| Mention | Contoh | Perilaku |
-|---------|--------|----------|
-| User | `@rizki` atau `@email` / picker | **Notifikasi in-app** ke user tersebut |
-| Project | `@project:TKD` atau picker | Link ke project; notifikasi ke anggota project (atau subset — lihat implementasi) |
-| Baris | `@baris:{id}` atau picker | Link buka drawer baris; notifikasi ke peserta room baris yang relevan |
+Detail: `docs/notifikasi-event-matrix.md`.
 
-**Plain text:** mention disimpan sebagai teks di `body`; parsing saat kirim pesan (server) untuk membuat baris di **`user_notifications`** (sistem yang sudah ada di app).
-
-- **In-app:** ya (wajib).
-- **Email / push:** tidak di v1.
-- Unread badge room tetap berjalan terpisah dari notifikasi mention.
+- Unread badge angka tetap terpisah dari ikon `@`.
+- Email / push: tidak di v1.
 
 ---
 

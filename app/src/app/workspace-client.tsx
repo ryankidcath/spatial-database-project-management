@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,7 +32,15 @@ import {
   signOut,
 } from "@/app/auth/actions";
 import { toast } from "sonner";
-import { NotificationsBell } from "./notifications-bell";
+import { WorkspaceActivityTab } from "./workspace-activity-tab";
+import { fetchActivityLogsAction } from "./fetch-activity-logs-action";
+import type { ActivityLogRow } from "./activity-log-types";
+import {
+  buildActivityLogsCacheKey,
+  getActivityLogsCache,
+  setActivityLogsCache,
+} from "@/lib/activity-logs-cache";
+export type { ActivityLogRow } from "./activity-log-types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -167,7 +176,6 @@ import type {
 } from "./spatial-attribute-types";
 import type { MapFootprint } from "./workspace-map";
 import { type ViewId } from "./workspace-views";
-import type { UserNotificationRow } from "./user-notification-types";
 import type {
   VirtualTableRow,
   VirtualColumnRow,
@@ -234,6 +242,7 @@ import {
   ProjectChatUnreadBadge,
   VirtualTableChatUnreadBadge,
   VirtualTableChatUnreadProvider,
+  ChatTabLabel,
 } from "./virtual-table-chat-unread-context";
 
 function TabViewLoading({ label }: { label: string }) {
@@ -444,19 +453,6 @@ export type OrganizationMemberRow = {
 const ORG_STAFF_ROLES = new Set(["owner", "admin", "staff"]);
 const ORG_ADMIN_ROLES = new Set(["owner", "admin"]);
 
-export type ActivityLogRow = {
-  id: string;
-  organization_id: string;
-  project_id: string | null;
-  actor_user_id: string;
-  actor_display_name: string | null;
-  action: string;
-  entity: string;
-  entity_id: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-};
-
 export type UserPresenceRow = {
   user_id: string;
   project_id: string;
@@ -499,7 +495,6 @@ type Props = {
   userEmail: string | null;
   /** Untuk cek owner saat edit properti project. */
   userId?: string | null;
-  userNotifications?: UserNotificationRow[];
   virtualTables?: VirtualTableRow[];
   virtualColumns?: VirtualColumnRow[];
   virtualDashboardsByProjectId?: Record<
@@ -1741,7 +1736,6 @@ export function WorkspaceClient({
   fetchError,
   userEmail,
   userId = null,
-  userNotifications = [],
   virtualTables = [],
   virtualColumns = [],
   virtualDashboardsByProjectId = {},
@@ -1761,6 +1755,7 @@ export function WorkspaceClient({
   const [projectPropertiesOpen, setProjectPropertiesOpen] = useState(false);
   const [projectPropertiesPending, setProjectPropertiesPending] = useState(false);
   const [liveUserPresence, setLiveUserPresence] = useState<UserPresenceRow[]>(userPresence);
+  const [liveActivityLogs, setLiveActivityLogs] = useState<ActivityLogRow[]>(activityLogs);
   const [tableTaskDialogOpen, setTableTaskDialogOpen] = useState(false);
   const [monitoringAddChildOpen, setMonitoringAddChildOpen] = useState(false);
   const [monitoringAddChildFormNonce, setMonitoringAddChildFormNonce] = useState(0);
@@ -2001,7 +1996,6 @@ export function WorkspaceClient({
   const taskNoteInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [projectDeleteConfirm, setProjectDeleteConfirm] =
     useState<ProjectDeleteConfirmState | null>(null);
-  const [activityLogFilter, setActivityLogFilter] = useState<"all" | "session">("all");
   const [projectMsg, setProjectMsg] = useState<string | null>(null);
   const [organizationMsg, setOrganizationMsg] = useState<string | null>(null);
   const [memberMsg, setMemberMsg] = useState<string | null>(null);
@@ -2013,6 +2007,8 @@ export function WorkspaceClient({
   );
   const isBelowMd = useIsBelowMd();
   const [mobileChatKeyboardOpen, setMobileChatKeyboardOpen] = useState(false);
+  const [mobileChatConversationOpen, setMobileChatConversationOpen] =
+    useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [mobileScopePhase, setMobileScopePhase] = useState<MobileScopePhase | null>(
     null
@@ -2056,6 +2052,33 @@ export function WorkspaceClient({
       .filter((p) => p.organization_id === canonicalOrgId)
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [projects, canonicalOrgId]);
+
+  const activityLogsCacheKey = useMemo(() => {
+    if (!canonicalOrgId) return null;
+    return buildActivityLogsCacheKey(
+      canonicalOrgId,
+      projectsInOrg.map((p) => p.id)
+    );
+  }, [canonicalOrgId, projectsInOrg]);
+
+  useLayoutEffect(() => {
+    if (!activityLogsCacheKey) return;
+    const cached = getActivityLogsCache(activityLogsCacheKey);
+    if (cached?.logs.length) {
+      setLiveActivityLogs(cached.logs);
+    }
+  }, [activityLogsCacheKey]);
+
+  useEffect(() => {
+    if (!activityLogsCacheKey) {
+      setLiveActivityLogs(activityLogs);
+      return;
+    }
+    setLiveActivityLogs(activityLogs);
+    if (activityLogs.length > 0) {
+      setActivityLogsCache(activityLogsCacheKey, { logs: activityLogs });
+    }
+  }, [activityLogs, activityLogsCacheKey]);
 
   const projectIdFromSearchParams = useMemo(() => {
     const q = searchParams.get("project");
@@ -2319,6 +2342,30 @@ export function WorkspaceClient({
     committedViewRef.current = v;
     setActiveView(v);
   }, []);
+
+  const refreshActivityLogs = useCallback(async () => {
+    if (!canonicalOrgId || !activityLogsCacheKey) return;
+    const scopedIds = projectsInOrg.map((p) => p.id);
+    const res = await fetchActivityLogsAction(canonicalOrgId, scopedIds);
+    if (!res.error) {
+      setLiveActivityLogs(res.logs);
+      setActivityLogsCache(activityLogsCacheKey, { logs: res.logs });
+    }
+  }, [canonicalOrgId, projectsInOrg, activityLogsCacheKey]);
+
+  useEffect(() => {
+    if (activeView !== "Aktivitas") return;
+    const cached =
+      activityLogsCacheKey != null
+        ? getActivityLogsCache(activityLogsCacheKey)
+        : null;
+    if (cached?.logs.length) {
+      setLiveActivityLogs(cached.logs);
+    }
+    void refreshActivityLogs();
+    const timer = setInterval(() => void refreshActivityLogs(), 20_000);
+    return () => clearInterval(timer);
+  }, [activeView, refreshActivityLogs, activityLogsCacheKey]);
 
   /** Sinkron dari URL hanya saat navigasi eksternal (back/forward, notifikasi, RSC). */
   useEffect(() => {
@@ -3236,6 +3283,11 @@ export function WorkspaceClient({
     [vtablesAllProjectsInOrg]
   );
 
+  const scopeTableIdsForChatBadge = useMemo(
+    () => allAccessibleVtables.map((vt) => vt.id),
+    [allAccessibleVtables]
+  );
+
   const activeVirtualTable = useMemo(
     () =>
       activeVirtualTableSlug
@@ -3519,34 +3571,6 @@ export function WorkspaceClient({
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((issue) => ({ issue, depth: 0 }));
   }, [selectedProjectId, selectedTaskId, issues]);
-
-  const activityLogsInScope = useMemo(() => {
-    if (!selectedProjectId) return [] as ActivityLogRow[];
-    const selectedTaskIssueId = selectedTaskId ?? null;
-    return activityLogs
-      .filter((log) => log.project_id === selectedProjectId)
-      .filter((log) => {
-        if (!selectedTaskIssueId) return true;
-        if (log.entity === "issue" && log.entity_id === selectedTaskIssueId) return true;
-        const payloadIssueId =
-          typeof log.payload?.issue_id === "string" ? log.payload.issue_id : null;
-        const payloadTargetIssueId =
-          typeof log.payload?.target_issue_id === "string"
-            ? log.payload.target_issue_id
-            : null;
-        return (
-          payloadIssueId === selectedTaskIssueId || payloadTargetIssueId === selectedTaskIssueId
-        );
-      })
-      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-      .slice(0, 20);
-  }, [activityLogs, selectedProjectId, selectedTaskId]);
-  const filteredActivityLogsInScope = useMemo(() => {
-    if (activityLogFilter === "all") return activityLogsInScope;
-    return activityLogsInScope.filter(
-      (log) => log.action === "user_logged_in" || log.action === "user_logged_out"
-    );
-  }, [activityLogFilter, activityLogsInScope]);
 
   const onlineUsersForSelectedProject = useMemo(() => {
     if (!selectedProjectId) return [] as Array<{ userId: string; name: string; at: string }>;
@@ -4050,35 +4074,39 @@ export function WorkspaceClient({
     setIsSidebarCollapsed(true);
   }, []);
 
-  /** Dari workspace: kembali ke pemilih project (org tetap). */
-  const handleMobileOpenProjectPicker = useCallback(() => {
-    if (!canonicalOrgId) return;
-    resetMobileWorkspaceOverlays();
-    setSelectedProjectId(null);
-    setSelectedTaskId(null);
-    setMobileScopePhase("project");
-    const p = new URLSearchParams(searchParams.toString());
-    p.set("org", canonicalOrgId);
-    p.delete("project");
-    p.delete("task");
-    const qs = p.toString();
-    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
-  }, [canonicalOrgId, searchParams, resetMobileWorkspaceOverlays]);
+  const handleMobileHeaderSelectOrg = useCallback(
+    (orgId: string) => {
+      resetMobileWorkspaceOverlays();
+      setCanonicalOrgId(orgId);
+      setSelectedProjectId(null);
+      setSelectedTaskId(null);
+      const p = new URLSearchParams(searchParams.toString());
+      p.set("org", orgId);
+      p.delete("project");
+      p.delete("task");
+      const qs = p.toString();
+      window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+    },
+    [searchParams, resetMobileWorkspaceOverlays]
+  );
 
-  /** Dari workspace: kembali ke pemilih organisasi. */
-  const handleMobileOpenOrgPicker = useCallback(() => {
-    resetMobileWorkspaceOverlays();
-    setCanonicalOrgId(null);
-    setSelectedProjectId(null);
-    setSelectedTaskId(null);
-    setMobileScopePhase("org");
-    const p = new URLSearchParams(searchParams.toString());
-    p.delete("org");
-    p.delete("project");
-    p.delete("task");
-    const qs = p.toString();
-    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
-  }, [searchParams, resetMobileWorkspaceOverlays]);
+  const handleMobileHeaderSelectProject = useCallback(
+    (projectId: string) => {
+      if (!canonicalOrgId) return;
+      resetMobileWorkspaceOverlays();
+      setMobileScopePhase("workspace");
+      commitScopeInUrl(
+        (q) => {
+          q.set("org", canonicalOrgId);
+          q.set("project", projectId);
+          q.delete("task");
+          if (!q.get("view")) q.set("view", viewToParam("Dashboard"));
+        },
+        { syncView: false }
+      );
+    },
+    [canonicalOrgId, commitScopeInUrl, resetMobileWorkspaceOverlays]
+  );
 
   useEffect(() => {
     if (!scopeRoutePending) return;
@@ -4233,138 +4261,98 @@ export function WorkspaceClient({
     [organizationMembers, userId]
   );
 
-  const navigateFromNotification = useCallback(
-    (n: UserNotificationRow) => {
-      const payload = (n.payload ?? {}) as Record<string, unknown>;
-      const projectId =
-        n.project_id ??
-        (typeof payload.project_id === "string" ? payload.project_id : null);
-      const virtualRowId =
-        typeof payload.virtual_row_id === "string"
-          ? payload.virtual_row_id
-          : null;
-      const virtualRowOnMap =
-        Boolean(virtualRowId) &&
-        (payload.scope_type === "virtual_row" ||
-          payload.has_geometry === true ||
-          payload.from_map === true ||
-          payload.scope_type == null);
-
-      if (isBelowMd) {
-        setMobileScopePhase("workspace");
+  const openActivityVirtualTable = useCallback(
+    (tableId: string) => {
+      const vt = virtualTables.find((t) => t.id === tableId);
+      if (!vt) return;
+      if (isBelowMd) setMobileScopePhase("workspace");
+      if (activeView !== "Tabel") {
+        viewChangeLockUntilRef.current = Date.now() + 1500;
+        applyActiveView("Tabel");
       }
-
       commitScopeInUrl(
         (q) => {
-          if (n.organization_id) q.set("org", n.organization_id);
-          if (projectId) q.set("project", projectId);
-          q.delete("task");
-          q.delete("berkas");
-          if (n.kind === "chat_mention") {
-            if (virtualRowOnMap) {
-              q.set("view", viewToParam("Map"));
-            }
-          } else {
-            q.set("view", viewToParam("Map"));
-          }
+          if (vt.organization_id) q.set("org", vt.organization_id);
+          if (vt.project_id) q.set("project", vt.project_id);
+          q.set("view", viewToParam("Tabel"));
         },
-        { syncView: true }
+        { syncView: false }
       );
+      setActiveVirtualTableSlug(vt.slug);
+    },
+    [virtualTables, isBelowMd, activeView, applyActiveView, commitScopeInUrl]
+  );
 
-      if (n.kind === "chat_mention" && virtualRowId) {
-        openVirtualRowChatPanel(virtualRowId, {
-          projectName:
-            typeof payload.project_name === "string"
-              ? payload.project_name
-              : selectedProject?.name ?? null,
-          tableDisplayName:
-            typeof payload.table_display_name === "string"
-              ? payload.table_display_name
-              : "Tabel",
-          rowLabel:
-            typeof payload.row_title === "string" ? payload.row_title : "Baris",
-          tableIdHint:
-            typeof payload.virtual_table_id === "string"
-              ? payload.virtual_table_id
-              : undefined,
-          switchToMapTab: virtualRowOnMap,
-        });
-        return;
-      }
-
-      if (n.kind === "chat_mention") {
-        const scopeType =
-          typeof payload.scope_type === "string" ? payload.scope_type : null;
-        if (isViewAllowedForModules("Chat", enabledModulesForOrg)) {
-          viewChangeLockUntilRef.current = Date.now() + 1500;
-          applyActiveView("Chat");
-          commitScopeInUrl(
-            (q) => {
-              q.set("view", viewToParam("Chat"));
-            },
-            { syncView: false }
-          );
-        }
+  const openActivityVirtualRow = useCallback(
+    (rowId: string, tableIdHint: string | null) => {
+      if (tableIdHint) openActivityVirtualTable(tableIdHint);
+      void resolveVirtualRowChatContextAction(rowId).then((res) => {
         const api = workspaceRightPanelApiRef.current;
         if (!api) return;
-        if (scopeType === "organization") {
-          const orgId = n.organization_id ?? canonicalOrgId;
-          if (!userHasOrgStaffFor(orgId)) return;
-          if (isBelowMd) {
-            api.openOrganizationChat({
+        if (res.error || !res.data) {
+          if (tableIdHint) {
+            api.openRowPanel({
+              tableId: tableIdHint,
+              rowId,
+              pathSegments: ["Baris"],
+              tab: "detail",
+              closeWhenOverlayCloses: true,
               mentionOptions: workspaceChatMentionOptions,
             });
           }
-        } else if (scopeType === "project" && projectId) {
-          if (isBelowMd) {
-            api.openProjectChat({
-              projectId,
-              mentionOptions: workspaceChatMentionOptions,
-            });
-          }
-        } else if (scopeType === "virtual_table") {
-          const tableId =
-            typeof payload.virtual_table_id === "string"
-              ? payload.virtual_table_id
-              : null;
-          if (tableId) {
-            if (
-              isBelowMd &&
-              isViewAllowedForModules("Tabel", enabledModulesForOrg)
-            ) {
-              viewChangeLockUntilRef.current = Date.now() + 1500;
-              applyActiveView("Tabel");
-              commitScopeInUrl(
-                (q) => {
-                  q.set("view", viewToParam("Tabel"));
-                  q.delete("berkas");
-                },
-                { syncView: false }
-              );
-            }
-            if (isBelowMd) {
-              api.openTableChat({
-                tableId,
-                mentionOptions: workspaceChatMentionOptions,
-              });
-            }
-            const vt = virtualTables.find((t) => t.id === tableId);
-            if (vt) setActiveVirtualTableSlug(vt.slug);
-          }
+          return;
         }
-      }
+        if (!tableIdHint) {
+          const vt = virtualTables.find((t) => t.id === res.data!.tableId);
+          if (vt) setActiveVirtualTableSlug(vt.slug);
+        }
+        api.openRowPanel({
+          tableId: res.data.tableId,
+          rowId,
+          pathSegments: res.data.pathSegments,
+          tab: "detail",
+          closeWhenOverlayCloses: true,
+          rowPayload: res.data.rowPayload,
+          relationLabels: res.data.relationLabels,
+          mentionOptions: workspaceChatMentionOptions,
+        });
+      });
     },
     [
-      commitScopeInUrl,
-      openVirtualRowChatPanel,
+      openActivityVirtualTable,
       virtualTables,
       workspaceChatMentionOptions,
-      isBelowMd,
-      canonicalOrgId,
-      userHasOrgStaffFor,
-      enabledModulesForOrg,
-      applyActiveView,
     ]
+  );
+
+  const openActivityProject = useCallback(
+    (projectId: string) => {
+      const proj = projects.find((p) => p.id === projectId);
+      if (!proj) return;
+      if (isBelowMd) setMobileScopePhase("workspace");
+      commitScopeInUrl((q) => {
+        q.set("org", proj.organization_id);
+        q.set("project", projectId);
+        q.delete("task");
+        q.delete("berkas");
+      }, { syncView: false });
+    },
+    [projects, isBelowMd, commitScopeInUrl]
+  );
+
+  const projectNameById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p.name])),
+    [projects]
+  );
+
+  const virtualTableIds = useMemo(
+    () => new Set(virtualTables.map((t) => t.id)),
+    [virtualTables]
+  );
+
+  const virtualTableNameById = useMemo(
+    () => new Map(virtualTables.map((t) => [t.id, t.display_name])),
+    [virtualTables]
   );
 
   /** Ganti project/task dalam org — tidak memicu RSC. */
@@ -4546,6 +4534,10 @@ export function WorkspaceClient({
       userId={userId}
       tableIds={virtualTableIdsForChatUnread}
       tablesForProjectBadge={tablesForProjectChatBadge}
+      scopeTableIds={scopeTableIdsForChatBadge}
+      scopeOrganizationId={canonicalOrgId}
+      scopeProjectId={selectedProjectId}
+      includeOrgRoomUnread={hasOrgStaffAccess}
     >
     <WorkspaceRightPanelProvider apiRef={workspaceRightPanelApiRef}>
     <WorkspaceRightPanelCloser activeVirtualTableSlug={activeVirtualTableSlug} />
@@ -5339,14 +5331,15 @@ export function WorkspaceClient({
             <WorkspaceMobileCompactHeader
               scopeTitle={workspaceHeaderBreadcrumbTitle}
               showOrgSwitcher={orgsWithProjects.length > 1}
-              onOpenProjectPicker={handleMobileOpenProjectPicker}
-              onOpenOrgPicker={handleMobileOpenOrgPicker}
+              organizations={orgsWithProjects}
+              projects={projectsInOrg}
+              selectedOrganizationId={canonicalOrgId}
+              selectedProjectId={selectedProjectId}
+              onSelectOrg={handleMobileHeaderSelectOrg}
+              onSelectProject={handleMobileHeaderSelectProject}
               userEmail={userEmail}
               userId={userId}
-              notifications={userNotifications}
-              onNavigate={navigateFromNotification}
               memberPresenceRows={memberPresenceRowsForSelectedProject}
-              selectedProjectId={selectedProjectId}
               formatDateTime={formatDateTime}
               signOutAction={signOut}
               disabled={workspaceActionPending}
@@ -5469,11 +5462,6 @@ export function WorkspaceClient({
                     </PopoverContent>
                   </Popover>
                 )}
-                <NotificationsBell
-                  userId={userId}
-                  notifications={userNotifications}
-                  onNavigate={navigateFromNotification}
-                />
                 <ThemeToggle />
                 <form action={signOut} className="flex shrink-0 items-center gap-2">
                   <p className="text-xs text-muted-foreground">{userEmail}</p>
@@ -5500,7 +5488,12 @@ export function WorkspaceClient({
         <section
           className={cn(
             "relative flex min-h-0 flex-1 flex-col overflow-hidden",
-            isBelowMd && !mobileChatKeyboardOpen && WORKSPACE_MOBILE_TAB_BAR_PADDING
+            isBelowMd &&
+              !mobileChatKeyboardOpen &&
+              !(
+                activeView === "Chat" && mobileChatConversationOpen
+              ) &&
+              WORKSPACE_MOBILE_TAB_BAR_PADDING
           )}
           aria-busy={workspaceActionPending}
         >
@@ -5523,14 +5516,27 @@ export function WorkspaceClient({
             className="min-h-0 flex-1"
             type="scroll"
             fillAvailableHeight={
-              activeView === "Map" || (isBelowMd && activeView === "Chat")
+              activeView === "Map" ||
+              (isBelowMd &&
+                (activeView === "Chat" ||
+                  activeView === "Aktivitas" ||
+                  activeView === "Tabel"))
+            }
+            hideVerticalScrollbar={
+              isBelowMd &&
+              (activeView === "Chat" ||
+                activeView === "Aktivitas" ||
+                activeView === "Tabel")
             }
           >
             <div
               className={cn(
                 "flex w-full flex-col",
                 activeView === "Map" ||
-                (isBelowMd && activeView === "Chat")
+                (isBelowMd &&
+                  (activeView === "Chat" ||
+                    activeView === "Aktivitas" ||
+                    activeView === "Tabel"))
                   ? "box-border h-full min-h-0 flex-1 basis-0 overflow-hidden p-0"
                   : "min-h-full p-6"
               )}
@@ -5538,7 +5544,7 @@ export function WorkspaceClient({
             <TabsList className="mb-4 hidden h-auto min-h-9 w-full max-w-full shrink-0 flex-wrap justify-start gap-1 rounded-lg bg-muted p-1 text-muted-foreground md:flex md:flex-nowrap">
               {visibleViews.map((view) => (
                 <TabsTrigger key={view} value={view} className="px-2.5 sm:px-3">
-                  {view}
+                  {view === "Chat" ? <ChatTabLabel /> : view}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -5605,37 +5611,87 @@ export function WorkspaceClient({
                   mentionOptions={workspaceChatMentionOptions}
                   isBelowMd={isBelowMd}
                   onMobileChatKeyboardOpenChange={setMobileChatKeyboardOpen}
+                  onMobileConversationOpenChange={setMobileChatConversationOpen}
                 />
               </div>
               </TabPanelKeepAlive>
             </TabsContent>
-            <TabsContent value="Tabel" className="min-h-0 w-full min-w-0 flex-none outline-none">
-              <TabPanelKeepAlive view="Tabel" activeView={activeView}>
-              {canonicalOrgId && !hasOrgStaffAccess ? (
+            <TabsContent
+              value="Aktivitas"
+              className={cn(
+                "min-h-0 w-full min-w-0 outline-none",
+                isBelowMd
+                  ? "flex flex-1 basis-0 flex-col overflow-hidden"
+                  : "flex-none"
+              )}
+            >
+              <TabPanelKeepAlive
+                view="Aktivitas"
+                activeView={activeView}
+                className={cn(
+                  isBelowMd
+                    ? "flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+                    : undefined
+                )}
+              >
+                <WorkspaceActivityTab
+                  activityLogs={liveActivityLogs}
+                  organizationId={canonicalOrgId}
+                  organizationName={selectedOrganization?.name ?? null}
+                  selectedProjectId={selectedProjectId}
+                  hasOrgStaffAccess={hasOrgStaffAccess}
+                  projectNameById={projectNameById}
+                  virtualTableIds={virtualTableIds}
+                  virtualTableNameById={virtualTableNameById}
+                  isBelowMd={isBelowMd}
+                  onOpenTable={openActivityVirtualTable}
+                  onOpenRow={openActivityVirtualRow}
+                  onOpenProject={openActivityProject}
+                />
+              </TabPanelKeepAlive>
+            </TabsContent>
+            <TabsContent
+              value="Tabel"
+              className={cn(
+                "min-h-0 w-full min-w-0 outline-none",
+                isBelowMd
+                  ? "flex flex-1 basis-0 flex-col overflow-hidden"
+                  : "flex-none"
+              )}
+            >
+              <TabPanelKeepAlive
+                view="Tabel"
+                activeView={activeView}
+                className={cn(
+                  isBelowMd
+                    ? "flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
+                    : undefined
+                )}
+              >
+              {canonicalOrgId && !hasOrgStaffAccess && !isBelowMd ? (
                 <p className="mt-5 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
                   Tabel organisasi hanya untuk <strong>tim inti</strong>. Anda
                   hanya melihat tabel pada project yang di-assign.
                 </p>
               ) : null}
-              <p className="mt-5 text-sm text-muted-foreground">
-                {isBelowMd ? (
-                  <>
-                    Ketuk kartu tabel untuk melihat daftar baris. Ketuk baris untuk
-                    detail; edit dilakukan di layar detail (bukan di grid).
-                  </>
-                ) : (
-                  <>
-                    Preview <strong className="text-foreground">50 baris per halaman</strong>{" "}
-                    per tabel. Untuk seluruh data dan edit penuh, gunakan{" "}
-                    <strong className="text-foreground">Tabel lengkap</strong> (tombol di
-                    header tabel atau sidebar).
-                  </>
+              {!isBelowMd ? (
+                <p className="mt-5 text-sm text-muted-foreground">
+                  Preview <strong className="text-foreground">50 baris per halaman</strong>{" "}
+                  per tabel. Untuk seluruh data dan edit penuh, gunakan{" "}
+                  <strong className="text-foreground">Tabel lengkap</strong> (tombol di
+                  header tabel atau sidebar).
+                </p>
+              ) : null}
+              <div
+                className={cn(
+                  isBelowMd
+                    ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
+                    : undefined
                 )}
-              </p>
+              >
               {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
                 isBelowMd ? (
                   <VirtualTableMobileList
-                    className="mt-5"
                     sectionTitle="Tabel Organisasi"
                     tables={vtablesForOrg}
                     virtualColumnsByTableId={virtualColumnsByTableId}
@@ -5667,6 +5723,7 @@ export function WorkspaceClient({
                           memberNameByUserId={memberNameByUserId}
                           allVirtualTables={allAccessibleVtables}
                           onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
+                          onActivityChange={refreshActivityLogs}
                         />
                       </div>
                     ))}
@@ -5677,7 +5734,6 @@ export function WorkspaceClient({
               {selectedProjectId && vtablesForProject.length > 0 ? (
                 isBelowMd ? (
                   <VirtualTableMobileList
-                    className="mt-6"
                     sectionTitle="Tabel Project"
                     tables={vtablesForProject}
                     virtualColumnsByTableId={virtualColumnsByTableId}
@@ -5709,6 +5765,7 @@ export function WorkspaceClient({
                           memberNameByUserId={memberNameByUserId}
                           allVirtualTables={allAccessibleVtables}
                           onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
+                          onActivityChange={refreshActivityLogs}
                         />
                       </div>
                     ))}
@@ -5717,12 +5774,18 @@ export function WorkspaceClient({
               ) : null}
 
               {allAccessibleVtables.length === 0 ? (
-                <p className="mt-5 text-sm text-muted-foreground">
+                <p
+                  className={cn(
+                    "text-sm text-muted-foreground",
+                    isBelowMd ? "p-3" : "mt-5"
+                  )}
+                >
                   {!selectedProjectId && !canonicalOrgId
                     ? "Pilih organisasi dan project untuk melihat tabel custom."
                     : "Belum ada tabel custom pada scope ini."}
                 </p>
               ) : null}
+              </div>
               </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Berkas" className="min-h-0 w-full min-w-0 flex-none outline-none">
@@ -7626,7 +7689,9 @@ export function WorkspaceClient({
                   setActiveVirtualTableSlug(result.tableSlug);
                   setMapImportTableId(result.tableId);
                   router.refresh();
+                  void refreshActivityLogs();
                 }}
+                onActivityChange={refreshActivityLogs}
               />
             </div>
           </div>

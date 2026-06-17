@@ -34,6 +34,8 @@ const ScrollArea = React.forwardRef<
      * children can use `flex-1 min-h-0` to fill space without growing the page.
      */
     fillAvailableHeight?: boolean;
+    /** Sembunyikan scrollbar vertikal (mis. tab mobile dengan scroll internal). */
+    hideVerticalScrollbar?: boolean;
   }
 >(
   (
@@ -43,6 +45,7 @@ const ScrollArea = React.forwardRef<
       type = "scroll",
       scrollHideDelay = 900,
       fillAvailableHeight = false,
+      hideVerticalScrollbar = false,
       ...props
     },
     ref
@@ -65,7 +68,7 @@ const ScrollArea = React.forwardRef<
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
-      <ScrollBar orientation="vertical" />
+      {!hideVerticalScrollbar ? <ScrollBar orientation="vertical" /> : null}
       <ScrollAreaPrimitive.Corner />
     </ScrollAreaPrimitive.Root>
   )

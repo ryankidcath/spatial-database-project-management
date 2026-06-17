@@ -45,7 +45,16 @@ import {
   LAYER_MATCH_COLUMN_SLUG,
 } from "@/lib/virtual-table-layer-bootstrap";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { writeProjectAuditLog } from "./audit-log-actions";
+import { writeOrgAuditLog, writeProjectAuditLog } from "./audit-log-actions";
+import { dispatchWorkspaceNotification } from "./workspace-notification-dispatch";
+import {
+  cellValuesEqual,
+  formatCellValueForNotification,
+  notifyVirtualTableMembers,
+  resolveVirtualTableScope,
+  rowLabelFromPayload,
+  writeVirtualTableAuditLog,
+} from "./workspace-notification-helpers";
 
 type ActionResult = { error: string | null };
 type CreateTableResult = { error: string | null; tableId: string | null };
@@ -344,6 +353,16 @@ export async function createVirtualTableAction(
   if (colErr) return { error: colErr.message, tableId };
 
   if (projectId) {
+    const { data: projectRow } = await supabase
+      .schema("core_pm")
+      .from("projects")
+      .select("organization_id")
+      .eq("id", projectId)
+      .maybeSingle();
+    const orgId =
+      projectRow && typeof projectRow.organization_id === "string"
+        ? projectRow.organization_id
+        : null;
     await writeProjectAuditLog(supabase, {
       projectId,
       actorUserId: user.id,
@@ -351,6 +370,43 @@ export async function createVirtualTableAction(
       entity: "core_pm.virtual_tables",
       entityId: tableId,
       payload: { display_name: displayName, slug, scope: "project" },
+    });
+    if (orgId) {
+      await dispatchWorkspaceNotification(supabase, {
+        preferenceCategory: "schema_changes",
+        kind: "virtual_table",
+        organizationId: orgId,
+        projectId,
+        actorUserId: user.id,
+        title: `Tabel ${displayName} dibuat`,
+        payload: {
+          event_id: "vtable.created",
+          virtual_table_id: tableId,
+          table_display_name: displayName,
+        },
+      });
+    }
+  } else if (organizationId) {
+    await writeOrgAuditLog(supabase, {
+      organizationId,
+      actorUserId: user.id,
+      action: "virtual_table.create",
+      entity: "core_pm.virtual_tables",
+      entityId: tableId,
+      payload: { display_name: displayName, slug, scope: "organization" },
+    });
+    await dispatchWorkspaceNotification(supabase, {
+      preferenceCategory: "schema_changes",
+      kind: "virtual_table",
+      organizationId,
+      projectId: null,
+      actorUserId: user.id,
+      title: `Tabel ${displayName} dibuat`,
+      payload: {
+        event_id: "vtable.created",
+        virtual_table_id: tableId,
+        table_display_name: displayName,
+      },
     });
   }
 
@@ -389,6 +445,9 @@ export async function updateVirtualTableAction(
     updates.icon = String(formData.get("icon") ?? "").trim() || null;
   }
 
+  const shouldNotifyUpdate =
+    "display_name" in updates || "description" in updates;
+
   const { error } = await supabase
     .schema("core_pm")
     .from("virtual_tables")
@@ -399,6 +458,28 @@ export async function updateVirtualTableAction(
   if (error) return { error: error.message };
 
   revalidatePath("/", "layout");
+
+  const scope = await resolveVirtualTableScope(supabase, tableId);
+  if (scope && shouldNotifyUpdate) {
+    const updatedDisplayName =
+      typeof updates.display_name === "string"
+        ? updates.display_name
+        : scope.displayName;
+    await writeVirtualTableAuditLog(supabase, scope, {
+      actorUserId: user.id,
+      action: "virtual_table.update",
+      entity: "core_pm.virtual_tables",
+      entityId: tableId,
+      payload: { display_name: updatedDisplayName },
+    });
+    await notifyVirtualTableMembers(supabase, scope, user.id, {
+      preferenceCategory: "schema_changes",
+      kind: "virtual_table",
+      title: `Tabel ${updatedDisplayName} diperbarui`,
+      payload: { event_id: "vtable.updated" },
+    });
+  }
+
   return { error: null };
 }
 
@@ -420,7 +501,7 @@ export async function deleteVirtualTableAction(
   const { data: tbl } = await supabase
     .schema("core_pm")
     .from("virtual_tables")
-    .select("project_id, display_name")
+    .select("project_id, organization_id, display_name")
     .eq("id", tableId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -432,15 +513,68 @@ export async function deleteVirtualTableAction(
   if (error) return { error: error.message };
 
   if (tbl) {
-    const t = tbl as { project_id: string; display_name: string };
-    await writeProjectAuditLog(supabase, {
-      projectId: t.project_id,
-      actorUserId: user.id,
-      action: "virtual_table.delete",
-      entity: "core_pm.virtual_tables",
-      entityId: tableId,
-      payload: { display_name: t.display_name },
-    });
+    const t = tbl as {
+      project_id: string | null;
+      organization_id: string | null;
+      display_name: string;
+    };
+    if (t.project_id) {
+      const { data: projectRow } = await supabase
+        .schema("core_pm")
+        .from("projects")
+        .select("organization_id")
+        .eq("id", t.project_id)
+        .maybeSingle();
+      const orgId =
+        projectRow && typeof projectRow.organization_id === "string"
+          ? projectRow.organization_id
+          : null;
+      await writeProjectAuditLog(supabase, {
+        projectId: t.project_id,
+        actorUserId: user.id,
+        action: "virtual_table.delete",
+        entity: "core_pm.virtual_tables",
+        entityId: tableId,
+        payload: { display_name: t.display_name },
+      });
+      if (orgId) {
+        await dispatchWorkspaceNotification(supabase, {
+          preferenceCategory: "schema_changes",
+          kind: "virtual_table",
+          organizationId: orgId,
+          projectId: t.project_id,
+          actorUserId: user.id,
+          title: `Tabel ${t.display_name} dihapus`,
+          payload: {
+            event_id: "vtable.deleted",
+            virtual_table_id: tableId,
+            table_display_name: t.display_name,
+          },
+        });
+      }
+    } else if (t.organization_id) {
+      await writeOrgAuditLog(supabase, {
+        organizationId: t.organization_id,
+        actorUserId: user.id,
+        action: "virtual_table.delete",
+        entity: "core_pm.virtual_tables",
+        entityId: tableId,
+        payload: { display_name: t.display_name },
+      });
+      await dispatchWorkspaceNotification(supabase, {
+        preferenceCategory: "schema_changes",
+        kind: "virtual_table",
+        organizationId: t.organization_id,
+        projectId: null,
+        actorUserId: user.id,
+        title: `Tabel ${t.display_name} dihapus`,
+        payload: {
+          event_id: "vtable.deleted",
+          virtual_table_id: tableId,
+          table_display_name: t.display_name,
+        },
+      });
+    }
   }
 
   revalidatePath("/", "layout");
@@ -504,7 +638,7 @@ export async function addVirtualColumnAction(
 
   const nextPosition = ((maxPos as { position: number } | null)?.position ?? -1) + 1;
 
-  const { error } = await supabase
+  const { data: insertedCol, error } = await supabase
     .schema("core_pm")
     .from("virtual_columns")
     .insert({
@@ -515,9 +649,39 @@ export async function addVirtualColumnAction(
       position: nextPosition,
       is_required: isRequired,
       config,
-    });
+    })
+    .select("id")
+    .single();
 
   if (error) return { error: error.message };
+
+  const columnId = (insertedCol as { id: string }).id;
+  const scope = await resolveVirtualTableScope(supabase, tableId);
+  if (scope) {
+    await writeVirtualTableAuditLog(supabase, scope, {
+      actorUserId: user.id,
+      action: "virtual_column.create",
+      entity: "core_pm.virtual_columns",
+      entityId: columnId,
+      payload: {
+        display_name: displayName,
+        slug: finalSlug,
+        data_type: dataType,
+        table_display_name: scope.displayName,
+      },
+    });
+    await notifyVirtualTableMembers(supabase, scope, user.id, {
+      preferenceCategory: "schema_changes",
+      kind: "virtual_column",
+      title: `Kolom ${displayName} ditambahkan di ${scope.displayName}`,
+      payload: {
+        event_id: "vcolumn.created",
+        virtual_column_id: columnId,
+        column_slug: finalSlug,
+        column_display_name: displayName,
+      },
+    });
+  }
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -637,6 +801,36 @@ export async function updateVirtualColumnAction(
 
   if (error) return { error: error.message };
 
+  const scope = await resolveVirtualTableScope(supabase, col.table_id);
+  if (scope) {
+    const colDisplayName =
+      typeof updates.display_name === "string"
+        ? updates.display_name
+        : col.display_name;
+    await writeVirtualTableAuditLog(supabase, scope, {
+      actorUserId: user.id,
+      action: "virtual_column.update",
+      entity: "core_pm.virtual_columns",
+      entityId: columnId,
+      payload: {
+        display_name: colDisplayName,
+        slug: slugChanged ? newSlug : col.slug,
+        table_display_name: scope.displayName,
+      },
+    });
+    await notifyVirtualTableMembers(supabase, scope, user.id, {
+      preferenceCategory: "schema_changes",
+      kind: "virtual_column",
+      title: `Kolom ${colDisplayName} diubah di ${scope.displayName}`,
+      payload: {
+        event_id: "vcolumn.updated",
+        virtual_column_id: columnId,
+        column_slug: slugChanged ? newSlug : col.slug,
+        column_display_name: colDisplayName,
+      },
+    });
+  }
+
   revalidatePath("/", "layout");
   return {
     error: null,
@@ -664,14 +858,18 @@ export async function deleteVirtualColumnAction(
   const { data: col, error: colErr } = await supabase
     .schema("core_pm")
     .from("virtual_columns")
-    .select("table_id, slug")
+    .select("table_id, slug, display_name")
     .eq("id", columnId)
     .maybeSingle();
 
   if (colErr) return { error: colErr.message };
   if (!col) return { error: "Kolom tidak ditemukan" };
 
-  const { table_id, slug } = col as { table_id: string; slug: string };
+  const { table_id, slug, display_name } = col as {
+    table_id: string;
+    slug: string;
+    display_name: string;
+  };
 
   // Remove the key from all rows' payloads using JSONB operator
   // payload - 'key' removes the key from the object
@@ -704,6 +902,31 @@ export async function deleteVirtualColumnAction(
     .eq("id", columnId);
 
   if (error) return { error: error.message };
+
+  const scope = await resolveVirtualTableScope(supabase, table_id);
+  if (scope) {
+    await writeVirtualTableAuditLog(supabase, scope, {
+      actorUserId: user.id,
+      action: "virtual_column.delete",
+      entity: "core_pm.virtual_columns",
+      entityId: columnId,
+      payload: {
+        display_name,
+        slug,
+        table_display_name: scope.displayName,
+      },
+    });
+    await notifyVirtualTableMembers(supabase, scope, user.id, {
+      preferenceCategory: "schema_changes",
+      kind: "virtual_column",
+      title: `Kolom ${display_name} dihapus dari ${scope.displayName}`,
+      payload: {
+        event_id: "vcolumn.deleted",
+        column_slug: slug,
+        column_display_name: display_name,
+      },
+    });
+  }
 
   revalidatePath("/", "layout");
   return { error: null };
@@ -869,7 +1092,30 @@ export async function createVirtualRowAction(
 
   if (error) return { error: error.message, rowId: null };
 
-  return { error: null, rowId: (inserted as { id: string } | null)?.id ?? null };
+  const rowId = (inserted as { id: string } | null)?.id ?? null;
+  if (rowId) {
+    const scope = await resolveVirtualTableScope(supabase, tableId);
+    if (scope) {
+      await writeVirtualTableAuditLog(supabase, scope, {
+        actorUserId: user.id,
+        action: "virtual_row.create",
+        entity: "core_pm.virtual_rows",
+        entityId: rowId,
+        payload: { table_display_name: scope.displayName },
+      });
+      await notifyVirtualTableMembers(supabase, scope, user.id, {
+        preferenceCategory: "row_lifecycle",
+        kind: "virtual_row",
+        title: `Baris baru di ${scope.displayName}`,
+        payload: {
+          event_id: "vrow.created",
+          virtual_row_id: rowId,
+        },
+      });
+    }
+  }
+
+  return { error: null, rowId };
 }
 
 export type ImportVirtualRowsCsvResult = {
@@ -1270,7 +1516,7 @@ export async function importVirtualRowsCsvAction(
   const { data: tableRow, error: tableErr } = await supabase
     .schema("core_pm")
     .from("virtual_tables")
-    .select("id, project_id, display_name")
+    .select("id, project_id, organization_id, display_name")
     .eq("id", tableId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -1553,6 +1799,8 @@ export async function importVirtualRowsCsvAction(
   }
 
   const projectId = (tableRow as { project_id: string | null }).project_id;
+  const tableDisplayName = (tableRow as { display_name: string }).display_name;
+  const tableOrgId = (tableRow as { organization_id: string | null }).organization_id;
   if (projectId && (inserted > 0 || skippedDuplicates > 0 || failed > 0)) {
     await writeProjectAuditLog(supabase, {
       projectId,
@@ -1561,13 +1809,51 @@ export async function importVirtualRowsCsvAction(
       entity: "core_pm.virtual_rows",
       entityId: tableId,
       payload: {
-        table_display_name: (tableRow as { display_name: string }).display_name,
+        table_display_name: tableDisplayName,
         inserted,
         failed,
         skipped_empty: skippedEmpty,
         skipped_duplicates: skippedDuplicates,
       },
     });
+  }
+  if (inserted > 0 || failed > 0) {
+    let orgId = tableOrgId;
+    if (!orgId && projectId) {
+      const { data: pr } = await supabase
+        .schema("core_pm")
+        .from("projects")
+        .select("organization_id")
+        .eq("id", projectId)
+        .maybeSingle();
+      orgId =
+        pr && typeof pr.organization_id === "string" ? pr.organization_id : null;
+    }
+    if (orgId) {
+      const bodyParts: string[] = [];
+      if (inserted > 0) bodyParts.push(`${inserted} baris ditambahkan`);
+      if (failed > 0) bodyParts.push(`${failed} gagal`);
+      if (skippedDuplicates > 0) {
+        bodyParts.push(`${skippedDuplicates} duplikat dilewati`);
+      }
+      await dispatchWorkspaceNotification(supabase, {
+        preferenceCategory: "import_summary",
+        kind: "virtual_import",
+        organizationId: orgId,
+        projectId,
+        actorUserId: user.id,
+        title: `Import CSV ${tableDisplayName}: ${inserted} baris`,
+        body: bodyParts.length > 0 ? bodyParts.join(", ") : null,
+        severity: failed > 0 ? "warning" : "info",
+        payload: {
+          event_id: failed > 0 ? "vtable.import_partial" : "vtable.import_csv",
+          virtual_table_id: tableId,
+          table_display_name: tableDisplayName,
+          inserted,
+          failed,
+        },
+      });
+    }
   }
 
   revalidatePath("/", "layout");
@@ -1657,7 +1943,7 @@ export async function importVirtualRowsGeoJsonBatchAction(
   const { data: tableRow, error: tableErr } = await supabase
     .schema("core_pm")
     .from("virtual_tables")
-    .select("id, project_id, display_name")
+    .select("id, project_id, organization_id, display_name")
     .eq("id", tableId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -2087,6 +2373,8 @@ export async function importVirtualRowsGeoJsonBatchAction(
   }
 
   const projectId = (tableRow as { project_id: string | null }).project_id;
+  const tableDisplayName = (tableRow as { display_name: string }).display_name;
+  const tableOrgId = (tableRow as { organization_id: string | null }).organization_id;
   if (projectId && (inserted > 0 || updated > 0)) {
     await writeProjectAuditLog(supabase, {
       projectId,
@@ -2095,7 +2383,7 @@ export async function importVirtualRowsGeoJsonBatchAction(
       entity: "core_pm.virtual_rows",
       entityId: tableId,
       payload: {
-        table_display_name: (tableRow as { display_name: string }).display_name,
+        table_display_name: tableDisplayName,
         inserted,
         updated,
         failed,
@@ -2106,6 +2394,43 @@ export async function importVirtualRowsGeoJsonBatchAction(
         geo_desa_lookup: geoDesaLookup,
       },
     });
+  }
+  if (inserted > 0 || updated > 0 || failed > 0) {
+    let orgId = tableOrgId;
+    if (!orgId && projectId) {
+      const { data: pr } = await supabase
+        .schema("core_pm")
+        .from("projects")
+        .select("organization_id")
+        .eq("id", projectId)
+        .maybeSingle();
+      orgId =
+        pr && typeof pr.organization_id === "string" ? pr.organization_id : null;
+    }
+    if (orgId) {
+      const bodyParts: string[] = [];
+      if (inserted > 0) bodyParts.push(`${inserted} fitur baru`);
+      if (updated > 0) bodyParts.push(`${updated} diperbarui`);
+      if (failed > 0) bodyParts.push(`${failed} gagal`);
+      await dispatchWorkspaceNotification(supabase, {
+        preferenceCategory: "import_summary",
+        kind: "virtual_import",
+        organizationId: orgId,
+        projectId,
+        actorUserId: user.id,
+        title: `Import GeoJSON ${tableDisplayName}: ${inserted} fitur`,
+        body: bodyParts.length > 0 ? bodyParts.join(", ") : null,
+        severity: failed > 0 ? "warning" : "info",
+        payload: {
+          event_id: failed > 0 ? "vtable.import_partial" : "vtable.import_geojson",
+          virtual_table_id: tableId,
+          table_display_name: tableDisplayName,
+          inserted,
+          updated,
+          failed,
+        },
+      });
+    }
   }
 
   revalidatePath("/", "layout");
@@ -2634,7 +2959,7 @@ export async function updateVirtualRowCellAction(
   const { data: col } = await supabase
     .schema("core_pm")
     .from("virtual_columns")
-    .select("slug, display_name, data_type, is_required")
+    .select("slug, display_name, data_type, is_required, config")
     .eq("table_id", table_id)
     .eq("slug", columnSlug)
     .maybeSingle();
@@ -2655,10 +2980,13 @@ export async function updateVirtualRowCellAction(
       display_name: string;
       data_type: string;
       is_required: boolean;
+      config: Record<string, unknown> | null;
     };
     const err = validateCellValue(parsedValue, c.data_type, c.is_required, c.display_name);
     if (err) return { error: err };
   }
+
+  const oldValue = currentPayload[columnSlug];
 
   const newPayload = { ...currentPayload };
   if (parsedValue == null || parsedValue === "") {
@@ -2675,6 +3003,59 @@ export async function updateVirtualRowCellAction(
     .is("deleted_at", null);
 
   if (error) return { error: error.message };
+
+  if (
+    col &&
+    !cellValuesEqual(
+      oldValue,
+      parsedValue == null || parsedValue === "" ? undefined : parsedValue
+    )
+  ) {
+    const c = col as {
+      display_name: string;
+      data_type: string;
+      config: Record<string, unknown> | null;
+    };
+    const scope = await resolveVirtualTableScope(supabase, table_id);
+    if (scope) {
+      const { data: allCols } = await supabase
+        .schema("core_pm")
+        .from("virtual_columns")
+        .select("slug, display_name, data_type, position")
+        .eq("table_id", table_id)
+        .order("position");
+
+      const label = rowLabelFromPayload(
+        newPayload,
+        (allCols ?? []) as {
+          slug: string;
+          display_name: string;
+          data_type: string;
+          position: number;
+        }[],
+        rowId
+      );
+
+      const newStored =
+        parsedValue == null || parsedValue === "" ? null : parsedValue;
+      const oldStored = oldValue === undefined ? null : oldValue;
+
+      await writeVirtualTableAuditLog(supabase, scope, {
+        actorUserId: user.id,
+        action: "virtual_row.cell_changed",
+        entity: "core_pm.virtual_rows",
+        entityId: rowId,
+        payload: {
+          column_slug: columnSlug,
+          column_display_name: c.display_name,
+          table_display_name: scope.displayName,
+          old_value: formatCellValueForNotification(oldStored, c.data_type),
+          new_value: formatCellValueForNotification(newStored, c.data_type),
+          row_label: label,
+        },
+      });
+    }
+  }
 
   return { error: null };
 }
@@ -2764,11 +3145,42 @@ export async function deleteVirtualRowAction(
   const rowId = String(formData.get("row_id") ?? "").trim();
   if (!rowId) return { error: "row_id kosong" };
 
+  const { data: rowBefore } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("table_id")
+    .eq("id", rowId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
   const { error } = await supabase.schema("core_pm").rpc("soft_delete_virtual_row", {
     p_row_id: rowId,
   });
 
   if (error) return { error: error.message };
+
+  if (rowBefore) {
+    const tableId = (rowBefore as { table_id: string }).table_id;
+    const scope = await resolveVirtualTableScope(supabase, tableId);
+    if (scope) {
+      await writeVirtualTableAuditLog(supabase, scope, {
+        actorUserId: user.id,
+        action: "virtual_row.delete",
+        entity: "core_pm.virtual_rows",
+        entityId: rowId,
+        payload: { table_display_name: scope.displayName },
+      });
+      await notifyVirtualTableMembers(supabase, scope, user.id, {
+        preferenceCategory: "row_lifecycle",
+        kind: "virtual_row",
+        title: `Baris dihapus dari ${scope.displayName}`,
+        payload: {
+          event_id: "vrow.deleted",
+          virtual_row_id: rowId,
+        },
+      });
+    }
+  }
 
   return { error: null };
 }
@@ -2835,6 +3247,30 @@ export async function deleteVirtualRowsBulkAction(
   const count = typeof deleted === "number" ? deleted : Number(deleted) || 0;
   if (count === 0) {
     return { error: "Tidak ada baris yang dihapus (mungkin sudah dihapus)", deleted: 0 };
+  }
+
+  const scope = await resolveVirtualTableScope(supabase, tableId);
+  if (scope) {
+    await writeVirtualTableAuditLog(supabase, scope, {
+      actorUserId: user.id,
+      action: "virtual_row.delete_bulk",
+      entity: "core_pm.virtual_rows",
+      entityId: tableId,
+      payload: {
+        deleted_count: count,
+        table_display_name: scope.displayName,
+      },
+    });
+    await notifyVirtualTableMembers(supabase, scope, user.id, {
+      preferenceCategory: "row_lifecycle",
+      kind: "virtual_row",
+      title: `${count} baris dihapus dari ${scope.displayName}`,
+      body: `${count} baris dihapus (soft delete).`,
+      payload: {
+        event_id: "vrow.deleted_bulk",
+        deleted_count: count,
+      },
+    });
   }
 
   return { error: null, deleted: count };

@@ -22,4 +22,6 @@ export type ChatInboxEntry = {
   rowPayload?: Record<string, unknown>;
   /** Waktu pesan terakhir (atau pembuatan room) untuk urutan inbox. */
   lastActivityAt?: string | null;
+  /** Cuplikan isi pesan terakhir di room ini. */
+  lastMessagePreview?: string | null;
 };

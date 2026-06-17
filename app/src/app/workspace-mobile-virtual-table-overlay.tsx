@@ -22,6 +22,11 @@ import {
   VIRTUAL_TABLE_ROWS_MUTATED,
   type VirtualTableRowsMutatedDetail,
 } from "@/lib/workspace-virtual-table-mutations";
+import {
+  getVirtualTableMobileRowsCache,
+  setVirtualTableMobileRowsCache,
+  virtualTableMobileRowsCacheKey,
+} from "@/lib/virtual-table-mobile-rows-cache";
 import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
 import { WORKSPACE_MOBILE_TAB_BAR_PADDING } from "./workspace-mobile-tabs";
 
@@ -56,19 +61,51 @@ export function WorkspaceMobileVirtualTableOverlay({
     isRowPanelOpen,
   } = useWorkspaceRightPanel();
   const { refreshEpoch } = useVirtualTableChatUnread();
+  const cacheKey = useMemo(
+    () => virtualTableMobileRowsCacheKey(table.id),
+    [table.id]
+  );
+  const initialCache = useMemo(
+    () => getVirtualTableMobileRowsCache(cacheKey),
+    [cacheKey]
+  );
 
-  const [rows, setRows] = useState<VirtualDataRow[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<VirtualDataRow[]>(initialCache?.rows ?? []);
+  const [totalCount, setTotalCount] = useState(initialCache?.totalCount ?? 0);
+  const [loading, setLoading] = useState(
+    (initialCache?.rows.length ?? 0) === 0
+  );
   const [loadingMore, setLoadingMore] = useState(false);
   const [relationLabels, setRelationLabels] = useState<Record<string, string>>(
-    {}
+    initialCache?.relationLabels ?? {}
   );
   const [unreadRowIds, setUnreadRowIds] = useState<Set<string>>(() => new Set());
   const rowsLengthRef = useRef(0);
   rowsLengthRef.current = rows.length;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const totalCountRef = useRef(totalCount);
+  totalCountRef.current = totalCount;
+  const relationLabelsRef = useRef(relationLabels);
+  relationLabelsRef.current = relationLabels;
 
   const hasMore = rows.length < totalCount;
+
+  useEffect(() => {
+    const cached = getVirtualTableMobileRowsCache(cacheKey);
+    setRows(cached?.rows ?? []);
+    setTotalCount(cached?.totalCount ?? 0);
+    setRelationLabels(cached?.relationLabels ?? {});
+    setLoading((cached?.rows.length ?? 0) === 0);
+  }, [cacheKey]);
+
+  useEffect(() => {
+    setVirtualTableMobileRowsCache(cacheKey, {
+      rows: rowsRef.current,
+      totalCount: totalCountRef.current,
+      relationLabels: relationLabelsRef.current,
+    });
+  }, [cacheKey, rows, totalCount, relationLabels]);
 
   const mapCols = useMemo(
     () =>
@@ -122,11 +159,11 @@ export function WorkspaceMobileVirtualTableOverlay({
   );
 
   const loadInitial = useCallback(async () => {
-    setLoading(true);
-    setRows([]);
-    setRelationLabels({});
+    const hadCache = rowsLengthRef.current > 0;
+    if (!hadCache) setLoading(true);
+    const limit = Math.max(rowsLengthRef.current, MOBILE_ROW_BATCH_SIZE);
     const result = await fetchVirtualRowsAction(table.id, {
-      limit: MOBILE_ROW_BATCH_SIZE,
+      limit,
       offset: 0,
     });
     await applyFetchResult(result, false);
@@ -339,10 +376,10 @@ export function WorkspaceMobileVirtualTableOverlay({
       </div>
 
       <div
-        className={`min-h-0 flex-1 overflow-auto px-4 py-4 ${WORKSPACE_MOBILE_TAB_BAR_PADDING}`}
+        className={`min-h-0 flex-1 overflow-y-auto ${WORKSPACE_MOBILE_TAB_BAR_PADDING}`}
       >
         {loading && rows.length > 0 ? (
-          <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
             <Spinner className="size-3" />
             Memperbarui…
           </div>
@@ -360,24 +397,26 @@ export function WorkspaceMobileVirtualTableOverlay({
         />
 
         {hasMore ? (
-          <Button
-            type="button"
-            variant="outline"
-            className="mt-4 h-11 w-full"
-            disabled={loadingMore || loading}
-            onClick={() => void loadMore()}
-          >
-            {loadingMore ? (
-              <>
-                <Spinner className="mr-2 size-4" />
-                Memuat…
-              </>
-            ) : (
-              `Muat lebih (${rows.length} dari ${totalCount})`
-            )}
-          </Button>
+          <div className="px-3 pb-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full"
+              disabled={loadingMore || loading}
+              onClick={() => void loadMore()}
+            >
+              {loadingMore ? (
+                <>
+                  <Spinner className="mr-2 size-4" />
+                  Memuat…
+                </>
+              ) : (
+                `Muat lebih (${rows.length} dari ${totalCount})`
+              )}
+            </Button>
+          </div>
         ) : rows.length > 0 && totalCount > 0 ? (
-          <p className="mt-4 pb-2 text-center text-xs text-muted-foreground">
+          <p className="px-3 pb-2 text-center text-xs text-muted-foreground">
             Semua {totalCount} baris ditampilkan
           </p>
         ) : null}

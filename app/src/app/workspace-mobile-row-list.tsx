@@ -82,7 +82,7 @@ export function WorkspaceMobileRowList({
 
   if (loading && rows.length === 0) {
     return (
-      <p className={cn("px-1 py-8 text-center text-sm text-muted-foreground", className)}>
+      <p className={cn("py-8 text-center text-sm text-muted-foreground", className)}>
         Memuat baris…
       </p>
     );
@@ -90,15 +90,15 @@ export function WorkspaceMobileRowList({
 
   if (rows.length === 0) {
     return (
-      <p className={cn("rounded-lg border border-border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground", className)}>
+      <p className={cn("px-3 py-8 text-center text-sm text-muted-foreground", className)}>
         Belum ada baris di tabel ini.
       </p>
     );
   }
 
   return (
-    <ul className={cn("space-y-2", className)}>
-      {rows.map((row, index) => {
+    <ul className={cn("p-2", className)}>
+      {rows.map((row) => {
         const payload = row.payload ?? {};
         const title = pickMapRowTitle(
           payload,
@@ -121,53 +121,46 @@ export function WorkspaceMobileRowList({
         const panelOpen = isRowPanelOpen(row.id);
 
         return (
-          <li key={row.id}>
-            <div
+          <li key={row.id} className="flex min-w-0 items-stretch gap-0.5">
+            <button
+              type="button"
+              aria-label={`Buka detail baris ${title}`}
+              onClick={() => onOpenRow(row.id, title)}
               className={cn(
-                "flex w-full items-stretch gap-1 rounded-xl border border-border bg-card shadow-sm",
-                unread && "border-l-4 border-l-amber-500 bg-amber-50/50",
-                panelOpen && "ring-2 ring-primary/30"
+                "flex min-h-[3.25rem] min-w-0 flex-1 items-start gap-3 overflow-hidden rounded-lg px-3 py-2.5 text-left transition-colors",
+                panelOpen ? "bg-primary/10" : "hover:bg-muted/60 active:bg-muted/60"
               )}
             >
-              <button
-                type="button"
-                aria-label={`Buka detail baris ${title}`}
-                onClick={() => onOpenRow(row.id, title)}
-                className={cn(
-                  "flex min-h-[4.25rem] min-w-0 flex-1 items-center gap-3 p-4 text-left",
-                  "transition-colors active:bg-muted/60"
-                )}
-              >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-medium tabular-nums text-muted-foreground">
-                  {index + 1}
+              <span className="min-w-0 flex-1 basis-0 overflow-hidden">
+                <span className="block truncate text-sm font-medium text-foreground">
+                  {title}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-base font-semibold text-foreground">
-                    {title}
+                {subtitle ? (
+                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                    {subtitle}
                   </span>
-                  {subtitle ? (
-                    <span className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
-                      {subtitle}
-                    </span>
-                  ) : null}
-                </span>
-                <ChevronRight
-                  className="size-5 shrink-0 text-muted-foreground"
-                  aria-hidden
-                />
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "flex w-12 shrink-0 items-center justify-center border-l border-border text-muted-foreground",
-                  panelOpen ? "bg-primary/10 text-primary" : "active:bg-muted/60"
-                )}
-                aria-label={`Chat baris ${title}`}
-                onClick={() => onOpenRowChat(row.id, title)}
-              >
-                <MessageSquare className="size-5" />
-              </button>
-            </div>
+                ) : null}
+              </span>
+              <ChevronRight
+                className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                aria-hidden
+              />
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors",
+                panelOpen
+                  ? "bg-primary/10 text-primary"
+                  : unread
+                    ? "text-amber-600 hover:bg-muted/60 active:bg-muted/60"
+                    : "text-muted-foreground hover:bg-muted/60 active:bg-muted/60"
+              )}
+              aria-label={`Chat baris ${title}`}
+              onClick={() => onOpenRowChat(row.id, title)}
+            >
+              <MessageSquare className="size-4" />
+            </button>
           </li>
         );
       })}

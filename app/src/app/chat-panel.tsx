@@ -15,6 +15,12 @@ import { Button } from "@/components/ui/button";
 import { ChatMentionSuggestions } from "@/components/chat-mention-suggestions";
 import { useChatMentionAutocomplete } from "@/hooks/use-chat-mention-autocomplete";
 import { dispatchChatUnreadInvalidate } from "@/lib/chat-unread-invalidate";
+import {
+  buildChatRoomCacheKey,
+  getChatRoomCache,
+  mergeChatMessageTail,
+  setChatRoomCache,
+} from "@/lib/chat-room-cache";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import {
   formatChatBodyForDisplay,
@@ -26,6 +32,7 @@ import { escapeHtml } from "@/lib/chat-mention";
 import { useIsBelowMd } from "@/lib/use-media-query";
 import { useVisualViewportLayout } from "@/lib/use-visual-viewport-layout";
 import { cn } from "@/lib/utils";
+import { WORKSPACE_MOBILE_TAB_BAR_COMPOSER_PADDING } from "./workspace-mobile-tabs";
 import {
   deleteChatMessageAction,
   getOrCreateChatRoomAction,
@@ -66,6 +73,8 @@ type Props = {
   onUnreadCountChange?: (count: number) => void;
   /** Setelah mark read (chat baris) — refresh badge unread di sidebar tabel. */
   onInvalidateTableUnread?: () => void;
+  /** Kunci cache inbox (`org`, `project:…`, `table:…`, `row:…`); default dari scope. */
+  roomCacheKey?: string;
   className?: string;
 };
 
@@ -101,21 +110,43 @@ export function ChatPanel({
   embedded = false,
   onUnreadCountChange,
   onInvalidateTableUnread,
+  roomCacheKey: roomCacheKeyProp,
   className = "",
 }: Props) {
+  const cacheKey =
+    roomCacheKeyProp ??
+    buildChatRoomCacheKey({
+      scopeType,
+      projectId,
+      virtualTableId,
+      virtualRowId,
+    });
+  const initialCache = getChatRoomCache(cacheKey);
+
+  const onInvalidateTableUnreadRef = useRef(onInvalidateTableUnread);
+  onInvalidateTableUnreadRef.current = onInvalidateTableUnread;
+
   const invalidateTableUnreadIfRow = useCallback(() => {
     if (scopeType === "virtual_row" || scopeType === "virtual_table") {
-      onInvalidateTableUnread?.();
+      onInvalidateTableUnreadRef.current?.();
     }
-  }, [scopeType, onInvalidateTableUnread]);
-  const [roomId, setRoomId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessageRow[]>([]);
-  const [lastReadAt, setLastReadAt] = useState<string | null>(null);
+  }, [scopeType]);
+  const [roomId, setRoomId] = useState<string | null>(
+    initialCache?.roomId ?? null
+  );
+  const [messages, setMessages] = useState<ChatMessageRow[]>(
+    initialCache?.messages ?? []
+  );
+  const [lastReadAt, setLastReadAt] = useState<string | null>(
+    initialCache?.lastReadAt ?? null
+  );
   const [draft, setDraft] = useState("");
   const [selectedFileUrl, setSelectedFileUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [hasOlder, setHasOlder] = useState(false);
+  const [loading, setLoading] = useState(
+    (initialCache?.messages.length ?? 0) === 0
+  );
+  const [hasOlder, setHasOlder] = useState(initialCache?.hasOlder ?? false);
   const [pending, startTransition] = useTransition();
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -175,6 +206,24 @@ export function ChatPanel({
     ).length;
   }, [messages, lastReadAt, userId]);
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const hasOlderRef = useRef(hasOlder);
+  hasOlderRef.current = hasOlder;
+  const roomIdRef = useRef(roomId);
+  roomIdRef.current = roomId;
+  const lastReadAtRef = useRef(lastReadAt);
+  lastReadAtRef.current = lastReadAt;
+
+  useEffect(() => {
+    setChatRoomCache(cacheKey, {
+      roomId: roomIdRef.current,
+      messages: messagesRef.current,
+      hasOlder: hasOlderRef.current,
+      lastReadAt: lastReadAtRef.current,
+    });
+  }, [cacheKey, messages, hasOlder, roomId, lastReadAt]);
+
   useEffect(() => {
     onUnreadCountChange?.(unreadCount);
   }, [unreadCount, onUnreadCountChange]);
@@ -195,10 +244,13 @@ export function ChatPanel({
     return res.data.roomId;
   }, [scopeType, organizationId, projectId, virtualRowId, virtualTableId]);
 
-  const loadMessages = useCallback(
-    async (rid: string, before?: string) => {
+  const fetchMessagesPage = useCallback(
+    async (
+      rid: string,
+      before?: string
+    ): Promise<{ rows: ChatMessageRow[]; error?: string }> => {
       const supabase = getBrowserSupabaseClient();
-      if (!supabase) return;
+      if (!supabase) return { rows: [] };
 
       let q = supabase
         .schema("core_pm")
@@ -213,10 +265,7 @@ export function ChatPanel({
       }
 
       const { data, error: qErr } = await q;
-      if (qErr) {
-        setError(qErr.message);
-        return;
-      }
+      if (qErr) return { rows: [], error: qErr.message };
 
       const rows: ChatMessageRow[] = (data ?? []).map((row) => ({
         id: row.id,
@@ -227,15 +276,30 @@ export function ChatPanel({
         created_at: row.created_at,
       }));
 
-      if (before) {
-        setMessages((prev) => [...rows.reverse(), ...prev]);
-        setHasOlder(rows.length >= PAGE_SIZE);
-      } else {
-        setMessages(rows.reverse());
-        setHasOlder(rows.length >= PAGE_SIZE);
-      }
+      return { rows: rows.reverse() };
     },
     []
+  );
+
+  const loadMessages = useCallback(
+    async (rid: string, before?: string) => {
+      const { rows, error: fetchError } = await fetchMessagesPage(rid, before);
+      if (fetchError) {
+        setError(fetchError);
+        return;
+      }
+
+      if (before) {
+        setMessages((prev) => [...rows, ...prev]);
+        setHasOlder(rows.length >= PAGE_SIZE);
+      } else {
+        setMessages((prev) =>
+          prev.length > 0 ? mergeChatMessageTail(prev, rows) : rows
+        );
+        setHasOlder((prev) => rows.length >= PAGE_SIZE || prev);
+      }
+    },
+    [fetchMessagesPage]
   );
 
   const loadReadState = useCallback(
@@ -256,24 +320,38 @@ export function ChatPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const cached = getChatRoomCache(cacheKey);
+    const hadCachedMessages = (cached?.messages.length ?? 0) > 0;
+
     (async () => {
-      setLoading(true);
+      if (!hadCachedMessages) setLoading(true);
       setError(null);
       const rid = await ensureRoom();
       if (!rid || cancelled) {
         setLoading(false);
         return;
       }
-      await Promise.all([loadMessages(rid), loadReadState(rid)]);
+
+      await loadMessages(rid);
+      if (cancelled) return;
+
+      await loadReadState(rid);
       await markChatRoomReadAction(rid);
       setLastReadAt(new Date().toISOString());
+      dispatchChatUnreadInvalidate();
       invalidateTableUnreadIfRow();
-      if (!cancelled) setLoading(false);
+      setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [ensureRoom, loadMessages, loadReadState, invalidateTableUnreadIfRow]);
+  }, [
+    cacheKey,
+    ensureRoom,
+    loadMessages,
+    loadReadState,
+    invalidateTableUnreadIfRow,
+  ]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -333,10 +411,10 @@ export function ChatPanel({
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [roomId, userId, invalidateTableUnreadIfRow]);
+  }, [roomId, userId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length]);
 
   const insertMention = (opt: ChatMentionOption) => {
@@ -434,12 +512,12 @@ export function ChatPanel({
           embedded
             ? mobileStickyComposer
               ? cn(
-                  "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain py-2",
+                  "min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain py-2",
                   "[-webkit-overflow-scrolling:touch]",
                   MOBILE_CHAT_X
                 )
-              : "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-4 py-2"
-            : "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-4 py-3"
+              : "min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-2"
+            : "min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-3"
         }
         style={
           embedded ? undefined : { maxHeight: "min(50vh, 420px)" }
@@ -473,9 +551,9 @@ export function ChatPanel({
             return (
               <div
                 key={msg.id}
-                className={`flex flex-col gap-1 ${isOwn ? "items-end" : "items-start"}`}
+                className={`flex w-full min-w-0 max-w-full flex-col gap-1 ${isOwn ? "items-end" : "items-start"}`}
               >
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                <div className="flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
                   {mentionsMe ? (
                     <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-900">
                       Menyebut Anda
@@ -504,7 +582,7 @@ export function ChatPanel({
                   ) : null}
                 </div>
                 <div
-                  className={`max-w-[92%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words ${
+                  className={`max-w-[min(85%,20rem)] min-w-0 rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-all [overflow-wrap:anywhere] ${
                     isOwn
                       ? "bg-primary text-primary-foreground"
                       : mentionsMe
@@ -538,13 +616,16 @@ export function ChatPanel({
       </div>
 
       <div
-        className={
+        className={cn(
           mobileStickyComposer
-            ? "z-10 shrink-0 touch-none overscroll-none border-t border-border bg-card/95 backdrop-blur-sm"
+            ? cn(
+                "z-10 w-full min-w-0 shrink-0 touch-none overscroll-none border-t border-border bg-card/95 backdrop-blur-sm",
+                !mobileKeyboardOpen && WORKSPACE_MOBILE_TAB_BAR_COMPOSER_PADDING
+              )
             : embedded
               ? "shrink-0 space-y-2 border-t border-border px-4 pt-3"
               : "border-t border-border px-4 py-3 space-y-2"
-        }
+        )}
         onTouchMove={
           mobileStickyComposer
             ? (e) => {

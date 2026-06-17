@@ -10,9 +10,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { fetchVirtualTableChatUnreadCountsAction } from "./chat-actions";
+import {
+  fetchChatStaticRoomsUnreadCountAction,
+  fetchVirtualTableChatUnreadCountsAction,
+} from "./chat-actions";
 import { CHAT_UNREAD_INVALIDATE_EVENT } from "@/lib/chat-unread-invalidate";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 export type VirtualTableChatUnreadScope = {
@@ -26,6 +30,10 @@ type ContextValue = {
   /** Hanya room chat tingkat tabel (tombol Chat tabel). */
   tableRoomUnreadByTableId: Record<string, number>;
   unreadByProjectId: Record<string, number>;
+  /** Total unread di scope inbox aktif (org + proyek + tabel/baris). */
+  inboxScopeUnreadTotal: number;
+  organizationRoomUnread: number;
+  projectRoomUnread: number;
   refreshEpoch: number;
   refresh: () => void;
 };
@@ -34,11 +42,14 @@ const VirtualTableChatUnreadContext = createContext<ContextValue>({
   unreadByTableId: {},
   tableRoomUnreadByTableId: {},
   unreadByProjectId: {},
+  inboxScopeUnreadTotal: 0,
+  organizationRoomUnread: 0,
+  projectRoomUnread: 0,
   refreshEpoch: 0,
   refresh: () => {},
 });
 
-const UNREAD_POLL_MS = 5000;
+const UNREAD_POLL_MS = 3000;
 
 export function useVirtualTableChatUnread() {
   return useContext(VirtualTableChatUnreadContext);
@@ -48,6 +59,11 @@ type ProviderProps = {
   userId: string | null;
   tableIds: string[];
   tablesForProjectBadge?: VirtualTableChatUnreadScope[];
+  /** Tabel virtual dalam scope workspace aktif (untuk badge tab Obrolan). */
+  scopeTableIds?: string[];
+  scopeOrganizationId?: string | null;
+  scopeProjectId?: string | null;
+  includeOrgRoomUnread?: boolean;
   children: ReactNode;
 };
 
@@ -55,6 +71,10 @@ export function VirtualTableChatUnreadProvider({
   userId,
   tableIds,
   tablesForProjectBadge = [],
+  scopeTableIds = [],
+  scopeOrganizationId = null,
+  scopeProjectId = null,
+  includeOrgRoomUnread = false,
   children,
 }: ProviderProps) {
   const [unreadByTableId, setUnreadByTableId] = useState<Record<string, number>>(
@@ -63,30 +83,80 @@ export function VirtualTableChatUnreadProvider({
   const [tableRoomUnreadByTableId, setTableRoomUnreadByTableId] = useState<
     Record<string, number>
   >({});
+  const [staticRoomsUnread, setStaticRoomsUnread] = useState({
+    organizationUnread: 0,
+    projectUnread: 0,
+  });
   const [refreshEpoch, setRefreshEpoch] = useState(0);
   const tableIdsKey = useMemo(() => tableIds.slice().sort().join(","), [tableIds]);
+  const scopeTableIdsKey = useMemo(
+    () => scopeTableIds.slice().sort().join(","),
+    [scopeTableIds]
+  );
+  const scopeOrgProjectKey = `${scopeOrganizationId ?? ""}:${scopeProjectId ?? ""}:${includeOrgRoomUnread}`;
   const tableIdsRef = useRef(tableIds);
   tableIdsRef.current = tableIds;
   const fetchGenRef = useRef(0);
 
   const refresh = useCallback(() => {
     const ids = tableIdsRef.current;
-    if (!userId || ids.length === 0) {
-      setUnreadByTableId({});
-      setTableRoomUnreadByTableId({});
-      setRefreshEpoch((e) => e + 1);
-      return;
-    }
     const gen = ++fetchGenRef.current;
-    void fetchVirtualTableChatUnreadCountsAction(ids).then((res) => {
+
+    const tablePromise =
+      !userId || ids.length === 0
+        ? Promise.resolve({
+            error: null as string | null,
+            data: {
+              totalByTableId: {} as Record<string, number>,
+              tableRoomByTableId: {} as Record<string, number>,
+            },
+          })
+        : fetchVirtualTableChatUnreadCountsAction(ids);
+
+    const staticPromise =
+      !userId || !scopeOrganizationId
+        ? Promise.resolve({
+            error: null as string | null,
+            data: { organizationUnread: 0, projectUnread: 0 },
+          })
+        : fetchChatStaticRoomsUnreadCountAction({
+            organizationId: scopeOrganizationId,
+            projectId: scopeProjectId,
+          });
+
+    void Promise.all([tablePromise, staticPromise]).then(([tableRes, staticRes]) => {
       if (fetchGenRef.current !== gen) return;
-      if (!res.error && res.data) {
-        setUnreadByTableId(res.data.totalByTableId);
-        setTableRoomUnreadByTableId(res.data.tableRoomByTableId);
+
+      if (!tableRes.error && tableRes.data) {
+        setUnreadByTableId(tableRes.data.totalByTableId);
+        setTableRoomUnreadByTableId(tableRes.data.tableRoomByTableId);
+      } else if (!userId || ids.length === 0) {
+        setUnreadByTableId({});
+        setTableRoomUnreadByTableId({});
       }
+
+      if (!staticRes.error && staticRes.data) {
+        setStaticRoomsUnread({
+          organizationUnread: includeOrgRoomUnread
+            ? staticRes.data.organizationUnread
+            : 0,
+          projectUnread: staticRes.data.projectUnread,
+        });
+      } else if (!userId || !scopeOrganizationId) {
+        setStaticRoomsUnread({ organizationUnread: 0, projectUnread: 0 });
+      }
+
       setRefreshEpoch((e) => e + 1);
     });
-  }, [userId, tableIdsKey]);
+  }, [
+    userId,
+    tableIdsKey,
+    scopeTableIdsKey,
+    scopeOrgProjectKey,
+    scopeOrganizationId,
+    scopeProjectId,
+    includeOrgRoomUnread,
+  ]);
 
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
@@ -123,8 +193,8 @@ export function VirtualTableChatUnreadProvider({
     let channel: RealtimeChannel | null = null;
 
     if (supabase) {
-      const channelName = `vtable-chat-unread:${userId}`;
-      channel = supabase
+      const channelName = `vtable-chat-unread:${userId}:${scopeOrganizationId ?? "none"}`;
+      let ch = supabase
         .channel(channelName)
         .on(
           "postgres_changes",
@@ -140,13 +210,27 @@ export function VirtualTableChatUnreadProvider({
             filter: `user_id=eq.${userId}`,
           },
           scheduleRefresh
-        )
-        .subscribe((status) => {
-          if (status === "SUBSCRIBED") return;
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-            scheduleRefresh();
-          }
-        });
+        );
+
+      if (scopeOrganizationId) {
+        ch = ch.on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "core_pm",
+            table: "chat_rooms",
+            filter: `organization_id=eq.${scopeOrganizationId}`,
+          },
+          scheduleRefresh
+        );
+      }
+
+      channel = ch.subscribe((status) => {
+        if (status === "SUBSCRIBED") return;
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          scheduleRefresh();
+        }
+      });
     }
 
     return () => {
@@ -159,7 +243,7 @@ export function VirtualTableChatUnreadProvider({
         void supabase.removeChannel(channel);
       }
     };
-  }, [userId]);
+  }, [userId, scopeOrganizationId]);
 
   const unreadByProjectId = useMemo(() => {
     const out: Record<string, number> = {};
@@ -173,11 +257,23 @@ export function VirtualTableChatUnreadProvider({
     return out;
   }, [tablesForProjectBadge, unreadByTableId]);
 
+  const inboxScopeUnreadTotal = useMemo(() => {
+    let total =
+      staticRoomsUnread.organizationUnread + staticRoomsUnread.projectUnread;
+    for (const id of scopeTableIds) {
+      total += unreadByTableId[id] ?? 0;
+    }
+    return total;
+  }, [staticRoomsUnread, scopeTableIds, unreadByTableId]);
+
   const value = useMemo(
     () => ({
       unreadByTableId,
       tableRoomUnreadByTableId,
       unreadByProjectId,
+      inboxScopeUnreadTotal,
+      organizationRoomUnread: staticRoomsUnread.organizationUnread,
+      projectRoomUnread: staticRoomsUnread.projectUnread,
       refreshEpoch,
       refresh,
     }),
@@ -185,6 +281,8 @@ export function VirtualTableChatUnreadProvider({
       unreadByTableId,
       tableRoomUnreadByTableId,
       unreadByProjectId,
+      inboxScopeUnreadTotal,
+      staticRoomsUnread,
       refreshEpoch,
       refresh,
     ]
@@ -266,6 +364,62 @@ export function VirtualTableRoomChatUnreadBadge({
     <ChatUnreadCountBadge
       count={n}
       ariaLabel={`${n} pesan chat tabel belum dibaca`}
+      className={className}
+    />
+  );
+}
+
+/** Label tab Chat desktop dengan badge unread. */
+export function ChatTabLabel({ label = "Chat" }: { label?: string }) {
+  const { inboxScopeUnreadTotal } = useVirtualTableChatUnread();
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {label}
+      {inboxScopeUnreadTotal > 0 ? (
+        <span
+          className="rounded-full bg-amber-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+          aria-label={`${inboxScopeUnreadTotal} obrolan belum dibaca`}
+        >
+          {inboxScopeUnreadTotal > 9 ? "9+" : inboxScopeUnreadTotal}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Badge unread total scope inbox (tab Obrolan). */
+export function ChatInboxScopeUnreadBadge({
+  className = "",
+  position = "inline",
+}: {
+  className?: string;
+  /** `tab` = overlay di pojok ikon tab mobile. */
+  position?: "inline" | "tab";
+}) {
+  const { inboxScopeUnreadTotal } = useVirtualTableChatUnread();
+  if (inboxScopeUnreadTotal <= 0) return null;
+
+  const label = `${inboxScopeUnreadTotal} obrolan belum dibaca`;
+  const text = inboxScopeUnreadTotal > 9 ? "9+" : String(inboxScopeUnreadTotal);
+
+  if (position === "tab") {
+    return (
+      <span
+        className={cn(
+          "absolute -right-1.5 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-600 px-0.5 text-[9px] font-bold leading-none text-white",
+          className
+        )}
+        aria-label={label}
+      >
+        {text}
+      </span>
+    );
+  }
+
+  return (
+    <ChatUnreadCountBadge
+      count={inboxScopeUnreadTotal}
+      ariaLabel={label}
       className={className}
     />
   );

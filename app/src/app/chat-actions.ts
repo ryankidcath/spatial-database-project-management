@@ -266,6 +266,56 @@ export async function fetchVirtualTableChatUnreadCountsAction(
   return { error: null, data: { totalByTableId, tableRoomByTableId } };
 }
 
+export type ChatStaticRoomsUnread = {
+  organizationUnread: number;
+  projectUnread: number;
+};
+
+/** Unread room organisasi + proyek (bukan tabel/baris). */
+export async function fetchChatStaticRoomsUnreadCountAction(input: {
+  organizationId: string;
+  projectId?: string | null;
+}): Promise<ChatActionResult<ChatStaticRoomsUnread>> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  if (!input.organizationId) {
+    return {
+      error: null,
+      data: { organizationUnread: 0, projectUnread: 0 },
+    };
+  }
+
+  const { data, error } = await supabase.schema("core_pm").rpc(
+    "get_chat_static_rooms_unread_count",
+    {
+      p_organization_id: input.organizationId,
+      p_project_id: input.projectId ?? null,
+    }
+  );
+
+  if (error) return { error: error.message };
+
+  const row = (data ?? [])[0] as
+    | {
+        organization_unread: number;
+        project_unread: number;
+      }
+    | undefined;
+
+  return {
+    error: null,
+    data: {
+      organizationUnread: Number(row?.organization_unread ?? 0),
+      projectUnread: Number(row?.project_unread ?? 0),
+    },
+  };
+}
+
 export type VirtualTableChatUnreadRow = {
   virtualRowId: string;
   unreadCount: number;
@@ -278,6 +328,7 @@ export type ChatInboxActiveRowRoom = {
   tableDisplayName: string;
   unreadCount: number;
   lastMessageAt: string;
+  lastMessagePreview: string | null;
   rowPayload: Record<string, unknown>;
 };
 
@@ -324,6 +375,7 @@ export async function fetchChatInboxActiveRowRoomsAction(input: {
       table_display_name: string;
       unread_count: number;
       last_message_at: string;
+      last_message_body: string | null;
       row_payload: Record<string, unknown>;
       total_count: number;
     };
@@ -334,6 +386,10 @@ export async function fetchChatInboxActiveRowRoomsAction(input: {
       tableDisplayName: String(r.table_display_name),
       unreadCount: Number(r.unread_count),
       lastMessageAt: String(r.last_message_at),
+      lastMessagePreview:
+        typeof r.last_message_body === "string" && r.last_message_body.trim()
+          ? r.last_message_body.trim()
+          : null,
       rowPayload: (r.row_payload ?? {}) as Record<string, unknown>,
     };
   });
@@ -548,10 +604,15 @@ function inboxKeyForChatRoom(row: {
   return null;
 }
 
-/** Waktu aktivitas terakhir per entry inbox (key → ISO timestamp). */
-export async function fetchChatInboxActivityAtAction(input: {
+export type ChatInboxRoomMeta = {
+  lastActivityAt: string;
+  lastMessagePreview: string | null;
+};
+
+/** Metadata inbox per entry (key → waktu + preview pesan terakhir). */
+export async function fetchChatInboxRoomMetaAction(input: {
   organizationId: string;
-}): Promise<ChatActionResult<Record<string, string>>> {
+}): Promise<ChatActionResult<Record<string, ChatInboxRoomMeta>>> {
   const supabase = await createServerSupabaseClient();
   if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
   const {
@@ -563,13 +624,13 @@ export async function fetchChatInboxActivityAtAction(input: {
     .schema("core_pm")
     .from("chat_rooms")
     .select(
-      "scope_type, project_id, virtual_row_id, virtual_table_id, created_at, last_message_at"
+      "scope_type, project_id, virtual_row_id, virtual_table_id, created_at, last_message_at, last_message_body"
     )
     .eq("organization_id", input.organizationId);
 
   if (roomsError) return { error: roomsError.message };
 
-  const out: Record<string, string> = {};
+  const out: Record<string, ChatInboxRoomMeta> = {};
   for (const room of rooms ?? []) {
     const key = inboxKeyForChatRoom({
       scope_type: String(room.scope_type),
@@ -580,11 +641,58 @@ export async function fetchChatInboxActivityAtAction(input: {
         room.virtual_table_id != null ? String(room.virtual_table_id) : null,
     });
     if (!key) continue;
-    out[key] =
-      room.last_message_at != null
-        ? String(room.last_message_at)
-        : String(room.created_at);
+    const body =
+      typeof room.last_message_body === "string" && room.last_message_body.trim()
+        ? room.last_message_body.trim()
+        : null;
+    out[key] = {
+      lastActivityAt:
+        room.last_message_at != null
+          ? String(room.last_message_at)
+          : String(room.created_at),
+      lastMessagePreview: body,
+    };
   }
 
   return { error: null, data: out };
+}
+
+/** @deprecated Gunakan fetchChatInboxRoomMetaAction */
+export async function fetchChatInboxActivityAtAction(input: {
+  organizationId: string;
+}): Promise<ChatActionResult<Record<string, string>>> {
+  const res = await fetchChatInboxRoomMetaAction(input);
+  if (res.error || !res.data) return { error: res.error, data: undefined };
+  const out: Record<string, string> = {};
+  for (const [key, meta] of Object.entries(res.data)) {
+    out[key] = meta.lastActivityAt;
+  }
+  return { error: null, data: out };
+}
+
+/** Kunci inbox (`org`, `project:…`, `table:…`, `row:…`) dengan mention belum dibaca. */
+export async function fetchChatInboxUnreadMentionKeysAction(input: {
+  organizationId: string;
+}): Promise<ChatActionResult<string[]>> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const { data, error } = await supabase.schema("core_pm").rpc(
+    "get_chat_inbox_unread_mention_keys",
+    { p_organization_id: input.organizationId }
+  );
+
+  if (error) return { error: error.message };
+
+  const keys = ((data ?? []) as { inbox_key?: string }[])
+    .map((row) =>
+      typeof row.inbox_key === "string" ? row.inbox_key : null
+    )
+    .filter((k): k is string => Boolean(k));
+
+  return { error: null, data: keys };
 }

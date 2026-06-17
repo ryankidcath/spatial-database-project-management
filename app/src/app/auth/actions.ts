@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog, writeUserAuthAuditLog } from "../audit-log-actions";
+import { dispatchWorkspaceNotification } from "../workspace-notification-dispatch";
 import {
   getSignupMode,
   isEmailAllowedForSignup,
@@ -277,6 +278,20 @@ export async function createOrganizationProjectInlineAction(
     payload: { organization_id: projectRow.organization_id, project_name: projectName },
   });
 
+  await dispatchWorkspaceNotification(supabase, {
+    preferenceCategory: "workspace_membership",
+    kind: "workspace_project",
+    organizationId: projectRow.organization_id,
+    projectId: projectRow.id,
+    actorUserId: user.id,
+    title: `Proyek ${projectName} dibuat`,
+    payload: {
+      event_id: "project.created",
+      project_id: projectRow.id,
+      project_name: projectName,
+    },
+  });
+
   revalidatePath("/", "layout");
   return {
     error: null,
@@ -337,6 +352,31 @@ export async function addProjectMemberByEmailAction(
     entityId: projectId,
     payload: { email, role },
   });
+
+  const { data: projectMeta } = await supabase
+    .schema("core_pm")
+    .from("projects")
+    .select("organization_id, name")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (projectMeta?.organization_id) {
+    const projectLabel =
+      typeof projectMeta.name === "string" ? projectMeta.name : "proyek";
+    await dispatchWorkspaceNotification(supabase, {
+      preferenceCategory: "workspace_membership",
+      kind: "workspace_member",
+      organizationId: projectMeta.organization_id,
+      projectId,
+      actorUserId: user.id,
+      title: `${email} ditambahkan ke ${projectLabel}`,
+      payload: {
+        event_id: "project.member_added",
+        project_id: projectId,
+        member_email: email,
+        role,
+      },
+    });
+  }
 
   revalidatePath("/", "layout");
   return { error: null };

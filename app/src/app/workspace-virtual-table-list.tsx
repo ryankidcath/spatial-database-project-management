@@ -4,6 +4,7 @@ import { ChevronRight, Table2 } from "lucide-react";
 import { VirtualTableChatUnreadBadge } from "./virtual-table-chat-unread-context";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import { cn } from "@/lib/utils";
+import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
 
 type TableListProps = {
   sectionTitle: string;
@@ -13,7 +14,7 @@ type TableListProps = {
   className?: string;
 };
 
-function VirtualTableListCard({
+function VirtualTableListRow({
   table,
   columnCount,
   onOpen,
@@ -22,6 +23,10 @@ function VirtualTableListCard({
   columnCount: number;
   onOpen: () => void;
 }) {
+  const subtitle =
+    table.description?.trim() ||
+    `${columnCount} kolom`;
+
   return (
     <button
       type="button"
@@ -29,33 +34,26 @@ function VirtualTableListCard({
       aria-label={`Buka tabel ${table.display_name}`}
       onClick={onOpen}
       className={cn(
-        "flex w-full min-h-[4.5rem] items-center gap-3 rounded-xl border border-border bg-card p-4 text-left shadow-sm",
-        "transition-colors hover:bg-muted/40 active:bg-muted/60"
+        "flex w-full min-h-[3.25rem] min-w-0 items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
+        "hover:bg-muted/60 active:bg-muted/60"
       )}
     >
-      <span
-        className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-muted text-lg"
+      <Table2
+        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
         aria-hidden
-      >
-        {table.icon?.trim() ? table.icon : <Table2 className="size-5 text-muted-foreground" />}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="truncate text-base font-semibold text-foreground">
+      />
+      <span className="min-w-0 flex-1 basis-0 overflow-hidden">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-medium text-foreground">
             {table.display_name}
           </span>
           <VirtualTableChatUnreadBadge tableId={table.id} />
         </span>
-        {table.description?.trim() ? (
-          <span className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
-            {table.description}
-          </span>
-        ) : null}
-        <span className="mt-0.5 block text-xs text-muted-foreground">
-          {columnCount} kolom
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+          {subtitle}
         </span>
       </span>
-      <ChevronRight className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+      <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
     </button>
   );
 }
@@ -70,16 +68,21 @@ export function VirtualTableMobileList({
   if (tables.length === 0) return null;
 
   return (
-    <div className={cn("space-y-3", className)}>
-      <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+    <div className={cn("min-w-0", className)}>
+      <p
+        className={cn(
+          WORKSPACE_TAB_LIST_HEADER_CLASS,
+          "text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+        )}
+      >
         {sectionTitle}
       </p>
-      <ul className="space-y-2">
+      <ul className="p-2">
         {tables.map((vt) => {
           const cols = virtualColumnsByTableId.get(vt.id) ?? [];
           return (
-            <li key={vt.id} id={`vtable-${vt.slug}`}>
-              <VirtualTableListCard
+            <li key={vt.id} id={`vtable-${vt.slug}`} className="min-w-0">
+              <VirtualTableListRow
                 table={vt}
                 columnCount={cols.length}
                 onOpen={() => onOpenTable(vt.slug)}
