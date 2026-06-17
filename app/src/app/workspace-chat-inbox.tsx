@@ -531,10 +531,11 @@ export function WorkspaceChatInbox({
       const meta = roomMetaByKey[entry.key];
       return {
         ...entry,
+        // Selalu utamakan meta inbox terbaru agar preview + urutan cepat ikut realtime.
         lastActivityAt:
-          entry.lastActivityAt ?? meta?.lastActivityAt ?? null,
+          meta?.lastActivityAt ?? entry.lastActivityAt ?? null,
         lastMessagePreview:
-          entry.lastMessagePreview ?? meta?.lastMessagePreview ?? null,
+          meta?.lastMessagePreview ?? entry.lastMessagePreview ?? null,
       };
     });
     return sortEntries(withActivity, mentionKeys);
