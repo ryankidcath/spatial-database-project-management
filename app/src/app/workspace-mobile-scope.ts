@@ -11,6 +11,19 @@ export type MobileScopePhase = "org" | "project" | "workspace";
 
 export const MOBILE_SCOPE_SESSION_KEY = "spatial-pm-mobile-scope-v1";
 
+export const DEFAULT_MOBILE_WORKSPACE_VIEW: ViewId = "Chat";
+
+export function resolveMobileLastView(
+  lastView: ViewId | null | undefined
+): ViewId {
+  return lastView ?? DEFAULT_MOBILE_WORKSPACE_VIEW;
+}
+
+/** Tab default saat URL tidak menyebut `view`. */
+export function defaultWorkspaceView(isMobile: boolean): ViewId {
+  return isMobile ? DEFAULT_MOBILE_WORKSPACE_VIEW : "Dashboard";
+}
+
 export type MobileScopeSession = {
   phase: MobileScopePhase;
   orgId: string | null;

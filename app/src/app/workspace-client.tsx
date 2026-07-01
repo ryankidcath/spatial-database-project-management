@@ -231,7 +231,9 @@ import { WorkspaceChatInbox } from "./workspace-chat-inbox";
 import {
   type MobileScopePhase,
   clearMobileScopeSession,
+  defaultWorkspaceView,
   readMobileScopeSession,
+  resolveMobileLastView,
   writeMobileScopeSession,
 } from "./workspace-mobile-scope";
 import { WorkspaceMobileSwipeBack } from "./workspace-mobile-swipe-back";
@@ -2110,14 +2112,15 @@ export function WorkspaceClient({
 
   const activeViewFromUrl = useMemo((): ViewId => {
     const viewParam = searchParams.get("view");
-    const raw = parseViewParam(viewParam) ?? "Dashboard";
+    const fallback = defaultWorkspaceView(isBelowMd);
+    const raw = parseViewParam(viewParam) ?? fallback;
     const enabled = effectiveEnabledModuleCodes(
       canonicalOrgId,
       organizationModules
     );
-    if (!isViewAllowedForModules(raw, enabled)) return "Dashboard";
+    if (!isViewAllowedForModules(raw, enabled)) return fallback;
     return raw;
-  }, [searchParams, canonicalOrgId, organizationModules]);
+  }, [searchParams, canonicalOrgId, organizationModules, isBelowMd]);
   const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
   committedViewRef.current = activeViewFromUrl;
 
@@ -2257,7 +2260,7 @@ export function WorkspaceClient({
         p.set("project", saved.projectId);
         p.delete("task");
         if (!p.get("view")) {
-          const view = saved.lastView ?? "Dashboard";
+          const view = resolveMobileLastView(saved.lastView);
           p.set("view", viewToParam(view));
         }
         const qs = p.toString();
@@ -2281,7 +2284,7 @@ export function WorkspaceClient({
         p.delete("project");
         p.delete("task");
         if (!p.get("view")) {
-          const view = saved.lastView ?? "Dashboard";
+          const view = resolveMobileLastView(saved.lastView);
           p.set("view", viewToParam(view));
         }
         const qs = p.toString();
@@ -2560,6 +2563,7 @@ export function WorkspaceClient({
       projects
     );
     let dirty = false;
+    const fallbackView = defaultWorkspaceView(isBelowMd);
 
     const projectPool = projects.filter(
       (x) => x.organization_id === canonicalOrgId
@@ -2576,7 +2580,7 @@ export function WorkspaceClient({
       }
     }
     if (!p.get("view")) {
-      p.set("view", viewToParam("Dashboard"));
+      p.set("view", viewToParam(fallbackView));
       dirty = true;
     }
     const tid = p.get("task");
@@ -2602,24 +2606,24 @@ export function WorkspaceClient({
       }
     }
     if (parseViewParam(p.get("view")) === "Map" && !enabled.has("spatial")) {
-      p.set("view", viewToParam("Dashboard"));
+      p.set("view", viewToParam(fallbackView));
       dirty = true;
     }
     if (parseViewParam(p.get("view")) === "Berkas" && !enabled.has("plm")) {
-      p.set("view", viewToParam("Dashboard"));
+      p.set("view", viewToParam(fallbackView));
       dirty = true;
     }
     if (parseViewParam(p.get("view")) === "Laporan" && !enabled.has("plm")) {
-      p.set("view", viewToParam("Dashboard"));
+      p.set("view", viewToParam(fallbackView));
       dirty = true;
     }
     if (parseViewParam(p.get("view")) === "Keuangan" && !enabled.has("finance")) {
-      p.set("view", viewToParam("Dashboard"));
+      p.set("view", viewToParam(fallbackView));
       dirty = true;
     }
     const viewParsed = parseViewParam(p.get("view"));
     if (viewParsed && !isViewAllowedForModules(viewParsed, enabled)) {
-      p.set("view", viewToParam("Dashboard"));
+      p.set("view", viewToParam(fallbackView));
       dirty = true;
     }
     const berkasParam = p.get("berkas");
@@ -2658,6 +2662,7 @@ export function WorkspaceClient({
     organizationModules,
     berkasPermohonan,
     scopeRoutePending,
+    isBelowMd,
   ]);
 
   const selectedOrganization = useMemo(
@@ -3394,6 +3399,7 @@ export function WorkspaceClient({
       virtualTables,
       hasOrgStaffAccess,
       userId,
+      prioritizeChatInbox: isBelowMd,
     });
   }, [
     canonicalOrgId,
@@ -3406,6 +3412,7 @@ export function WorkspaceClient({
     organizationModules,
     virtualTables,
     hasOrgStaffAccess,
+    isBelowMd,
   ]);
 
   const vtablesAllProjectsInOrg = useMemo(() => {
@@ -4161,8 +4168,8 @@ export function WorkspaceClient({
   useEffect(() => {
     if (Date.now() < viewChangeLockUntilRef.current) return;
     if (visibleViews.includes(activeView)) return;
-    handleActiveViewChange("Dashboard");
-  }, [visibleViews, activeView, handleActiveViewChange]);
+    handleActiveViewChange(defaultWorkspaceView(isBelowMd));
+  }, [visibleViews, activeView, handleActiveViewChange, isBelowMd]);
 
   useEffect(() => {
     if (activeView === "Chat" && !isBelowMd) {
@@ -4180,7 +4187,7 @@ export function WorkspaceClient({
       p.set("org", orgId);
       p.delete("project");
       p.delete("task");
-      if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+      if (!p.get("view")) p.set("view", viewToParam(defaultWorkspaceView(true)));
       const qs = p.toString();
       window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
     },
@@ -4209,7 +4216,7 @@ export function WorkspaceClient({
           q.set("org", canonicalOrgId);
           q.set("project", projectId);
           q.delete("task");
-          if (!q.get("view")) q.set("view", viewToParam("Dashboard"));
+          if (!q.get("view")) q.set("view", viewToParam(defaultWorkspaceView(true)));
         },
         { syncView: false }
       );
@@ -4249,7 +4256,7 @@ export function WorkspaceClient({
           q.set("org", canonicalOrgId);
           q.set("project", projectId);
           q.delete("task");
-          if (!q.get("view")) q.set("view", viewToParam("Dashboard"));
+          if (!q.get("view")) q.set("view", viewToParam(defaultWorkspaceView(true)));
         },
         { syncView: false }
       );

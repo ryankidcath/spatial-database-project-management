@@ -165,7 +165,7 @@ Ini melanjutkan pola cache-first yang sudah ada; perubahan utama = **durability*
 | G1 | `workspace-shell-cache.ts` | ✅ Snapshot shell di `localStorage` (TTL 30 menit, per `userId`) |
 | G2 | `workspace-home-client.tsx` | ✅ `useLayoutEffect` baca cache → paint `WorkspaceClient` sebelum server |
 | G3 | `fetch-workspace-shell-action.ts` + `workspace-shell-server.ts` | ✅ Revalidate background; banner “Memperbarui…” |
-| G4 | `workspace-mobile-scope.ts` + `workspace-client.tsx` | ✅ `lastView` — tab mobile terakhir dipulihkan setelah kill |
+| G4 | `workspace-mobile-scope.ts` + `workspace-client.tsx` | ✅ `lastView` — tab mobile terakhir dipulihkan setelah kill; **default pertama kali = Obrolan (Chat)** |
 | G5 | Aktivitas tab | ✅ Skip skeleton jika `liveActivityLogs` sudah di-hydrate dari cache |
 
 **Alur cold start:**
@@ -408,6 +408,18 @@ Ini **bukan** kebijakan Spatial PM saja, melainkan langit-langit teknis di peran
 
 **Implikasi produk:** snapshot besar → **IndexedDB**; metadata kecil → `localStorage`; jangan andalkan cache tanpa batas waktu di iOS; selalu **revalidate** agar data tidak dianggap benar selamanya.
 
+### Jika semua data dicache (hipotetis)
+
+| Risiko | Apa yang terjadi |
+|--------|------------------|
+| Kuota penuh | `QuotaExceededError` saat tulis; prefetch/warm-up gagal diam-diam |
+| Eviction OS | iOS/Safari bisa purge storage PWA yang jarang dibuka |
+| Data basi | UI menampilkan snapshot lama sampai revalidate selesai |
+| Warm-up berat | Prefetch “semua room + semua baris tabel” = banyak read Supabase + waktu lama + memori JS |
+| Memori tab | Hydrate objek besar ke React state bisa membuat tab berat / crash di perangkat lemah |
+
+**Kebijakan app saat ini (sengaja tidak cache semuanya):** TTL 30 menit, LRU per namespace (mis. max 32 room chat, 24 tabel mobile, 4 scope deferred payload), warm-up terbatas (inbox scope aktif, 3 tabel, 50 baris/halaman).
+
 ---
 
 ## Pengujian QA (setelah implementasi)
@@ -416,7 +428,7 @@ Ini **bukan** kebijakan Spatial PM saja, melainkan langit-langit teknis di peran
 |---|----------|---------|
 | 1 | Kill app → buka icon (ada cache PR-A) | Inbox/scope tampil cepat; data menyusul update |
 | 2 | Kill app → offline | Login cookie ada tapi data stale + indikator offline (jika ditambahkan nanti) |
-| 3 | Kill app → URL `/` saja | Scope org/project + tab terakhir dipulihkan dari `localStorage` |
+| 3 | Kill app → URL `/` saja | Scope org/project + tab terakhir dipulihkan; **tanpa `lastView` → Obrolan (Chat)** |
 | 3b | PR-G: kill app → kunjungan kedua | Shell dari cache; revalidate di background |
 | 4 | Deploy baru | Tidak perlu instal ulang; revalidate dapat versi baru |
 | 5 | Kirim pesan → kill → buka | Pesan terbaru muncul setelah revalidate (bukan dari cache stale selamanya) |

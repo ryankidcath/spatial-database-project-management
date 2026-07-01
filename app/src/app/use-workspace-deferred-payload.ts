@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ProjectRow } from "./workspace-client";
 import type { OrganizationMemberRow } from "./workspace-client";
 import type { OrganizationModuleRow } from "./workspace-modules";
@@ -10,6 +10,7 @@ import { fetchWorkspaceDeferredPayloadAction } from "./fetch-workspace-deferred-
 import { viewNeedsDeferredPayload } from "./workspace-deferred-payload";
 import {
   buildWorkspaceDeferredPayloadCacheKey,
+  getWorkspaceDeferredPayloadCache,
   hydrateWorkspaceDeferredPayloadCache,
   setWorkspaceDeferredPayloadCache,
 } from "@/lib/workspace-deferred-payload-cache";
@@ -168,17 +169,29 @@ export function useWorkspaceDeferredPayload(input: UseWorkspaceDeferredPayloadIn
     deferredCacheKey,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!canonicalOrgId || projectsInOrg.length === 0 || !deferredCacheKey) {
       setDeferred(null);
       loadedScopeRef.current = null;
       return;
     }
 
-    let cancelled = false;
+    const cached = getWorkspaceDeferredPayloadCache(deferredCacheKey);
+    if (cached) {
+      setDeferred(cached.payload);
+      loadedScopeRef.current = scopeKey;
+      return;
+    }
+
     setDeferred(null);
     loadedScopeRef.current = null;
+  }, [scopeKey, deferredCacheKey, canonicalOrgId, projectsInOrg.length]);
 
+  useEffect(() => {
+    if (!deferredCacheKey) return;
+    if (getWorkspaceDeferredPayloadCache(deferredCacheKey)) return;
+
+    let cancelled = false;
     void hydrateWorkspaceDeferredPayloadCache(deferredCacheKey).then((entry) => {
       if (cancelled || !entry) return;
       setDeferred(entry.payload);
@@ -188,7 +201,7 @@ export function useWorkspaceDeferredPayload(input: UseWorkspaceDeferredPayloadIn
     return () => {
       cancelled = true;
     };
-  }, [scopeKey, deferredCacheKey, canonicalOrgId, projectsInOrg.length]);
+  }, [scopeKey, deferredCacheKey]);
 
   useEffect(() => {
     if (!viewNeedsDeferredPayload(activeView)) return;

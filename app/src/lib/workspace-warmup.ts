@@ -19,7 +19,6 @@ import {
 } from "@/lib/workspace-warmup-scope";
 
 const MAX_TABLES_PER_SCOPE = 3;
-const TABLE_ROWS_PRIORITY = 20;
 const MULTI_ORG_BASE_PRIORITY = 40;
 
 function buildChatInboxWarmupJobs(input: {
@@ -115,70 +114,81 @@ function buildOrgWarmupJobs(input: {
   priorityStart: number;
   includeDeferred: boolean;
   includeTableRows: boolean;
+  prioritizeChatInbox?: boolean;
   idPrefix?: string;
 }): WarmupJob[] {
-  const jobs: WarmupJob[] = [];
   const projectIds = input.projectsInOrg.map((p) => p.id);
   const prefix = input.idPrefix ?? "";
 
-  jobs.push({
+  const activityJob: WarmupJob = {
     id: `${prefix}activity:${input.organizationId}`,
-    priority: input.priorityStart,
+    priority: 0,
     run: () =>
       prefetchActivityLogsIfNeeded({
         organizationId: input.organizationId,
         projectIds,
       }),
+  };
+
+  const deferredJob: WarmupJob | null =
+    input.includeDeferred && input.projectsInOrg.length > 0
+      ? {
+          id: `${prefix}deferred:${input.organizationId}:${input.selectedProjectId ?? "org"}`,
+          priority: 0,
+          run: () =>
+            prefetchWorkspaceDeferredPayloadIfNeeded({
+              organizationId: input.organizationId,
+              selectedProjectId: input.selectedProjectId,
+              projectsInOrg: input.projectsInOrg as ProjectRow[],
+              organizationModules: organizationModulesForOrg(
+                input.organizationModules,
+                input.organizationId
+              ),
+              organizationMembers: input.organizationMembers,
+            }),
+        }
+      : null;
+
+  const inboxJobs = buildChatInboxWarmupJobs({
+    organizationId: input.organizationId,
+    selectedProjectId: input.selectedProjectId,
+    projectsInOrg: input.projectsInOrg,
+    virtualTables: input.virtualTables,
+    hasOrgStaffAccess: input.hasOrgStaffAccess,
+    userId: input.userId,
+    priorityStart: 0,
+    idPrefix: prefix,
   });
 
-  if (input.includeDeferred && input.projectsInOrg.length > 0) {
-    jobs.push({
-      id: `${prefix}deferred:${input.organizationId}:${input.selectedProjectId ?? "org"}`,
-      priority: input.priorityStart + 1,
-      run: () =>
-        prefetchWorkspaceDeferredPayloadIfNeeded({
-          organizationId: input.organizationId,
-          selectedProjectId: input.selectedProjectId,
-          projectsInOrg: input.projectsInOrg as ProjectRow[],
-          organizationModules: organizationModulesForOrg(
-            input.organizationModules,
-            input.organizationId
-          ),
-          organizationMembers: input.organizationMembers,
-        }),
-    });
-  }
-
-  const inboxStart =
-    input.priorityStart + (input.includeDeferred ? 2 : 1);
-  jobs.push(
-    ...buildChatInboxWarmupJobs({
-      organizationId: input.organizationId,
-      selectedProjectId: input.selectedProjectId,
-      projectsInOrg: input.projectsInOrg,
-      virtualTables: input.virtualTables,
-      hasOrgStaffAccess: input.hasOrgStaffAccess,
-      userId: input.userId,
-      priorityStart: inboxStart,
-      idPrefix: prefix,
-    })
-  );
-
-  if (input.includeTableRows) {
-    const tableStart = inboxStart + TABLE_ROWS_PRIORITY;
-    jobs.push(
-      ...buildTableRowsWarmupJobs({
+  const tableJobs = input.includeTableRows
+    ? buildTableRowsWarmupJobs({
         organizationId: input.organizationId,
         selectedProjectId: input.selectedProjectId,
         virtualTables: input.virtualTables,
         hasOrgStaffAccess: input.hasOrgStaffAccess,
-        priorityStart: tableStart,
+        priorityStart: 0,
         idPrefix: prefix,
       })
-    );
-  }
+    : [];
 
-  return jobs;
+  const sequence: WarmupJob[] = input.prioritizeChatInbox
+    ? [
+        ...inboxJobs,
+        activityJob,
+        ...(deferredJob ? [deferredJob] : []),
+        ...tableJobs,
+      ]
+    : [
+        activityJob,
+        ...(deferredJob ? [deferredJob] : []),
+        ...inboxJobs,
+        ...tableJobs,
+      ];
+
+  return sequence.map((job, index) => ({
+    ...job,
+    priority: input.priorityStart + index,
+  }));
 }
 
 export type WorkspaceWarmupInput = {
@@ -191,6 +201,8 @@ export type WorkspaceWarmupInput = {
   organizationModules: OrganizationModuleRow[];
   virtualTables: VirtualTableRow[];
   hasOrgStaffAccess: boolean;
+  /** Mobile: prefetch inbox dulu (tab default Obrolan). */
+  prioritizeChatInbox?: boolean;
 };
 
 export function startWorkspaceWarmup(input: WorkspaceWarmupInput): () => void {
@@ -215,6 +227,7 @@ export function startWorkspaceWarmup(input: WorkspaceWarmupInput): () => void {
     priorityStart: 0,
     includeDeferred: true,
     includeTableRows: true,
+    prioritizeChatInbox: input.prioritizeChatInbox,
   });
 
   let otherOrgPriority = MULTI_ORG_BASE_PRIORITY;
