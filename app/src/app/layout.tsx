@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { PwaServiceWorker } from "@/components/pwa-service-worker";
 import { DurableCacheLifecycle } from "@/components/durable-cache-lifecycle";
+import { NotificationSoundUnlock } from "@/components/notification-sound-unlock";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -62,6 +63,7 @@ export default function RootLayout({
         {children}
         <PwaServiceWorker />
         <DurableCacheLifecycle />
+        <NotificationSoundUnlock />
         <Toaster position="bottom-right" richColors closeButton />
       </body>
     </html>

@@ -76,3 +76,54 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+/** Web Push (Fase B) — notifikasi OS saat app di-background / di-kill. */
+self.addEventListener("push", (event) => {
+  let payload = {
+    title: "Spatial PM",
+    body: "",
+    url: "/",
+    tag: "spatial-pm",
+  };
+  try {
+    if (event.data) {
+      payload = { ...payload, ...event.data.json() };
+    }
+  } catch {
+    /* ignore */
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body || undefined,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      tag: payload.tag || "spatial-pm",
+      data: { url: payload.url || "/" },
+      silent: false,
+      renotify: true,
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/";
+  const absolute = new URL(targetUrl, self.location.origin).href;
+
+  event.waitUntil(
+    clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((windowClients) => {
+        for (const client of windowClients) {
+          if (!client.url.startsWith(self.location.origin)) continue;
+          client.postMessage({
+            type: "NOTIFICATION_CLICK_NAVIGATE",
+            url: targetUrl,
+          });
+          if ("focus" in client) return client.focus();
+        }
+        if (clients.openWindow) return clients.openWindow(absolute);
+      })
+  );
+});

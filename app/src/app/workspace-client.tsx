@@ -252,6 +252,9 @@ import {
   VirtualTableChatUnreadProvider,
   ChatTabLabel,
 } from "./virtual-table-chat-unread-context";
+import { NotificationSoundListener } from "@/components/notification-sound-listener";
+import { PwaPushSubscription } from "@/components/pwa-push-subscription";
+import { listenForNotificationClickNavigate } from "@/lib/pwa-push-subscription";
 
 function TabViewLoading({ label }: { label: string }) {
   return (
@@ -2120,6 +2123,13 @@ export function WorkspaceClient({
   }, [searchParams, canonicalOrgId, organizationModules]);
   const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
   committedViewRef.current = activeViewFromUrl;
+
+  useEffect(() => {
+    return listenForNotificationClickNavigate((url) => {
+      const path = url.startsWith("/") ? url : `/${url}`;
+      router.push(path);
+    });
+  }, [router]);
 
   const deferredWorkspace = useWorkspaceDeferredPayload({
     issues: shellIssues,
@@ -4669,6 +4679,8 @@ export function WorkspaceClient({
       scopeProjectId={selectedProjectId}
       includeOrgRoomUnread={hasOrgStaffAccess}
     >
+    <NotificationSoundListener userId={userId} />
+    <PwaPushSubscription userId={userId} />
     <WorkspaceRightPanelProvider apiRef={workspaceRightPanelApiRef}>
     <WorkspaceRightPanelCloser activeVirtualTableSlug={activeVirtualTableSlug} />
     <WorkspaceRightPanelTableSync activeTableId={activeVirtualTable?.id ?? null} />

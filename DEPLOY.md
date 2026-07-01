@@ -50,8 +50,28 @@ Lokal: salin `app/.env.example` → `app/.env.local`.
 | Variabel | Catatan |
 |----------|---------|
 | `SUPABASE_SERVICE_ROLE_KEY` | Tanpa prefix `NEXT_PUBLIC_`. Hanya jika server membutuhkannya. |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | Web Push (Fase B). Pasangan dari `npx web-push generate-vapid-keys`. |
 
 Referensi nama variabel: **`/.env.example`**, **`app/.env.example`**.
+
+## Web Push (Fase B notifikasi)
+
+Panduan lengkap: **`docs/mobile-notifications-sound-push.md`**.
+
+1. **Migration** `0069_push_subscriptions.sql` (`npx supabase db push`).
+2. **Vercel Production:** `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (public key).
+3. **Supabase Edge Function** `send-web-push`:
+   ```bash
+   npx supabase functions deploy send-web-push --no-verify-jwt
+   npx supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:admin@contoh.com PUSH_WEBHOOK_SECRET=...
+   ```
+   (`SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` biasanya sudah tersedia di secrets project.)
+4. **Trigger pg_net** — di SQL Editor (ganti project ref & secret):
+   ```sql
+   alter database postgres set core_pm.push_function_url = 'https://<PROJECT_REF>.supabase.co/functions/v1/send-web-push';
+   alter database postgres set core_pm.push_function_secret = '<PUSH_WEBHOOK_SECRET>';
+   ```
+5. **Uji:** install PWA → buka workspace → tap sekali (izin notifikasi) → kill app → kirim pesan chat dari akun lain.
 
 ## Supabase Auth — URL redirect
 

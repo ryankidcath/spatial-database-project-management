@@ -23,8 +23,9 @@ Referensi implementasi: `workspace-activity-tab.tsx`, `audit-activity-display.ts
 
 Desain di bawah ini menggambarkan fase 0–3 **lonceng notifikasi** sebelum pivot. Migration `0065–0067` tetap relevan untuk audit; RPC fan-out tidak lagi dipanggil dari UI.
 
-Referensi:
+Referensi terkait:
 
+- `docs/mobile-notifications-sound-push.md` — bunyi in-app (Fase A) & Web Push (Fase B)
 - `docs/chat-feature-decisions.md` — model chat & unread (§12 akan direvisi: mention tanpa lonceng)
 - `docs/mobile-scope-flow-v2.md` — scope org/proyek mobile
 - `app/src/app/notifications-bell.tsx` — UI lonceng saat ini
