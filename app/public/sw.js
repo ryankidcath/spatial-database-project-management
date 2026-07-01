@@ -1,3 +1,6 @@
+importScripts("/sw-push-cache.js");
+importScripts("/sw-outbox-sync.js");
+
 /**
  * Asset-only service worker — cache JS/CSS/font hashed Next.js + ikon PWA.
  * Tidak cache HTML, RSC, API, atau server actions.
@@ -94,15 +97,43 @@ self.addEventListener("push", (event) => {
   }
 
   event.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body: payload.body || undefined,
-      icon: "/icons/icon-192.png",
-      badge: "/icons/icon-192.png",
-      tag: payload.tag || "spatial-pm",
-      data: { url: payload.url || "/" },
-      silent: false,
-      renotify: true,
-    })
+    (async () => {
+      let cacheResult = { applied: false };
+      try {
+        if (typeof applyPushCacheHints === "function") {
+          cacheResult = await applyPushCacheHints(payload);
+        }
+      } catch {
+        /* quota / idb */
+      }
+
+      await self.registration.showNotification(payload.title, {
+        body: payload.body || undefined,
+        icon: "/icons/icon-192.png",
+        badge: "/icons/icon-192.png",
+        tag: payload.tag || "spatial-pm",
+        data: {
+          url: payload.url || "/",
+          pushCache: cacheResult.applied ? cacheResult : null,
+        },
+        silent: false,
+        renotify: true,
+      });
+
+      if (cacheResult.applied) {
+        const windowClients = await clients.matchAll({
+          type: "window",
+          includeUncontrolled: true,
+        });
+        for (const client of windowClients) {
+          if (!client.url.startsWith(self.location.origin)) continue;
+          client.postMessage({
+            type: "PUSH_CACHE_APPLIED",
+            ...cacheResult,
+          });
+        }
+      }
+    })()
   );
 });
 

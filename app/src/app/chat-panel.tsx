@@ -21,12 +21,26 @@ import {
   sendChatMessageClient,
 } from "@/lib/chat-client";
 import {
+  OFFLINE_OUTBOX_CHAT_SENT_EVENT,
+  isRetryableNetworkError,
+  type OfflineOutboxChatSentDetail,
+} from "@/lib/client-offline-outbox-contract";
+import {
+  enqueueOfflineChatSend,
+  listOfflineOutboxChatItemsForRoom,
+} from "@/lib/client-offline-outbox";
+import { registerOfflineOutboxBackgroundSync } from "@/lib/client-offline-outbox-drain";
+import {
   buildChatRoomCacheKey,
   getChatRoomCache,
   hydrateChatRoomCache,
   mergeChatMessageTail,
   setChatRoomCache,
 } from "@/lib/chat-room-cache";
+import {
+  PUSH_CACHE_APPLIED_EVENT,
+  type PushCacheAppliedDetail,
+} from "@/lib/push-cache-contract";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import {
   formatChatBodyForDisplay,
@@ -260,6 +274,67 @@ export function ChatPanel({
       cancelled = true;
     };
   }, [cacheKey]);
+
+  useEffect(() => {
+    const onPushCache = (event: Event) => {
+      const detail = (event as CustomEvent<PushCacheAppliedDetail>).detail;
+      if (detail.roomCacheKey !== cacheKey) return;
+      void hydrateChatRoomCache(cacheKey).then((cached) => {
+        if (!cached?.messages.length) return;
+        setRoomId(cached.roomId);
+        setMessages(cached.messages);
+        setLastReadAt(cached.lastReadAt);
+        setHasOlder(cached.hasOlder);
+        setLoading(false);
+      });
+    };
+    window.addEventListener(PUSH_CACHE_APPLIED_EVENT, onPushCache);
+    return () =>
+      window.removeEventListener(PUSH_CACHE_APPLIED_EVENT, onPushCache);
+  }, [cacheKey]);
+
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+    void listOfflineOutboxChatItemsForRoom(roomId).then((items) => {
+      if (cancelled || items.length === 0) return;
+      setMessages((prev) => {
+        const next = [...prev];
+        for (const item of items) {
+          if (next.some((m) => m.id === item.clientMessageId)) continue;
+          next.push({
+            id: item.clientMessageId,
+            room_id: item.roomId,
+            author_id: userId,
+            body: item.body,
+            attachment_refs: item.attachmentRefs,
+            created_at: new Date(item.createdAt).toISOString(),
+          });
+        }
+        return next.sort((a, b) => a.created_at.localeCompare(b.created_at));
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, userId]);
+
+  useEffect(() => {
+    const onChatSent = (event: Event) => {
+      const detail = (event as CustomEvent<OfflineOutboxChatSentDetail>).detail;
+      if (detail.roomId !== roomIdRef.current) return;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === detail.clientMessageId ? { ...m, id: detail.messageId } : m
+        )
+      );
+      setError(null);
+      void markRoomRead(detail.roomId, { notifyBadges: true });
+    };
+    window.addEventListener(OFFLINE_OUTBOX_CHAT_SENT_EVENT, onChatSent);
+    return () =>
+      window.removeEventListener(OFFLINE_OUTBOX_CHAT_SENT_EVENT, onChatSent);
+  }, [markRoomRead]);
 
   useEffect(() => {
     setChatRoomCache(cacheKey, {
@@ -518,12 +593,33 @@ export function ChatPanel({
     setError(null);
 
     void (async () => {
+      const queueForRetry = async () => {
+        await enqueueOfflineChatSend({
+          roomId: sendRoomId,
+          roomCacheKey: cacheKey,
+          clientMessageId: optimisticId,
+          body,
+          attachmentRefs,
+        });
+        await registerOfflineOutboxBackgroundSync();
+        setError("Pesan disimpan. Akan dikirim saat online.");
+      };
+
+      if (!navigator.onLine) {
+        await queueForRetry();
+        return;
+      }
+
       const res = await sendChatMessageClient({
         roomId: sendRoomId,
         body,
         attachmentRefs,
       });
       if (res.error) {
+        if (isRetryableNetworkError(res.error)) {
+          await queueForRetry();
+          return;
+        }
         setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
         setDraft(savedDraft);
         setSelectedFileUrl(savedFileUrl);
@@ -695,6 +791,11 @@ export function ChatPanel({
                     </ul>
                   ) : null}
                 </div>
+                {isPending ? (
+                  <span className="text-[10px] text-muted-foreground">
+                    Menunggu jaringan…
+                  </span>
+                ) : null}
               </div>
             );
           })

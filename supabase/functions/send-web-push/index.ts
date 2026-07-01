@@ -6,6 +6,12 @@ type PushPayload = {
   body?: string;
   url?: string;
   tag?: string;
+  cache?: Record<string, unknown>;
+  type?: string;
+  room_id?: string;
+  message_id?: string;
+  organization_id?: string;
+  [key: string]: unknown;
 };
 
 type OutboxRow = {
@@ -182,6 +188,9 @@ Deno.serve(async (req) => {
     body: outbox.body ?? undefined,
     url: outbox.url,
     tag: outbox.tag ?? undefined,
+    ...(outbox.payload && typeof outbox.payload === "object"
+      ? outbox.payload
+      : {}),
   };
 
   const staleEndpoints: string[] = [];

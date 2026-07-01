@@ -57,6 +57,7 @@ Trigger DB → `push_outbox` → `pg_net` / webhook → Edge Function `send-web-
 | B2 | `push_outbox` + trigger chat/notifications + `send-web-push` Edge Function |
 | B3 | `sw.js` — `push`, `notificationclick` |
 | B4 | OS sound via `silent: false` pada `showNotification` |
+| B5 | PR-H: `sw-push-cache.js` — push menulis chat room + inbox meta ke IndexedDB (`0072_push_cache_payload.sql`) |
 
 ### Env
 

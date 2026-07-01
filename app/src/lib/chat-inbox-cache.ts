@@ -5,6 +5,8 @@ import {
   readDurableJsonRecord,
   writeDurableJsonRecord,
 } from "@/lib/client-durable-storage";
+import { orgIdFromInboxCacheKey } from "@/lib/push-cache-contract";
+import { getPushInboxPatchesForOrg } from "@/lib/push-cache-inbox";
 
 export type ChatInboxRoomMeta = {
   lastActivityAt: string;
@@ -63,6 +65,20 @@ function stripUnreadFromEntries(entries: ChatInboxEntry[]): ChatInboxEntry[] {
   return entries.map((e) => ({ ...e, unreadCount: 0 }));
 }
 
+function mergePushInboxPatches(
+  cacheKey: string,
+  snapshot: ChatInboxCacheSnapshot
+): ChatInboxCacheSnapshot {
+  const orgId = orgIdFromInboxCacheKey(cacheKey);
+  if (!orgId) return snapshot;
+  const patches = getPushInboxPatchesForOrg(orgId);
+  if (!patches) return snapshot;
+  return {
+    ...snapshot,
+    roomMetaByKey: { ...snapshot.roomMetaByKey, ...patches },
+  };
+}
+
 export function getChatInboxCache(
   cacheKey: string
 ): ChatInboxCacheSnapshot | null {
@@ -71,15 +87,16 @@ export function getChatInboxCache(
     if (!isDurableSnapshotFresh(mem, CACHE_TTL_MS)) {
       memory.delete(cacheKey);
     } else {
-      return mem;
+      return mergePushInboxPatches(cacheKey, mem);
     }
   }
   const stored = readStorage()[cacheKey];
   if (!stored || !isDurableSnapshotFresh(stored, CACHE_TTL_MS)) {
     return null;
   }
+  const merged = mergePushInboxPatches(cacheKey, stored);
   memory.set(cacheKey, stored);
-  return stored;
+  return merged;
 }
 
 export function setChatInboxCache(

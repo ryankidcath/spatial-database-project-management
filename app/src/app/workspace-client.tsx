@@ -2256,7 +2256,10 @@ export function WorkspaceClient({
         p.set("org", saved.orgId);
         p.set("project", saved.projectId);
         p.delete("task");
-        if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+        if (!p.get("view")) {
+          const view = saved.lastView ?? "Dashboard";
+          p.set("view", viewToParam(view));
+        }
         const qs = p.toString();
         window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
         mobileScopeInitializedRef.current = true;
@@ -2277,7 +2280,10 @@ export function WorkspaceClient({
         p.set("org", saved.orgId);
         p.delete("project");
         p.delete("task");
-        if (!p.get("view")) p.set("view", viewToParam("Dashboard"));
+        if (!p.get("view")) {
+          const view = saved.lastView ?? "Dashboard";
+          p.set("view", viewToParam(view));
+        }
         const qs = p.toString();
         window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
         mobileScopeInitializedRef.current = true;
@@ -2319,8 +2325,9 @@ export function WorkspaceClient({
       phase: mobileScopePhase,
       orgId: canonicalOrgId,
       projectId: selectedProjectId,
+      lastView: mobileScopePhase === "workspace" ? activeView : null,
     });
-  }, [isBelowMd, mobileScopePhase, canonicalOrgId, selectedProjectId]);
+  }, [isBelowMd, mobileScopePhase, canonicalOrgId, selectedProjectId, activeView]);
 
   useEffect(() => {
     if (isBelowMd) setIsSidebarCollapsed(true);
@@ -2463,7 +2470,10 @@ export function WorkspaceClient({
     if (cached?.logs.length) {
       setLiveActivityLogs(cached.logs);
     }
-    const showSkeleton = !cached?.logs.length && activityLogs.length === 0;
+    const showSkeleton =
+      !cached?.logs.length &&
+      activityLogs.length === 0 &&
+      liveActivityLogs.length === 0;
     if (showSkeleton) setActivityLogsLoading(true);
 
     let cancelled = false;
@@ -2476,7 +2486,7 @@ export function WorkspaceClient({
       clearInterval(timer);
       setActivityLogsLoading(false);
     };
-  }, [activeView, refreshActivityLogs, activityLogsCacheKey, activityLogs.length]);
+  }, [activeView, refreshActivityLogs, activityLogsCacheKey, activityLogs.length, liveActivityLogs.length]);
 
   /** Sinkron dari URL hanya saat navigasi eksternal (back/forward, notifikasi, RSC). */
   useEffect(() => {

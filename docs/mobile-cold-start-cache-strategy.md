@@ -1,6 +1,6 @@
 # Mobile cold start — strategi cache setelah app di-kill
 
-**Status:** PR-A s/d PR-F selesai; PR-G2 awal selesai; PR-G lanjutan & PR-H+ direncanakan.  
+**Status:** PR-A s/d PR-I selesai; PR-J+ direncanakan.  
 **Tanggal:** 2026-07-01 (diperbarui)  
 **Konteks:** PWA mobile terasa lebih baik saat installed, tetapi jika user **menutup app dari recent apps** (proses WebView dimatikan), cold start memuat ulang data dan terasa lambat. Dokumen ini merencanakan perbaikan bertahap.
 
@@ -10,7 +10,7 @@ Referensi terkait:
 - `docs/mobile-workspace-guide.md` — layout & tab mobile
 - `docs/mobile-notifications-sound-push.md` — push OS; peluang prefetch dari service worker (PR-H)
 - `docs/performance-notes-workspace-scope.md` — bootstrap server `page.tsx`
-- `app/src/app/page.tsx` — `dynamic = "force-dynamic"`, fetch workspace shell
+- `app/src/app/page.tsx` — `dynamic = "force-dynamic"`; shell via `WorkspaceHomeClient` + server action
 - `app/src/app/workspace-mobile-scope.ts` — wizard org/project (`localStorage`)
 - `app/src/lib/chat-inbox-prefetch.ts` — prefetch inbox saat Dashboard idle (PR-F)
 - `app/src/lib/client-indexed-db-storage.ts` — IndexedDB snapshot besar (PR-D)
@@ -158,6 +158,28 @@ Ini melanjutkan pola cache-first yang sudah ada; perubahan utama = **durability*
 
 ---
 
+### PR-G — Local-first paint (cold start) ✅
+
+| Item | File / area | Status |
+|------|-------------|--------|
+| G1 | `workspace-shell-cache.ts` | ✅ Snapshot shell di `localStorage` (TTL 30 menit, per `userId`) |
+| G2 | `workspace-home-client.tsx` | ✅ `useLayoutEffect` baca cache → paint `WorkspaceClient` sebelum server |
+| G3 | `fetch-workspace-shell-action.ts` + `workspace-shell-server.ts` | ✅ Revalidate background; banner “Memperbarui…” |
+| G4 | `workspace-mobile-scope.ts` + `workspace-client.tsx` | ✅ `lastView` — tab mobile terakhir dipulihkan setelah kill |
+| G5 | Aktivitas tab | ✅ Skip skeleton jika `liveActivityLogs` sudah di-hydrate dari cache |
+
+**Alur cold start:**
+
+```
+page.tsx (ringan) → WorkspaceHomeClient
+  → cache hit? paint shell + tab terakhir (mobile)
+  → parallel: fetchWorkspaceShellAction → update cache + UI
+```
+
+**QA:** kill app (ada kunjungan sebelumnya) → buka icon → workspace muncul tanpa menunggu server shell; tab terakhir (mis. Chat) terbuka, bukan selalu Dashboard.
+
+---
+
 ## Kenapa masih ada “loading” vs app native (WhatsApp)
 
 | | App native (WhatsApp) | PWA Spatial PM (sekarang) |
@@ -167,7 +189,7 @@ Ini melanjutkan pola cache-first yang sudah ada; perubahan utama = **durability*
 | Sync | Background service + FCM | Realtime (app hidup), Web Push (killed) |
 | Data multi-scope | Satu DB lokal per app | Cache per org/project key; prefetch terbatas scope aktif |
 
-**Kesimpulan:** gap UX bukan hanya “belum ada cache”, tapi **urutan startup** (server dulu, lokal menyusul). PR-G ke depan menargetkan **local-first paint**; PR-G2 menargetkan **warm-up progresif** setelah Dashboard interaktif.
+**Kesimpulan:** gap UX bukan hanya “belum ada cache”, tapi **urutan startup** (server dulu, lokal menyusul). **PR-G** membalik urutan untuk shell (local-first paint); **PR-G2** menambah **warm-up progresif** setelah workspace interaktif.
 
 ---
 
@@ -202,14 +224,9 @@ Ini melanjutkan pola cache-first yang sudah ada; perubahan utama = **durability*
 
 **Jawaban: ya.** PR-F memulai pola ini (inbox saat Dashboard); **PR-G2** memperluas ke **semua halaman** dan **multi-project**.
 
-**Implementasi awal PR-G2 ✅:** `client-warmup-queue.ts`, `workspace-warmup.ts`, `activity-logs-prefetch.ts`; `workspace-client.tsx` memanggil `startWorkspaceWarmup` tanpa syarat `activeView`.
+**Implementasi PR-G2 ✅:** `client-warmup-queue.ts`, `workspace-warmup.ts`, `activity-logs-prefetch.ts`; `workspace-client.tsx` memanggil `startWorkspaceWarmup` tanpa syarat `activeView`. **PR-G2-6 ✅:** multi-org ringan, baris tabel mobile, deferred payload.
 
-Yang **belum** (lanjutan PR-G2 / PR-G):
-
-- Prefetch **org lain** (multi-tenant)
-- Prefetch baris tabel halaman 1 per tabel
-- Deferred payload PLM/Map untuk scope non-aktif
-- Indikator UI “Menyinkronkan…” (opsional)
+**Opsional belum:** indikator UI global “Menyinkronkan…” (banner “Memperbarui…” hanya saat revalidate shell).
 
 ### Pola target: **progressive warm-up**
 
@@ -274,7 +291,7 @@ Indikator opsional (belum): ikon kecil “Menyinkronkan…” di header.
 
 ---
 
-### PR-G2 — Progressive warm-up queue ✅ (awal)
+### PR-G2 — Progressive warm-up queue ✅
 
 | Item | File / area | Status |
 |------|-------------|--------|
@@ -291,31 +308,32 @@ Indikator opsional (belum): ikon kecil “Menyinkronkan…” di header.
 
 **PR-G2-6 (file):** `workspace-warmup-scope.ts`, `virtual-table-mobile-rows-prefetch.ts`, `workspace-deferred-payload-cache.ts`, `workspace-deferred-payload-prefetch.ts`; org lain = aktivitas + inbox project pertama saja (tanpa deferred/tabel).
 
-### PR-H — Push-triggered cache (service worker) 🔲
+### PR-H — Push-triggered cache (service worker) ✅
 
-| Item | Spesifikasi |
-|------|-------------|
-| H1 | `sw.js` `push` handler — selain `showNotification`, tulis payload/minimal fetch ke IndexedDB |
-| H2 | Koordinasi key cache dengan `chat-inbox-cache` / room cache |
-| H3 | Tap notifikasi → cold start dengan data push sudah di disk |
+| Item | File / area | Status |
+|------|-------------|--------|
+| H1 | `sw.js` + `sw-push-cache.js` | ✅ Push handler tulis chat room + inbox meta ke IndexedDB |
+| H2 | `0072_push_cache_payload.sql` + `send-web-push` | ✅ Payload `cache` dari DB → browser |
+| H3 | `push-cache-client.ts`, `chat-panel`, `workspace-chat-inbox` | ✅ Cold start + `postMessage` saat app hidup |
 
-**QA:** kill app → kirim pesan → notifikasi OS → buka app → preview chat sudah ada sebelum Realtime connect.
+**QA:** kill app → kirim pesan chat → notifikasi OS → buka app / tap notifikasi → preview pesan di room cache sebelum Realtime connect.
 
-**Catatan:** SW tidak bisa akses IndexedDB namespace app sembarangan — perlu kontrak key + mungkin `postMessage` ke client saat app hidup.
+**Deploy:** jalankan migrasi `0072_push_cache_payload.sql` di Supabase; redeploy Edge Function `send-web-push`.
 
 ---
 
-### PR-I — Outbox offline + Background Sync API 🔲
+### PR-I — Outbox offline + Background Sync API ✅
 
-| Item | Spesifikasi |
-|------|-------------|
-| I1 | Antrian aksi gagal (kirim chat, patch baris) di IndexedDB |
-| I2 | `registration.sync.register('spatial-pm-outbox')` di SW (Chromium) |
-| I3 | Retry drain ke Supabase saat online |
+| Item | File / area | Status |
+|------|-------------|--------|
+| I1 | `client-offline-outbox.ts` | ✅ Antrian kirim chat di IndexedDB `offline-outbox-v1` |
+| I2 | `sw-outbox-sync.js` + `registerOfflineOutboxBackgroundSync` | ✅ Tag `spatial-pm-outbox` (Chromium) |
+| I3 | `client-offline-outbox-drain.ts` + `offline-outbox-lifecycle.tsx` | ✅ Drain saat `online` / sync / mount |
+| I4 | `chat-panel.tsx` | ✅ Optimistic tetap; label “Menunggu jaringan…” |
 
-**QA:** mode pesawat → kirim chat → tampil optimistic → online → terkirim tanpa user refresh.
+**QA:** mode pesawat → kirim chat → pesan tetap tampil (pending) → online → terkirim tanpa refresh manual.
 
-**Prioritas:** setelah PR-G2; relevan untuk lapangan sinyal lemah.
+**Catatan:** drain membutuhkan sesi Supabase di tab (cookie/localStorage). Background Sync membangunkan tab yang masih hidup; setelah kill app, drain jalan saat buka ulang + online.
 
 ---
 
@@ -335,13 +353,16 @@ APK dengan SQLite native + background task — keluar dari scope PWA murni.
 
 | Modul | Storage | Hilang saat kill? | Target fase |
 |-------|---------|-------------------|-------------|
-| Mobile scope wizard | `localStorage` (+ migrasi session) | **Tidak** | PR-A ✅ |
+| Workspace shell (org/project/modul/vtables) | `localStorage` | **Tidak** | PR-G ✅ |
+| Mobile scope wizard + tab terakhir | `localStorage` (+ migrasi session) | **Tidak** | PR-A ✅ / `lastView` PR-G ✅ |
 | Chat inbox | `localStorage` + memori | **Tidak** | PR-A ✅ |
 | Chat room messages | IndexedDB + memori (+ migrasi localStorage) | **Tidak** | PR-D ✅ |
 | Activity logs | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
 | Virtual table rows (desktop) | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
 | Virtual table mobile rows | IndexedDB + memori | **Tidak** | PR-D ✅ / warm-up PR-G2-6 ✅ |
 | Deferred payload (Map/PLM) | IndexedDB | **Tidak** | PR-G2-6 ✅ |
+| Chat inbox meta (push) | IndexedDB `push-inbox-meta-v1` | **Tidak** | PR-H ✅ |
+| Offline outbox (kirim chat) | IndexedDB `offline-outbox-v1` | **Tidak** | PR-I ✅ |
 | View filter/sort tabel | `localStorage` | **Tidak** | Sudah OK |
 | Tema | `localStorage` | **Tidak** | Sudah OK |
 | Auth session | Cookie (Supabase SSR) | **Tidak** | Sudah OK |
@@ -364,12 +385,13 @@ APK dengan SQLite native + background task — keluar dari scope PWA murni.
 |---|----------|---------|
 | 1 | Kill app → buka icon (ada cache PR-A) | Inbox/scope tampil cepat; data menyusul update |
 | 2 | Kill app → offline | Login cookie ada tapi data stale + indikator offline (jika ditambahkan nanti) |
-| 3 | Kill app → URL `/` saja | Scope org/project dipulihkan dari `localStorage` |
+| 3 | Kill app → URL `/` saja | Scope org/project + tab terakhir dipulihkan dari `localStorage` |
+| 3b | PR-G: kill app → kunjungan kedua | Shell dari cache; revalidate di background |
 | 4 | Deploy baru | Tidak perlu instal ulang; revalidate dapat versi baru |
 | 5 | Kirim pesan → kill → buka | Pesan terbaru muncul setelah revalidate (bukan dari cache stale selamanya) |
 | 6 | Dashboard Supabase | Read count cold start tidak melonjak tak terkendali |
 | 7 | PR-G2: tunggu 30s di Dashboard → buka Chat project lain | Inbox project lain dari cache warm-up |
-| 8 | PR-G2: saveData / baterai rendah | Warm-up queue tidak jalan |
+| 9 | PR-I: mode pesawat → kirim chat → online | Pesan pending terkirim otomatis |
 
 ---
 
@@ -390,6 +412,9 @@ APK dengan SQLite native + background task — keluar dari scope PWA murni.
 
 | Tanggal | Keputusan |
 |---------|-----------|
+| 2026-07-01 | PR-I: offline outbox chat + Background Sync tag `spatial-pm-outbox` |
+| 2026-07-01 | PR-H: push → SW → IndexedDB (chat room + inbox meta); payload `cache` di migrasi 0072 |
+| 2026-07-01 | PR-G: local-first shell paint (`workspace-home-client`), `lastView` mobile, aktivitas skip skeleton dari cache |
 | 2026-07-01 | PR-G s/d K direncanakan; SQLite/Capacitor opsional — IndexedDB cukup dulu |
 | 2026-07-01 | PR-G2-6: multi-org warm-up ringan, prefetch baris tabel mobile (max 3), deferred payload cache |
 | 2026-07-01 | Prinsip: user di halaman mana pun → data lain tetap di-load diam-diam (idle prefetch) |

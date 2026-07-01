@@ -1,9 +1,11 @@
-/** Fase wizard scope di mobile (`< md`). Desktop memakai sidebar. */
+import type { ViewId } from "@/app/workspace-views";
 import {
   readDurableJsonValue,
   removeDurableJsonValue,
   writeDurableJsonValue,
 } from "@/lib/client-durable-storage";
+
+/** Fase wizard scope di mobile (`< md`). Desktop memakai sidebar. */
 
 export type MobileScopePhase = "org" | "project" | "workspace";
 
@@ -13,6 +15,8 @@ export type MobileScopeSession = {
   phase: MobileScopePhase;
   orgId: string | null;
   projectId: string | null;
+  /** Tab terakhir di mobile (PR-G). */
+  lastView?: ViewId | null;
 };
 
 export function readMobileScopeSession(): MobileScopeSession | null {
@@ -36,6 +40,10 @@ export function readMobileScopeSession(): MobileScopeSession | null {
     projectId:
       typeof parsed.projectId === "string" && parsed.projectId
         ? parsed.projectId
+        : null,
+    lastView:
+      typeof parsed.lastView === "string" && parsed.lastView
+        ? (parsed.lastView as ViewId)
         : null,
   };
 }

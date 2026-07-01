@@ -192,6 +192,28 @@ export async function idbEvictNamespace(
   }
 }
 
+export async function idbListEntryKeys(namespace: string): Promise<string[]> {
+  if (!isBrowser()) return [];
+  const prefix = `${namespace}::`;
+  try {
+    const db = await openDatabase();
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.getAllKeys();
+      request.onsuccess = () => resolve(request.result ?? []);
+      request.onerror = () =>
+        reject(request.error ?? new Error("idb keys failed"));
+    });
+    return keys
+      .map(String)
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => key.slice(prefix.length));
+  } catch {
+    return [];
+  }
+}
+
 export async function idbDeleteNamespaceByPrefix(
   namespace: string,
   entryKeyPrefix: string

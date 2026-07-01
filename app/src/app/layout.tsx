@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { PwaServiceWorker } from "@/components/pwa-service-worker";
+import { PwaPushCacheListener } from "@/components/pwa-push-cache-listener";
+import { OfflineOutboxLifecycle } from "@/components/offline-outbox-lifecycle";
 import { DurableCacheLifecycle } from "@/components/durable-cache-lifecycle";
 import { NotificationSoundUnlock } from "@/components/notification-sound-unlock";
 import { Toaster } from "@/components/ui/sonner";
@@ -62,6 +64,8 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         {children}
         <PwaServiceWorker />
+        <PwaPushCacheListener />
+        <OfflineOutboxLifecycle />
         <DurableCacheLifecycle />
         <NotificationSoundUnlock />
         <Toaster position="bottom-right" richColors closeButton />

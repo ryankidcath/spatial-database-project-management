@@ -38,6 +38,8 @@ import {
   getChatInboxCache,
   setChatInboxCache,
 } from "@/lib/chat-inbox-cache";
+import { PUSH_CACHE_APPLIED_EVENT } from "@/lib/push-cache-contract";
+import { hydratePushInboxPatchesFromIdb } from "@/lib/push-cache-inbox";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
@@ -228,16 +230,35 @@ export function WorkspaceChatInbox({
       setRowLoading(true);
       return;
     }
-    const cached = getChatInboxCache(inboxCacheKey);
-    if (!cached) {
-      setRowLoading(true);
-      return;
-    }
-    setRowEntries(cached.rowEntries);
-    setRowTotalCount(cached.rowTotalCount);
-    setRoomMetaByKey(cached.roomMetaByKey);
-    setMentionKeys(new Set(cached.mentionKeys));
-    setRowLoading(false);
+    let cancelled = false;
+    void hydratePushInboxPatchesFromIdb().then(() => {
+      if (cancelled) return;
+      const cached = getChatInboxCache(inboxCacheKey);
+      if (!cached) {
+        setRowLoading(true);
+        return;
+      }
+      setRowEntries(cached.rowEntries);
+      setRowTotalCount(cached.rowTotalCount);
+      setRoomMetaByKey(cached.roomMetaByKey);
+      setMentionKeys(new Set(cached.mentionKeys));
+      setRowLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [inboxCacheKey]);
+
+  useEffect(() => {
+    const refreshFromPushCache = () => {
+      if (!inboxCacheKey) return;
+      const cached = getChatInboxCache(inboxCacheKey);
+      if (!cached) return;
+      setRoomMetaByKey(cached.roomMetaByKey);
+    };
+    window.addEventListener(PUSH_CACHE_APPLIED_EVENT, refreshFromPushCache);
+    return () =>
+      window.removeEventListener(PUSH_CACHE_APPLIED_EVENT, refreshFromPushCache);
   }, [inboxCacheKey]);
 
   useEffect(() => {
