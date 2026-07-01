@@ -16,6 +16,26 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Spatial Project Management",
   description: "Core PM workspace with optional PLM, spatial, and finance modules",
+  applicationName: "Spatial PM",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Spatial PM",
+  },
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [
+      { url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
+  },
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#252525" },
+  ],
 };
 
 export const viewport = {

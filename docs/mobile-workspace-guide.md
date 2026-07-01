@@ -6,6 +6,7 @@ Dokumen ini menjadi **guide implementasi** responsif untuk Spatial PM workspace 
 Referensi terkait:
 
 - `docs/mobile-scope-flow-v2.md` — **rencana eksekusi berikutnya** (org → project → workspace, tabel → baris → detail edit)
+- `docs/pwa-mobile-gestures-overscroll.md` — **sumber kebenaran** PWA mobile: cegah pull-to-refresh & overscroll chaining
 - `docs/chat-feature-decisions.md` — model chat & panel kanan desktop
 - `docs/chat-tab-navigation-options.md` — opsi tab Chat / inbox (draft; putuskan setelah v2 Step 5)
 - `docs/performance-notes-workspace-scope.md` — muat data workspace di server
@@ -353,7 +354,7 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 
 ## Di luar scope (v1 mobile)
 
-- Aplikasi native / PWA offline penuh
+- Aplikasi native / PWA offline penuh (gesture & PTR: lihat `docs/pwa-mobile-gestures-overscroll.md`)
 - Edit geometri kompleks di peta via touch gestures khusus
 - Markdown / rich text chat
 - Dua panel chat sekaligus di mobile

@@ -5685,7 +5685,7 @@ export function WorkspaceClient({
               <div
                 className={cn(
                   isBelowMd
-                    ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
+                    ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pm-mobile-scroll"
                     : undefined
                 )}
               >

@@ -140,6 +140,22 @@
   color: var(--muted-foreground);
 }
 
+/* Mobile PWA: cegah pull-to-refresh & overscroll chaining ke viewport.
+   Lihat docs/pwa-mobile-gestures-overscroll.md */
+@media (max-width: 767px) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+    overscroll-behavior-x: none;
+  }
+
+  .pm-mobile-scroll {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
 /* Mobile: kontrol peta di atas tab bar; tombol chat popup mudah disentuh. */
 @media (max-width: 767px) {
   .workspace-map-root .leaflet-top {

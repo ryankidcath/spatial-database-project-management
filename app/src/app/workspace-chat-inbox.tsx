@@ -725,7 +725,7 @@ export function WorkspaceChatInbox({
           />
         </div>
       </div>
-      <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-2">
+      <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
         {rowLoading && entries.length === staticEntries.length ? (
           <li className="flex justify-center py-6">
             <Spinner className="size-5" />

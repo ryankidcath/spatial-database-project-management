@@ -108,7 +108,7 @@ export function WorkspaceActivityTab({
         </div>
       ) : null}
 
-      <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-2">
+      <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
         {filtered.length === 0 ? (
           <li className="px-2 py-8 text-center text-sm text-muted-foreground">
             Belum ada aktivitas untuk filter ini.
