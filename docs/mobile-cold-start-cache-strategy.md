@@ -283,11 +283,13 @@ Indikator opsional (belum): ikon kecil “Menyinkronkan…” di header.
 | G2-3 | `activity-logs-prefetch.ts` | ✅ Snapshot aktivitas per org |
 | G2-4 | `workspace-warmup.ts` + `workspace-client.tsx` | ✅ `startWorkspaceWarmup` — **semua tab** |
 | G2-5 | `client-background-cache-policy.ts` | ✅ Max 12 job / 30s per sesi |
-| G2-6 | Multi-org, tabel rows, deferred payload | 🔲 Lanjutan |
+| G2-6 | Multi-org, tabel rows, deferred payload | ✅ |
 
 **QA:** buka app → tetap di Chat 30s → pindah project → inbox project lain dari cache. Atau buka Aktivitas tanpa pernah buka tab itu sebelumnya → snapshot sudah ada.
 
 **Catatan produk:** warm-up **tidak memerlukan** user di Dashboard; jalan di **halaman mana pun** selama app foreground + idle.
+
+**PR-G2-6 (file):** `workspace-warmup-scope.ts`, `virtual-table-mobile-rows-prefetch.ts`, `workspace-deferred-payload-cache.ts`, `workspace-deferred-payload-prefetch.ts`; org lain = aktivitas + inbox project pertama saja (tanpa deferred/tabel).
 
 ### PR-H — Push-triggered cache (service worker) 🔲
 
@@ -338,7 +340,8 @@ APK dengan SQLite native + background task — keluar dari scope PWA murni.
 | Chat room messages | IndexedDB + memori (+ migrasi localStorage) | **Tidak** | PR-D ✅ |
 | Activity logs | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
 | Virtual table rows (desktop) | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
-| Mobile table rows | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
+| Virtual table mobile rows | IndexedDB + memori | **Tidak** | PR-D ✅ / warm-up PR-G2-6 ✅ |
+| Deferred payload (Map/PLM) | IndexedDB | **Tidak** | PR-G2-6 ✅ |
 | View filter/sort tabel | `localStorage` | **Tidak** | Sudah OK |
 | Tema | `localStorage` | **Tidak** | Sudah OK |
 | Auth session | Cookie (Supabase SSR) | **Tidak** | Sudah OK |
@@ -388,7 +391,7 @@ APK dengan SQLite native + background task — keluar dari scope PWA murni.
 | Tanggal | Keputusan |
 |---------|-----------|
 | 2026-07-01 | PR-G s/d K direncanakan; SQLite/Capacitor opsional — IndexedDB cukup dulu |
-| 2026-07-01 | PR-G2 awal: warm-up queue di **semua halaman**; multi-project inbox + aktivitas org |
+| 2026-07-01 | PR-G2-6: multi-org warm-up ringan, prefetch baris tabel mobile (max 3), deferred payload cache |
 | 2026-07-01 | Prinsip: user di halaman mana pun → data lain tetap di-load diam-diam (idle prefetch) |
 | 2026-07-01 | Bedakan istilah: *warm-up queue* (idle prefetch app hidup) vs *Background Sync API* (outbox offline, PR-I) vs *push→SW→disk* (PR-H) |
 | 2026-06-17 | PR-C: shell `page.tsx` + lazy deferred payload via server action |

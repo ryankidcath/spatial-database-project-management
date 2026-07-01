@@ -3377,7 +3377,10 @@ export function WorkspaceClient({
     return startWorkspaceWarmup({
       organizationId: canonicalOrgId,
       selectedProjectId,
-      projectsInOrg,
+      projects,
+      organizations,
+      organizationMembers,
+      organizationModules,
       virtualTables,
       hasOrgStaffAccess,
       userId,
@@ -3387,6 +3390,10 @@ export function WorkspaceClient({
     selectedProjectId,
     userId,
     projectsInOrg,
+    projects,
+    organizations,
+    organizationMembers,
+    organizationModules,
     virtualTables,
     hasOrgStaffAccess,
   ]);

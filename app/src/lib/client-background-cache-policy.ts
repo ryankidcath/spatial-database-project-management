@@ -9,9 +9,9 @@ type BatteryManagerLike = {
   level: number;
 };
 
-/** Batas warm-up per sesi workspace (PR-G2). */
-const MAX_WARMUP_JOBS_PER_SESSION = 12;
-const MAX_WARMUP_WALL_MS = 30_000;
+/** Batas warm-up per sesi workspace (PR-G2, PR-G2-6). */
+const MAX_WARMUP_JOBS_PER_SESSION = 24;
+const MAX_WARMUP_WALL_MS = 45_000;
 
 let warmupJobsCompleted = 0;
 let warmupSessionStartMs = 0;

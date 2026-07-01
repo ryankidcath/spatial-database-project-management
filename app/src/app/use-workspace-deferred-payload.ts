@@ -8,6 +8,11 @@ import type { WorkspaceDeferredPayload } from "@/lib/workspace-bootstrap-types";
 import type { ViewId } from "./workspace-views";
 import { fetchWorkspaceDeferredPayloadAction } from "./fetch-workspace-deferred-payload-action";
 import { viewNeedsDeferredPayload } from "./workspace-deferred-payload";
+import {
+  buildWorkspaceDeferredPayloadCacheKey,
+  hydrateWorkspaceDeferredPayloadCache,
+  setWorkspaceDeferredPayloadCache,
+} from "@/lib/workspace-deferred-payload-cache";
 
 type ShellDeferredFields = {
   issues: WorkspaceDeferredPayload["issues"];
@@ -107,6 +112,18 @@ export function useWorkspaceDeferredPayload(input: UseWorkspaceDeferredPayloadIn
     projectsInOrg.map((p) => p.id).join(","),
   ].join(":");
 
+  const deferredCacheKey =
+    canonicalOrgId && projectsInOrg.length > 0
+      ? buildWorkspaceDeferredPayloadCacheKey(
+          canonicalOrgId,
+          selectedProjectId,
+          projectsInOrg.map((p) => p.id)
+        )
+      : null;
+
+  const deferredRef = useRef<WorkspaceDeferredPayload | null>(null);
+  deferredRef.current = deferred;
+
   const load = useCallback(async () => {
     if (!canonicalOrgId || projectsInOrg.length === 0) return;
     if (inflightRef.current) {
@@ -115,7 +132,8 @@ export function useWorkspaceDeferredPayload(input: UseWorkspaceDeferredPayloadIn
     }
 
     const run = (async () => {
-      setLoading(true);
+      const showLoading = deferredRef.current == null;
+      if (showLoading) setLoading(true);
       try {
         const res = await fetchWorkspaceDeferredPayloadAction({
           organizationId: canonicalOrgId,
@@ -128,6 +146,9 @@ export function useWorkspaceDeferredPayload(input: UseWorkspaceDeferredPayloadIn
         if (res.data) {
           setDeferred(res.data);
           loadedScopeRef.current = scopeKey;
+          if (deferredCacheKey) {
+            setWorkspaceDeferredPayloadCache(deferredCacheKey, res.data);
+          }
         }
       } finally {
         setLoading(false);
@@ -144,19 +165,36 @@ export function useWorkspaceDeferredPayload(input: UseWorkspaceDeferredPayloadIn
     organizationModules,
     organizationMembers,
     scopeKey,
+    deferredCacheKey,
   ]);
 
   useEffect(() => {
-    if (!viewNeedsDeferredPayload(activeView)) return;
-    if (loadedScopeRef.current === scopeKey && deferred) return;
-    void load();
-  }, [activeView, scopeKey, deferred, load]);
+    if (!canonicalOrgId || projectsInOrg.length === 0 || !deferredCacheKey) {
+      setDeferred(null);
+      loadedScopeRef.current = null;
+      return;
+    }
 
-  useEffect(() => {
-    if (loadedScopeRef.current === scopeKey) return;
+    let cancelled = false;
     setDeferred(null);
     loadedScopeRef.current = null;
-  }, [scopeKey]);
+
+    void hydrateWorkspaceDeferredPayloadCache(deferredCacheKey).then((entry) => {
+      if (cancelled || !entry) return;
+      setDeferred(entry.payload);
+      loadedScopeRef.current = scopeKey;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scopeKey, deferredCacheKey, canonicalOrgId, projectsInOrg.length]);
+
+  useEffect(() => {
+    if (!viewNeedsDeferredPayload(activeView)) return;
+    if (!canonicalOrgId || projectsInOrg.length === 0) return;
+    void load();
+  }, [activeView, scopeKey, canonicalOrgId, projectsInOrg.length, load]);
 
   const merged = mergeShellWithDeferred(shell, deferred);
 
