@@ -2,9 +2,14 @@ import type { ChatMessageRow, ChatScopeType } from "@/app/chat-types";
 import {
   DEFAULT_DURABLE_CACHE_TTL_MS,
   isDurableSnapshotFresh,
-  readDurableJsonRecord,
-  writeDurableJsonRecord,
 } from "@/lib/client-durable-storage";
+import {
+  hydrateIndexedDbRecordEntry,
+  invalidateIndexedDbRecordNamespace,
+  persistIndexedDbRecordEntry,
+  readIndexedDbRecordMapSync,
+  flushIndexedDbRecordMemory,
+} from "@/lib/client-durable-record-storage";
 
 export type ChatRoomCacheSnapshot = {
   roomId: string | null;
@@ -19,6 +24,14 @@ const LEGACY_SESSION_KEY = STORAGE_KEY;
 const MAX_ROOMS = 32;
 const MAX_MESSAGES_STORED = 120;
 const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
+
+const storeConfig = {
+  namespace: "chat-room-v1",
+  maxEntries: MAX_ROOMS,
+  ttlMs: CACHE_TTL_MS,
+  legacyLocalStorageKey: STORAGE_KEY,
+  legacySessionStorageKey: LEGACY_SESSION_KEY,
+};
 
 const memory = new Map<string, ChatRoomCacheSnapshot>();
 
@@ -45,29 +58,7 @@ function trimMessages(messages: ChatMessageRow[]): ChatMessageRow[] {
   return messages.slice(-MAX_MESSAGES_STORED);
 }
 
-function readStorage(): Record<string, ChatRoomCacheSnapshot> {
-  return readDurableJsonRecord<ChatRoomCacheSnapshot>(STORAGE_KEY, {
-    ttlMs: CACHE_TTL_MS,
-    legacySessionKey: LEGACY_SESSION_KEY,
-  });
-}
-
-function writeStorage(data: Record<string, ChatRoomCacheSnapshot>) {
-  writeDurableJsonRecord(STORAGE_KEY, data);
-}
-
-function persistToStorage(cacheKey: string, snapshot: ChatRoomCacheSnapshot) {
-  const all = readStorage();
-  all[cacheKey] = snapshot;
-  const keys = Object.keys(all).sort(
-    (a, b) => (all[b]?.updatedAt ?? 0) - (all[a]?.updatedAt ?? 0)
-  );
-  for (const key of keys.slice(MAX_ROOMS)) {
-    delete all[key];
-  }
-  writeStorage(all);
-}
-
+/** Sync: memori + legacy localStorage (sebelum hydrate IDB selesai). */
 export function getChatRoomCache(
   cacheKey: string
 ): ChatRoomCacheSnapshot | null {
@@ -79,12 +70,21 @@ export function getChatRoomCache(
       return mem;
     }
   }
-  const stored = readStorage()[cacheKey];
+  const stored = readIndexedDbRecordMapSync<ChatRoomCacheSnapshot>(storeConfig)[
+    cacheKey
+  ];
   if (!stored || !isDurableSnapshotFresh(stored, CACHE_TTL_MS)) {
     return null;
   }
   memory.set(cacheKey, stored);
   return stored;
+}
+
+/** Async: muat dari IndexedDB (cold start setelah kill). */
+export async function hydrateChatRoomCache(
+  cacheKey: string
+): Promise<ChatRoomCacheSnapshot | null> {
+  return hydrateIndexedDbRecordEntry(storeConfig, cacheKey, memory);
 }
 
 export function setChatRoomCache(
@@ -99,7 +99,19 @@ export function setChatRoomCache(
     updatedAt: partial.updatedAt ?? Date.now(),
   };
   memory.set(cacheKey, snapshot);
-  persistToStorage(cacheKey, snapshot);
+  void persistIndexedDbRecordEntry(storeConfig, cacheKey, snapshot, memory);
+}
+
+export function invalidateChatRoomCache(cacheKeyPrefix?: string): void {
+  void invalidateIndexedDbRecordNamespace(
+    storeConfig,
+    memory,
+    cacheKeyPrefix
+  );
+}
+
+export async function flushChatRoomMemoryToStorage(): Promise<void> {
+  await flushIndexedDbRecordMemory(storeConfig, memory);
 }
 
 /** Gabungkan halaman terbaru dari server dengan pesan lama yang sudah dimuat user. */

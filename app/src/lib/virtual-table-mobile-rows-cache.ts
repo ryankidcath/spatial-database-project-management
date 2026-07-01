@@ -1,4 +1,15 @@
 import type { VirtualDataRow } from "@/app/virtual-table-types";
+import {
+  DEFAULT_DURABLE_CACHE_TTL_MS,
+  isDurableSnapshotFresh,
+} from "@/lib/client-durable-storage";
+import {
+  hydrateIndexedDbRecordEntry,
+  invalidateIndexedDbRecordNamespace,
+  persistIndexedDbRecordEntry,
+  readIndexedDbRecordMapSync,
+  flushIndexedDbRecordMemory,
+} from "@/lib/client-durable-record-storage";
 
 export type VirtualTableMobileRowsCacheEntry = {
   rows: VirtualDataRow[];
@@ -9,59 +20,54 @@ export type VirtualTableMobileRowsCacheEntry = {
 
 const STORAGE_KEY = "pm-vtable-mobile-rows-cache-v1";
 const MAX_TABLES = 24;
+const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
+
+const storeConfig = {
+  namespace: "vtable-mobile-rows-v1",
+  maxEntries: MAX_TABLES,
+  ttlMs: CACHE_TTL_MS,
+  legacySessionStorageKey: STORAGE_KEY,
+};
+
 const memory = new Map<string, VirtualTableMobileRowsCacheEntry>();
 
 export function virtualTableMobileRowsCacheKey(tableId: string): string {
   return `table:${tableId}`;
 }
 
-function readStorage(): Record<string, VirtualTableMobileRowsCacheEntry> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, VirtualTableMobileRowsCacheEntry>;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeStorage(data: Record<string, VirtualTableMobileRowsCacheEntry>) {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore quota errors; memory cache still works.
-  }
-}
-
-function persist(cacheKey: string, entry: VirtualTableMobileRowsCacheEntry) {
-  const all = readStorage();
-  all[cacheKey] = entry;
-  const keys = Object.keys(all).sort(
-    (a, b) => (all[b]?.updatedAt ?? 0) - (all[a]?.updatedAt ?? 0)
-  );
-  for (const key of keys.slice(MAX_TABLES)) {
-    delete all[key];
-  }
-  writeStorage(all);
-}
-
 export function getVirtualTableMobileRowsCache(
   cacheKey: string
 ): VirtualTableMobileRowsCacheEntry | null {
   const mem = memory.get(cacheKey);
-  if (mem) return mem;
-  const stored = readStorage()[cacheKey];
-  if (!stored) return null;
+  if (mem) {
+    if (!isDurableSnapshotFresh(mem, CACHE_TTL_MS)) {
+      memory.delete(cacheKey);
+    } else {
+      return mem;
+    }
+  }
+  const stored =
+    readIndexedDbRecordMapSync<VirtualTableMobileRowsCacheEntry>(storeConfig)[
+      cacheKey
+    ];
+  if (!stored || !isDurableSnapshotFresh(stored, CACHE_TTL_MS)) {
+    return null;
+  }
   memory.set(cacheKey, stored);
   return stored;
 }
 
+export async function hydrateVirtualTableMobileRowsCache(
+  cacheKey: string
+): Promise<VirtualTableMobileRowsCacheEntry | null> {
+  return hydrateIndexedDbRecordEntry(storeConfig, cacheKey, memory);
+}
+
 export function setVirtualTableMobileRowsCache(
   cacheKey: string,
-  entry: Omit<VirtualTableMobileRowsCacheEntry, "updatedAt"> & { updatedAt?: number }
+  entry: Omit<VirtualTableMobileRowsCacheEntry, "updatedAt"> & {
+    updatedAt?: number;
+  }
 ) {
   const next: VirtualTableMobileRowsCacheEntry = {
     rows: entry.rows,
@@ -70,18 +76,21 @@ export function setVirtualTableMobileRowsCache(
     updatedAt: entry.updatedAt ?? Date.now(),
   };
   memory.set(cacheKey, next);
-  persist(cacheKey, next);
+  void persistIndexedDbRecordEntry(storeConfig, cacheKey, next, memory);
 }
 
 export function invalidateVirtualTableMobileRowsCache(tableId?: string) {
   if (!tableId) {
-    memory.clear();
-    writeStorage({});
+    void invalidateIndexedDbRecordNamespace(storeConfig, memory);
     return;
   }
-  const cacheKey = virtualTableMobileRowsCacheKey(tableId);
-  memory.delete(cacheKey);
-  const all = readStorage();
-  delete all[cacheKey];
-  writeStorage(all);
+  void invalidateIndexedDbRecordNamespace(
+    storeConfig,
+    memory,
+    virtualTableMobileRowsCacheKey(tableId)
+  );
+}
+
+export async function flushVirtualTableMobileRowsMemoryToStorage(): Promise<void> {
+  await flushIndexedDbRecordMemory(storeConfig, memory);
 }

@@ -98,6 +98,7 @@ import {
 import { relationLookupSlugFromConfig } from "@/lib/virtual-table-relation-import";
 import {
   getVirtualTableRowsCache,
+  hydrateVirtualTableRowsCache,
   setVirtualTableRowsCache,
   virtualTableRowsCacheKey,
 } from "@/lib/virtual-table-rows-cache";
@@ -952,12 +953,23 @@ export function VirtualTableView({
   const [initialLoading, setInitialLoading] = useState(true);
 
   useLayoutEffect(() => {
+    let cancelled = false;
     const cached = getVirtualTableRowsCache(rowsCacheKey);
     if (cached && cached.rows.length > 0) {
       setRows(cached.rows);
       setTotalRowCount(cached.totalCount);
       setInitialLoading(false);
+      return;
     }
+    void hydrateVirtualTableRowsCache(rowsCacheKey).then((fromIdb) => {
+      if (cancelled || !fromIdb?.rows.length) return;
+      setRows(fromIdb.rows);
+      setTotalRowCount(fromIdb.totalCount);
+      setInitialLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [rowsCacheKey]);
 
   const loadRows = useCallback(async () => {

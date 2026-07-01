@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { PwaServiceWorker } from "@/components/pwa-service-worker";
+import { DurableCacheLifecycle } from "@/components/durable-cache-lifecycle";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -58,6 +60,8 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         {children}
+        <PwaServiceWorker />
+        <DurableCacheLifecycle />
         <Toaster position="bottom-right" richColors closeButton />
       </body>
     </html>

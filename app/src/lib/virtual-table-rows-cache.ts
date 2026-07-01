@@ -1,4 +1,15 @@
 import type { VirtualDataRow } from "@/app/virtual-table-types";
+import {
+  DEFAULT_DURABLE_CACHE_TTL_MS,
+  isDurableSnapshotFresh,
+} from "@/lib/client-durable-storage";
+import {
+  hydrateIndexedDbRecordEntry,
+  invalidateIndexedDbRecordNamespace,
+  persistIndexedDbRecordEntry,
+  readIndexedDbRecordMapSync,
+  flushIndexedDbRecordMemory,
+} from "@/lib/client-durable-record-storage";
 
 export type VirtualTableRowsCacheEntry = {
   rows: VirtualDataRow[];
@@ -8,6 +19,14 @@ export type VirtualTableRowsCacheEntry = {
 
 const STORAGE_KEY = "pm-vtable-rows-cache-v1";
 const MAX_ENTRIES = 48;
+const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
+
+const storeConfig = {
+  namespace: "vtable-rows-v1",
+  maxEntries: MAX_ENTRIES,
+  ttlMs: CACHE_TTL_MS,
+  legacySessionStorageKey: STORAGE_KEY,
+};
 
 const memory = new Map<string, VirtualTableRowsCacheEntry>();
 
@@ -19,48 +38,31 @@ export function virtualTableRowsCacheKey(
   return `${tableId}:${pageSize ?? "all"}:${pageIndex}`;
 }
 
-function readStorage(): Record<string, VirtualTableRowsCacheEntry> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, VirtualTableRowsCacheEntry>;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeStorage(data: Record<string, VirtualTableRowsCacheEntry>) {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore quota errors; memory cache still works.
-  }
-}
-
-function persist(cacheKey: string, entry: VirtualTableRowsCacheEntry) {
-  const all = readStorage();
-  all[cacheKey] = entry;
-  const keys = Object.keys(all).sort(
-    (a, b) => (all[b]?.updatedAt ?? 0) - (all[a]?.updatedAt ?? 0)
-  );
-  for (const key of keys.slice(MAX_ENTRIES)) {
-    delete all[key];
-  }
-  writeStorage(all);
-}
-
 export function getVirtualTableRowsCache(
   key: string
 ): VirtualTableRowsCacheEntry | undefined {
   const mem = memory.get(key);
-  if (mem) return mem;
-  const stored = readStorage()[key];
-  if (!stored) return undefined;
+  if (mem) {
+    if (!isDurableSnapshotFresh(mem, CACHE_TTL_MS)) {
+      memory.delete(key);
+    } else {
+      return mem;
+    }
+  }
+  const stored = readIndexedDbRecordMapSync<VirtualTableRowsCacheEntry>(
+    storeConfig
+  )[key];
+  if (!stored || !isDurableSnapshotFresh(stored, CACHE_TTL_MS)) {
+    return undefined;
+  }
   memory.set(key, stored);
   return stored;
+}
+
+export async function hydrateVirtualTableRowsCache(
+  key: string
+): Promise<VirtualTableRowsCacheEntry | null> {
+  return hydrateIndexedDbRecordEntry(storeConfig, key, memory);
 }
 
 export function setVirtualTableRowsCache(
@@ -73,26 +75,17 @@ export function setVirtualTableRowsCache(
     updatedAt: entry.updatedAt ?? Date.now(),
   };
   memory.set(key, next);
-  persist(key, next);
+  void persistIndexedDbRecordEntry(storeConfig, key, next, memory);
 }
 
 export function invalidateVirtualTableRowsCache(tableId?: string): void {
   if (!tableId) {
-    memory.clear();
-    writeStorage({});
+    void invalidateIndexedDbRecordNamespace(storeConfig, memory);
     return;
   }
-  const prefix = `${tableId}:`;
-  for (const key of memory.keys()) {
-    if (key.startsWith(prefix)) memory.delete(key);
-  }
-  const all = readStorage();
-  let changed = false;
-  for (const key of Object.keys(all)) {
-    if (key.startsWith(prefix)) {
-      delete all[key];
-      changed = true;
-    }
-  }
-  if (changed) writeStorage(all);
+  void invalidateIndexedDbRecordNamespace(storeConfig, memory, `${tableId}:`);
+}
+
+export async function flushVirtualTableRowsMemoryToStorage(): Promise<void> {
+  await flushIndexedDbRecordMemory(storeConfig, memory);
 }

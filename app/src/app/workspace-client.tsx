@@ -41,8 +41,13 @@ import type { ActivityLogRow } from "./activity-log-types";
 import {
   buildActivityLogsCacheKey,
   getActivityLogsCache,
+  hydrateActivityLogsCache,
   setActivityLogsCache,
 } from "@/lib/activity-logs-cache";
+import {
+  scheduleDashboardChatInboxPrefetch,
+  tableIdsInChatInboxScope,
+} from "@/lib/chat-inbox-prefetch";
 export type { ActivityLogRow } from "./activity-log-types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -2070,7 +2075,16 @@ export function WorkspaceClient({
     const cached = getActivityLogsCache(activityLogsCacheKey);
     if (cached?.logs.length) {
       setLiveActivityLogs(cached.logs);
+      return;
     }
+    let cancelled = false;
+    void hydrateActivityLogsCache(activityLogsCacheKey).then((fromIdb) => {
+      if (cancelled || !fromIdb?.logs.length) return;
+      setLiveActivityLogs(fromIdb.logs);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [activityLogsCacheKey]);
 
   useEffect(() => {
@@ -3348,6 +3362,32 @@ export function WorkspaceClient({
     () => [...vtablesForOrg, ...vtablesForProject],
     [vtablesForOrg, vtablesForProject]
   );
+
+  useEffect(() => {
+    if (activeView !== "Dashboard") return;
+    if (!canonicalOrgId || !userId) return;
+
+    const tableIds = tableIdsInChatInboxScope(
+      allAccessibleVtables,
+      canonicalOrgId,
+      selectedProjectId
+    );
+    if (tableIds.length === 0) return;
+
+    return scheduleDashboardChatInboxPrefetch({
+      organizationId: canonicalOrgId,
+      projectId: selectedProjectId,
+      tableIds,
+      virtualTables: allAccessibleVtables,
+      userId,
+    });
+  }, [
+    activeView,
+    canonicalOrgId,
+    selectedProjectId,
+    userId,
+    allAccessibleVtables,
+  ]);
 
   const vtablesAllProjectsInOrg = useMemo(() => {
     if (!canonicalOrgId) return [];

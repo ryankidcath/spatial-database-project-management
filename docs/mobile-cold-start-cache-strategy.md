@@ -112,39 +112,45 @@ Ini melanjutkan pola cache-first yang sudah ada; perubahan utama = **durability*
 
 ---
 
-### PR-D — IndexedDB untuk volume besar (effort sedang, setelah PR-A)
+### PR-D — IndexedDB untuk volume besar ✅
 
 | Item | Spesifikasi |
 |------|-------------|
-| D1 | Pesan chat > N per room, baris tabel halaman pertama |
-| D2 | Lib ringan (`idb-keyval` atau wrapper internal) |
-| D3 | Migrasi dari `localStorage` jika kuota hampir penuh |
-| D4 | TTL + eviction per org/project |
+| D1 | Pesan chat per room, baris tabel halaman pertama → IndexedDB |
+| D2 | `client-indexed-db-storage.ts` + `client-durable-record-storage.ts` (tanpa dependency baru) |
+| D3 | Migrasi otomatis dari `localStorage`/`sessionStorage` saat hydrate pertama |
+| D4 | TTL 30 menit + eviction LRU per namespace (max 32 room, 24 tabel mobile, 48 halaman desktop, 8 scope aktivitas) |
+
+**File:** `chat-room-cache.ts`, `virtual-table-mobile-rows-cache.ts`, `virtual-table-rows-cache.ts`, `activity-logs-cache.ts` + hydrate di `chat-panel`, overlay mobile, `virtual-table-view`, `workspace-client`.
 
 **QA:** org dengan banyak room/tabel tidak error `QuotaExceededError`.
 
 ---
 
-### PR-E — Service worker asset-only (effort sedang, opsional)
+### PR-E — Service worker asset-only ✅
 
 | Item | Spesifikasi |
 |------|-------------|
-| E1 | Cache JS/CSS/font hashed Next.js |
-| E2 | **Tidak** cache HTML/API dulu (hindari stale app) |
-| E3 | Strategi update: activate on reload / toast “Versi baru” |
-| E4 | Uji di Vercel + PWA installed |
+| E1 | `public/sw.js` — cache `/_next/static/*`, font, ikon PWA |
+| E2 | Bypass navigasi HTML, RSC (`RSC` header / `_rsc`), `/api/*`, `/auth/*` |
+| E3 | `PwaServiceWorker` + toast Sonner “Versi baru tersedia” → muat ulang (`SKIP_WAITING`) |
+| E4 | Hanya register di `NODE_ENV=production`; uji di Vercel + PWA installed |
+
+**File:** `public/sw.js`, `pwa-service-worker-client.ts`, `components/pwa-service-worker.tsx`, `layout.tsx`.
 
 **Dampak Supabase:** mengurangi egress asset; tidak mengubah DB.
 
 ---
 
-### PR-F — Prefetch saat app masih hidup (effort rendah, melengkapi PR-A)
+### PR-F — Prefetch saat app masih hidup ✅
 
 | Item | Spesifikasi |
 |------|-------------|
-| F1 | Saat `visibilitychange` → `hidden`, flush snapshot terbaru ke `localStorage`/IndexedDB |
-| F2 | Prefetch inbox saat user di tab Dashboard (idle) |
-| F3 | Jangan prefetch jika baterai rendah / save-data (opsional `navigator.connection`) |
+| F1 | `DurableCacheLifecycle` — `visibilitychange` + `pagehide` → `flushDurableCachesOnBackground()` |
+| F2 | `scheduleDashboardChatInboxPrefetch` di tab Dashboard (`requestIdleCallback`) |
+| F3 | `client-background-cache-policy.ts` — skip prefetch jika `saveData` atau baterai <20% & tidak charging |
+
+**File:** `client-durable-cache-flush.ts`, `chat-inbox-prefetch.ts`, `durable-cache-lifecycle.tsx`, flush per modul cache, `workspace-client.tsx`.
 
 ---
 
@@ -154,10 +160,10 @@ Ini melanjutkan pola cache-first yang sudah ada; perubahan utama = **durability*
 |-------|---------|-------------------|-------------|
 | Mobile scope wizard | `localStorage` (+ migrasi session) | **Tidak** | PR-A ✅ |
 | Chat inbox | `localStorage` + memori | **Tidak** | PR-A ✅ |
-| Chat room messages | `localStorage` + memori | **Tidak** | PR-A ✅ |
-| Activity logs | `sessionStorage` + memori | Ya | PR-A atau PR-D |
-| Virtual table rows (desktop) | `sessionStorage` + memori | Ya | PR-A (prioritas mobile overlay) |
-| Mobile table rows | `sessionStorage` + memori | Ya | PR-A |
+| Chat room messages | IndexedDB + memori (+ migrasi localStorage) | **Tidak** | PR-D ✅ |
+| Activity logs | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
+| Virtual table rows (desktop) | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
+| Mobile table rows | IndexedDB + memori (+ migrasi session) | **Tidak** | PR-D ✅ |
 | View filter/sort tabel | `localStorage` | **Tidak** | Sudah OK |
 | Tema | `localStorage` | **Tidak** | Sudah OK |
 | Auth session | Cookie (Supabase SSR) | **Tidak** | Sudah OK |

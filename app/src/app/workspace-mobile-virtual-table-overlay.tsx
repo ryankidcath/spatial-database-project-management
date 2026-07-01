@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -24,6 +31,7 @@ import {
 } from "@/lib/workspace-virtual-table-mutations";
 import {
   getVirtualTableMobileRowsCache,
+  hydrateVirtualTableMobileRowsCache,
   setVirtualTableMobileRowsCache,
   virtualTableMobileRowsCacheKey,
 } from "@/lib/virtual-table-mobile-rows-cache";
@@ -90,6 +98,20 @@ export function WorkspaceMobileVirtualTableOverlay({
   relationLabelsRef.current = relationLabels;
 
   const hasMore = rows.length < totalCount;
+
+  useLayoutEffect(() => {
+    let cancelled = false;
+    void hydrateVirtualTableMobileRowsCache(cacheKey).then((cached) => {
+      if (cancelled || !cached?.rows.length) return;
+      setRows(cached.rows);
+      setTotalCount(cached.totalCount);
+      setRelationLabels(cached.relationLabels);
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cacheKey]);
 
   useEffect(() => {
     const cached = getVirtualTableMobileRowsCache(cacheKey);

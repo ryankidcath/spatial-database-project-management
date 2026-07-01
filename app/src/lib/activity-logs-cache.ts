@@ -1,4 +1,15 @@
 import type { ActivityLogRow } from "@/app/activity-log-types";
+import {
+  DEFAULT_DURABLE_CACHE_TTL_MS,
+  isDurableSnapshotFresh,
+} from "@/lib/client-durable-storage";
+import {
+  hydrateIndexedDbRecordEntry,
+  invalidateIndexedDbRecordNamespace,
+  persistIndexedDbRecordEntry,
+  readIndexedDbRecordMapSync,
+  flushIndexedDbRecordMemory,
+} from "@/lib/client-durable-record-storage";
 
 export type ActivityLogsCacheSnapshot = {
   logs: ActivityLogRow[];
@@ -7,6 +18,14 @@ export type ActivityLogsCacheSnapshot = {
 
 const STORAGE_KEY = "pm-activity-logs-cache-v1";
 const MAX_SCOPES = 8;
+const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
+
+const storeConfig = {
+  namespace: "activity-logs-v1",
+  maxEntries: MAX_SCOPES,
+  ttlMs: CACHE_TTL_MS,
+  legacySessionStorageKey: STORAGE_KEY,
+};
 
 const memory = new Map<string, ActivityLogsCacheSnapshot>();
 
@@ -18,48 +37,31 @@ export function buildActivityLogsCacheKey(
   return `org:${organizationId}:projects:${sorted}`;
 }
 
-function readStorage(): Record<string, ActivityLogsCacheSnapshot> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, ActivityLogsCacheSnapshot>;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeStorage(data: Record<string, ActivityLogsCacheSnapshot>) {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore quota errors; memory cache still works.
-  }
-}
-
-function persist(cacheKey: string, snapshot: ActivityLogsCacheSnapshot) {
-  const all = readStorage();
-  all[cacheKey] = snapshot;
-  const keys = Object.keys(all).sort(
-    (a, b) => (all[b]?.updatedAt ?? 0) - (all[a]?.updatedAt ?? 0)
-  );
-  for (const key of keys.slice(MAX_SCOPES)) {
-    delete all[key];
-  }
-  writeStorage(all);
-}
-
 export function getActivityLogsCache(
   cacheKey: string
 ): ActivityLogsCacheSnapshot | null {
   const mem = memory.get(cacheKey);
-  if (mem) return mem;
-  const stored = readStorage()[cacheKey];
-  if (!stored) return null;
+  if (mem) {
+    if (!isDurableSnapshotFresh(mem, CACHE_TTL_MS)) {
+      memory.delete(cacheKey);
+    } else {
+      return mem;
+    }
+  }
+  const stored = readIndexedDbRecordMapSync<ActivityLogsCacheSnapshot>(
+    storeConfig
+  )[cacheKey];
+  if (!stored || !isDurableSnapshotFresh(stored, CACHE_TTL_MS)) {
+    return null;
+  }
   memory.set(cacheKey, stored);
   return stored;
+}
+
+export async function hydrateActivityLogsCache(
+  cacheKey: string
+): Promise<ActivityLogsCacheSnapshot | null> {
+  return hydrateIndexedDbRecordEntry(storeConfig, cacheKey, memory);
 }
 
 export function setActivityLogsCache(
@@ -71,26 +73,21 @@ export function setActivityLogsCache(
     updatedAt: partial.updatedAt ?? Date.now(),
   };
   memory.set(cacheKey, snapshot);
-  persist(cacheKey, snapshot);
+  void persistIndexedDbRecordEntry(storeConfig, cacheKey, snapshot, memory);
 }
 
 export function invalidateActivityLogsCache(organizationId?: string): void {
   if (!organizationId) {
-    memory.clear();
-    writeStorage({});
+    void invalidateIndexedDbRecordNamespace(storeConfig, memory);
     return;
   }
-  const prefix = `org:${organizationId}:`;
-  for (const key of memory.keys()) {
-    if (key.startsWith(prefix)) memory.delete(key);
-  }
-  const all = readStorage();
-  let changed = false;
-  for (const key of Object.keys(all)) {
-    if (key.startsWith(prefix)) {
-      delete all[key];
-      changed = true;
-    }
-  }
-  if (changed) writeStorage(all);
+  void invalidateIndexedDbRecordNamespace(
+    storeConfig,
+    memory,
+    `org:${organizationId}:`
+  );
+}
+
+export async function flushActivityLogsMemoryToStorage(): Promise<void> {
+  await flushIndexedDbRecordMemory(storeConfig, memory);
 }

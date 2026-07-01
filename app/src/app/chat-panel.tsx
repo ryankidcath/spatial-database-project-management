@@ -23,6 +23,7 @@ import {
 import {
   buildChatRoomCacheKey,
   getChatRoomCache,
+  hydrateChatRoomCache,
   mergeChatMessageTail,
   setChatRoomCache,
 } from "@/lib/chat-room-cache";
@@ -244,6 +245,21 @@ export function ChatPanel({
   roomIdRef.current = roomId;
   const lastReadAtRef = useRef(lastReadAt);
   lastReadAtRef.current = lastReadAt;
+
+  useLayoutEffect(() => {
+    let cancelled = false;
+    void hydrateChatRoomCache(cacheKey).then((cached) => {
+      if (cancelled || !cached?.messages.length) return;
+      setRoomId(cached.roomId);
+      setMessages(cached.messages);
+      setLastReadAt(cached.lastReadAt);
+      setHasOlder(cached.hasOlder);
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cacheKey]);
 
   useEffect(() => {
     setChatRoomCache(cacheKey, {

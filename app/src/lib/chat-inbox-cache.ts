@@ -117,3 +117,26 @@ export function invalidateChatInboxCache(organizationId?: string): void {
   }
   if (changed) writeStorage(all);
 }
+
+/** Flush memori inbox ke localStorage (visibility hidden). */
+export function flushChatInboxMemoryToStorage(): void {
+  if (memory.size === 0) return;
+  const all = readStorage();
+  for (const [cacheKey, snapshot] of memory.entries()) {
+    if (!isDurableSnapshotFresh(snapshot, CACHE_TTL_MS)) continue;
+    all[cacheKey] = {
+      rowEntries: stripUnreadFromEntries(snapshot.rowEntries),
+      rowTotalCount: snapshot.rowTotalCount,
+      roomMetaByKey: snapshot.roomMetaByKey,
+      mentionKeys: snapshot.mentionKeys,
+      updatedAt: snapshot.updatedAt ?? Date.now(),
+    };
+  }
+  const keys = Object.keys(all).sort(
+    (a, b) => (all[b]?.updatedAt ?? 0) - (all[a]?.updatedAt ?? 0)
+  );
+  for (const key of keys.slice(MAX_SCOPES)) {
+    delete all[key];
+  }
+  writeStorage(all);
+}
