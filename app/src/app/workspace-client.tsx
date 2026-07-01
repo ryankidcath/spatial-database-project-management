@@ -44,10 +44,7 @@ import {
   hydrateActivityLogsCache,
   setActivityLogsCache,
 } from "@/lib/activity-logs-cache";
-import {
-  scheduleDashboardChatInboxPrefetch,
-  tableIdsInChatInboxScope,
-} from "@/lib/chat-inbox-prefetch";
+import { startWorkspaceWarmup } from "@/lib/workspace-warmup";
 export type { ActivityLogRow } from "./activity-log-types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -3374,29 +3371,24 @@ export function WorkspaceClient({
   );
 
   useEffect(() => {
-    if (activeView !== "Dashboard") return;
     if (!canonicalOrgId || !userId) return;
+    if (projectsInOrg.length === 0 && !hasOrgStaffAccess) return;
 
-    const tableIds = tableIdsInChatInboxScope(
-      allAccessibleVtables,
-      canonicalOrgId,
-      selectedProjectId
-    );
-    if (tableIds.length === 0) return;
-
-    return scheduleDashboardChatInboxPrefetch({
+    return startWorkspaceWarmup({
       organizationId: canonicalOrgId,
-      projectId: selectedProjectId,
-      tableIds,
-      virtualTables: allAccessibleVtables,
+      selectedProjectId,
+      projectsInOrg,
+      virtualTables,
+      hasOrgStaffAccess,
       userId,
     });
   }, [
-    activeView,
     canonicalOrgId,
     selectedProjectId,
     userId,
-    allAccessibleVtables,
+    projectsInOrg,
+    virtualTables,
+    hasOrgStaffAccess,
   ]);
 
   const vtablesAllProjectsInOrg = useMemo(() => {
