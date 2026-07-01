@@ -8,6 +8,7 @@ import {
   type VirtualColumnForMapPopup,
 } from "@/lib/virtual-table-map-popup";
 import type { VirtualColumnRow, VirtualDataRow } from "./virtual-table-types";
+import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 
 const PREVIEW_COLUMN_COUNT = 2;
 
@@ -82,9 +83,9 @@ export function WorkspaceMobileRowList({
 
   if (loading && rows.length === 0) {
     return (
-      <p className={cn("py-8 text-center text-sm text-muted-foreground", className)}>
-        Memuat baris…
-      </p>
+      <ul className={cn("p-2", className)}>
+        <WorkspaceMobileListSkeleton count={6} variant="table-row" />
+      </ul>
     );
   }
 

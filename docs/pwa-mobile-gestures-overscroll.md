@@ -7,6 +7,7 @@
 Referensi terkait:
 
 - `docs/mobile-workspace-guide.md` — panduan layout mobile & safe area
+- `docs/mobile-cold-start-cache-strategy.md` — cold start setelah app di-kill (belum dieksekusi)
 - `docs/mobile-scope-flow-v2.md` — alur wizard org → project → workspace
 - `app/src/app/layout.tsx` — `viewportFit: cover`, `interactiveWidget: resizes-content`
 - `app/src/app/workspace-client.tsx` — shell `h-svh` + `overflow-hidden`

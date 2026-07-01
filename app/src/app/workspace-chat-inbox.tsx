@@ -39,6 +39,7 @@ import {
   setChatInboxCache,
 } from "@/lib/chat-inbox-cache";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
+import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
@@ -236,7 +237,7 @@ export function WorkspaceChatInbox({
     setRowTotalCount(cached.rowTotalCount);
     setRoomMetaByKey(cached.roomMetaByKey);
     setMentionKeys(new Set(cached.mentionKeys));
-    setRowLoading(cached.rowEntries.length === 0);
+    setRowLoading(false);
   }, [inboxCacheKey]);
 
   useEffect(() => {
@@ -353,7 +354,7 @@ export function WorkspaceChatInbox({
       if (append) setRowLoadingMore(true);
       else if (!options?.silent) {
         const cached = inboxCacheKey ? getChatInboxCache(inboxCacheKey) : null;
-        if (!cached?.rowEntries.length) setRowLoading(true);
+        if (!cached) setRowLoading(true);
       }
 
       try {
@@ -438,24 +439,22 @@ export function WorkspaceChatInbox({
   }, [organizationId]);
 
   const syncInboxFromServer = useCallback(() => {
-    void loadRoomMeta();
-    void loadMentionKeys();
-    if (mobileConversationOpenRef.current) return;
     const limit = Math.max(rowEntriesCountRef.current, ROW_INBOX_PAGE_SIZE);
-    void loadRowEntries(0, false, { silent: true, limit });
+    const tasks: Promise<unknown>[] = [loadRoomMeta(), loadMentionKeys()];
+    if (!mobileConversationOpenRef.current) {
+      tasks.push(loadRowEntries(0, false, { silent: true, limit }));
+    }
+    void Promise.all(tasks);
   }, [loadRoomMeta, loadMentionKeys, loadRowEntries]);
 
   useEffect(() => {
     const cached = inboxCacheKey ? getChatInboxCache(inboxCacheKey) : null;
-    void loadRowEntries(0, false, {
-      silent: (cached?.rowEntries.length ?? 0) > 0,
-    });
-  }, [loadRowEntries, inboxCacheKey]);
-
-  useEffect(() => {
-    void loadRoomMeta();
-    void loadMentionKeys();
-  }, [loadRoomMeta, loadMentionKeys, projectId]);
+    void Promise.all([
+      loadRowEntries(0, false, { silent: Boolean(cached) }),
+      loadRoomMeta(),
+      loadMentionKeys(),
+    ]);
+  }, [loadRowEntries, loadRoomMeta, loadMentionKeys, inboxCacheKey, projectId]);
 
   useEffect(() => {
     if (refreshEpoch < 1) return;
@@ -468,7 +467,13 @@ export function WorkspaceChatInbox({
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const schedule = () => {
       if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => syncInboxFromServer(), 300);
+      const cached = inboxCacheKey ? getChatInboxCache(inboxCacheKey) : null;
+      const delay = cached ? 300 : 0;
+      if (delay === 0) {
+        syncInboxFromServer();
+        return;
+      }
+      debounce = setTimeout(() => syncInboxFromServer(), delay);
     };
 
     window.addEventListener(CHAT_UNREAD_INVALIDATE_EVENT, schedule);
@@ -506,16 +511,16 @@ export function WorkspaceChatInbox({
       window.clearInterval(pollId);
       if (supabase && channel) void supabase.removeChannel(channel);
     };
-  }, [organizationId, userId, syncInboxFromServer]);
+  }, [organizationId, userId, syncInboxFromServer, inboxCacheKey]);
 
   useEffect(() => {
     if (mobileConversationWasOpenRef.current && !mobileConversationOpen) {
       const cached = inboxCacheKey ? getChatInboxCache(inboxCacheKey) : null;
-      void loadRowEntries(0, false, {
-        silent: (cached?.rowEntries.length ?? 0) > 0,
-      });
-      void loadRoomMeta();
-      void loadMentionKeys();
+      void Promise.all([
+        loadRowEntries(0, false, { silent: Boolean(cached) }),
+        loadRoomMeta(),
+        loadMentionKeys(),
+      ]);
     }
     mobileConversationWasOpenRef.current = mobileConversationOpen;
   }, [mobileConversationOpen, loadRowEntries, loadRoomMeta, loadMentionKeys, inboxCacheKey]);
@@ -726,19 +731,7 @@ export function WorkspaceChatInbox({
         </div>
       </div>
       <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
-        {rowLoading && entries.length === staticEntries.length ? (
-          <li className="flex justify-center py-6">
-            <Spinner className="size-5" />
-          </li>
-        ) : null}
-        {filteredEntries.length === 0 ? (
-          <li className="px-2 py-6 text-center text-sm text-muted-foreground">
-            {entries.length === 0
-              ? "Belum ada room obrolan di scope ini."
-              : "Tidak ada room yang cocok dengan pencarian."}
-          </li>
-        ) : (
-          filteredEntries.map((entry) => {
+        {filteredEntries.map((entry) => {
             const active = entry.key === selectedKey;
             const hasUnreadMention = mentionKeys.has(entry.key);
             const previewText =
@@ -802,8 +795,17 @@ export function WorkspaceChatInbox({
                 </button>
               </li>
             );
-          })
-        )}
+          })}
+        {rowLoading && rowEntries.length === 0 ? (
+          <WorkspaceMobileListSkeleton count={5} variant="inbox" />
+        ) : null}
+        {!rowLoading && filteredEntries.length === 0 ? (
+          <li className="px-2 py-6 text-center text-sm text-muted-foreground">
+            {entries.length === 0
+              ? "Belum ada room obrolan di scope ini."
+              : "Tidak ada room yang cocok dengan pencarian."}
+          </li>
+        ) : null}
         {hasMoreRowEntries && !roomSearchQuery.trim() ? (
           <li className="px-2 py-2">
             <button

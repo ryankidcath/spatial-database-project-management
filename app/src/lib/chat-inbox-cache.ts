@@ -1,4 +1,10 @@
 import type { ChatInboxEntry } from "@/app/workspace-chat-inbox-types";
+import {
+  DEFAULT_DURABLE_CACHE_TTL_MS,
+  isDurableSnapshotFresh,
+  readDurableJsonRecord,
+  writeDurableJsonRecord,
+} from "@/lib/client-durable-storage";
 
 export type ChatInboxRoomMeta = {
   lastActivityAt: string;
@@ -14,7 +20,9 @@ export type ChatInboxCacheSnapshot = {
 };
 
 const STORAGE_KEY = "pm-chat-inbox-cache-v1";
+const LEGACY_SESSION_KEY = STORAGE_KEY;
 const MAX_SCOPES = 12;
+const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
 
 const memory = new Map<string, ChatInboxCacheSnapshot>();
 
@@ -28,24 +36,14 @@ export function buildChatInboxCacheKey(input: {
 }
 
 function readStorage(): Record<string, ChatInboxCacheSnapshot> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, ChatInboxCacheSnapshot>;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+  return readDurableJsonRecord<ChatInboxCacheSnapshot>(STORAGE_KEY, {
+    ttlMs: CACHE_TTL_MS,
+    legacySessionKey: LEGACY_SESSION_KEY,
+  });
 }
 
 function writeStorage(data: Record<string, ChatInboxCacheSnapshot>) {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore quota errors; memory cache still works.
-  }
+  writeDurableJsonRecord(STORAGE_KEY, data);
 }
 
 function persist(cacheKey: string, snapshot: ChatInboxCacheSnapshot) {
@@ -69,9 +67,17 @@ export function getChatInboxCache(
   cacheKey: string
 ): ChatInboxCacheSnapshot | null {
   const mem = memory.get(cacheKey);
-  if (mem) return mem;
+  if (mem) {
+    if (!isDurableSnapshotFresh(mem, CACHE_TTL_MS)) {
+      memory.delete(cacheKey);
+    } else {
+      return mem;
+    }
+  }
   const stored = readStorage()[cacheKey];
-  if (!stored) return null;
+  if (!stored || !isDurableSnapshotFresh(stored, CACHE_TTL_MS)) {
+    return null;
+  }
   memory.set(cacheKey, stored);
   return stored;
 }

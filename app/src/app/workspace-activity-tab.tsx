@@ -11,6 +11,7 @@ import {
 } from "@/lib/audit-activity-display";
 import { cn } from "@/lib/utils";
 import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
+import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 
 type Props = {
   activityLogs: ActivityLogRow[];
@@ -22,6 +23,7 @@ type Props = {
   virtualTableIds: Set<string>;
   virtualTableNameById: Map<string, string>;
   isBelowMd: boolean;
+  isLoading?: boolean;
   onOpenTable: (tableId: string) => void;
   onOpenRow: (rowId: string, tableIdHint: string | null) => void;
   onOpenProject?: (projectId: string) => void;
@@ -37,6 +39,7 @@ export function WorkspaceActivityTab({
   virtualTableIds,
   virtualTableNameById,
   isBelowMd,
+  isLoading = false,
   onOpenTable,
   onOpenRow,
   onOpenProject,
@@ -109,7 +112,10 @@ export function WorkspaceActivityTab({
       ) : null}
 
       <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
-        {filtered.length === 0 ? (
+        {isLoading && filtered.length === 0 ? (
+          <WorkspaceMobileListSkeleton count={6} variant="activity" />
+        ) : null}
+        {!isLoading && filtered.length === 0 ? (
           <li className="px-2 py-8 text-center text-sm text-muted-foreground">
             Belum ada aktivitas untuk filter ini.
           </li>

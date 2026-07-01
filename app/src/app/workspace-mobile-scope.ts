@@ -1,4 +1,10 @@
 /** Fase wizard scope di mobile (`< md`). Desktop memakai sidebar. */
+import {
+  readDurableJsonValue,
+  removeDurableJsonValue,
+  writeDurableJsonValue,
+} from "@/lib/client-durable-storage";
+
 export type MobileScopePhase = "org" | "project" | "workspace";
 
 export const MOBILE_SCOPE_SESSION_KEY = "spatial-pm-mobile-scope-v1";
@@ -11,45 +17,42 @@ export type MobileScopeSession = {
 
 export function readMobileScopeSession(): MobileScopeSession | null {
   if (typeof window === "undefined") return null;
-  try {
-    const raw = sessionStorage.getItem(MOBILE_SCOPE_SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as MobileScopeSession;
-    if (
-      parsed?.phase !== "org" &&
-      parsed?.phase !== "project" &&
-      parsed?.phase !== "workspace"
-    ) {
-      return null;
-    }
-    return {
-      phase: parsed.phase,
-      orgId:
-        typeof parsed.orgId === "string" && parsed.orgId ? parsed.orgId : null,
-      projectId:
-        typeof parsed.projectId === "string" && parsed.projectId
-          ? parsed.projectId
-          : null,
-    };
-  } catch {
+  const parsed = readDurableJsonValue<MobileScopeSession>(
+    MOBILE_SCOPE_SESSION_KEY,
+    { legacySessionKey: MOBILE_SCOPE_SESSION_KEY }
+  );
+  if (
+    !parsed ||
+    (parsed.phase !== "org" &&
+      parsed.phase !== "project" &&
+      parsed.phase !== "workspace")
+  ) {
     return null;
   }
+  return {
+    phase: parsed.phase,
+    orgId:
+      typeof parsed.orgId === "string" && parsed.orgId ? parsed.orgId : null,
+    projectId:
+      typeof parsed.projectId === "string" && parsed.projectId
+        ? parsed.projectId
+        : null,
+  };
 }
 
 export function writeMobileScopeSession(session: MobileScopeSession): void {
   if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(MOBILE_SCOPE_SESSION_KEY, JSON.stringify(session));
-  } catch {
-    /* quota / private mode */
-  }
-}
-
-export function clearMobileScopeSession(): void {
-  if (typeof window === "undefined") return;
+  writeDurableJsonValue(MOBILE_SCOPE_SESSION_KEY, session);
   try {
     sessionStorage.removeItem(MOBILE_SCOPE_SESSION_KEY);
   } catch {
     /* ignore */
   }
+}
+
+export function clearMobileScopeSession(): void {
+  if (typeof window === "undefined") return;
+  removeDurableJsonValue(MOBILE_SCOPE_SESSION_KEY, {
+    legacySessionKey: MOBILE_SCOPE_SESSION_KEY,
+  });
 }

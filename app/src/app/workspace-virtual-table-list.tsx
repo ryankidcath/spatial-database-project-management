@@ -5,6 +5,8 @@ import { VirtualTableChatUnreadBadge } from "./virtual-table-chat-unread-context
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import { cn } from "@/lib/utils";
 import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
+import { Skeleton } from "@/components/ui/skeleton";
+import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 
 type TableListProps = {
   sectionTitle: string;
@@ -12,6 +14,7 @@ type TableListProps = {
   virtualColumnsByTableId: Map<string, VirtualColumnRow[]>;
   onOpenTable: (slug: string) => void;
   className?: string;
+  loading?: boolean;
 };
 
 function VirtualTableListRow({
@@ -64,7 +67,21 @@ export function VirtualTableMobileList({
   virtualColumnsByTableId,
   onOpenTable,
   className,
+  loading = false,
 }: TableListProps) {
+  if (loading && tables.length === 0) {
+    return (
+      <div className={cn("min-w-0", className)}>
+        <div className={WORKSPACE_TAB_LIST_HEADER_CLASS}>
+          <Skeleton className="h-3 w-36" />
+        </div>
+        <ul className="p-2">
+          <WorkspaceMobileListSkeleton count={4} variant="inbox" />
+        </ul>
+      </div>
+    );
+  }
+
   if (tables.length === 0) return null;
 
   return (

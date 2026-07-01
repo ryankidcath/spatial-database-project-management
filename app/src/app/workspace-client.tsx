@@ -34,6 +34,9 @@ import {
 import { toast } from "sonner";
 import { WorkspaceActivityTab } from "./workspace-activity-tab";
 import { fetchActivityLogsAction } from "./fetch-activity-logs-action";
+import { useWorkspaceDeferredPayload } from "./use-workspace-deferred-payload";
+import { viewNeedsDeferredPayload } from "./workspace-deferred-payload";
+import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 import type { ActivityLogRow } from "./activity-log-types";
 import {
   buildActivityLogsCacheKey,
@@ -1705,40 +1708,40 @@ function geometryKeyStatusCell(
 export function WorkspaceClient({
   organizations,
   projects,
-  statuses,
-  issues,
-  projectMembers = [],
+  statuses: shellStatuses,
+  issues: shellIssues,
+  projectMembers: shellProjectMembers,
   organizationMembers = [],
-  footprints,
-  bidangHasilUkurMap,
-  issueGeometryFeatureMap = [],
-  issueFeatureAttributes = [],
+  footprints: shellFootprints,
+  bidangHasilUkurMap: shellBidangHasilUkurMap,
+  issueGeometryFeatureMap: shellIssueGeometryFeatureMap = [],
+  issueFeatureAttributes: shellIssueFeatureAttributes = [],
   moduleRegistry: _moduleRegistry,
   organizationModules,
-  berkasPermohonan,
-  legalisasiGu,
-  legalisasiGuFiles,
-  legalisasiGuHistory,
-  permohonanInfoSpasial,
-  pengukuranLapangan,
-  pengukuranSurveyor,
-  pengukuranAlat,
-  pengukuranDokumen,
-  alatUkur,
-  plmBerkasStatusSummary = [],
-  plmLegalisasiTahapSummary = [],
-  plmPengukuranStatusSummary = [],
-  financeInvoices = [],
-  financeInvoiceItems = [],
-  financePembayaran = [],
+  berkasPermohonan: shellBerkasPermohonan,
+  legalisasiGu: shellLegalisasiGu,
+  legalisasiGuFiles: shellLegalisasiGuFiles,
+  legalisasiGuHistory: shellLegalisasiGuHistory,
+  permohonanInfoSpasial: shellPermohonanInfoSpasial,
+  pengukuranLapangan: shellPengukuranLapangan,
+  pengukuranSurveyor: shellPengukuranSurveyor,
+  pengukuranAlat: shellPengukuranAlat,
+  pengukuranDokumen: shellPengukuranDokumen,
+  alatUkur: shellAlatUkur,
+  plmBerkasStatusSummary: shellPlmBerkasStatusSummary = [],
+  plmLegalisasiTahapSummary: shellPlmLegalisasiTahapSummary = [],
+  plmPengukuranStatusSummary: shellPlmPengukuranStatusSummary = [],
+  financeInvoices: shellFinanceInvoices = [],
+  financeInvoiceItems: shellFinanceInvoiceItems = [],
+  financePembayaran: shellFinancePembayaran = [],
   activityLogs = [],
-  userPresence = [],
-  fetchError,
+  userPresence: shellUserPresence = [],
+  fetchError: shellFetchError,
   userEmail,
   userId = null,
   virtualTables = [],
   virtualColumns = [],
-  virtualDashboardsByProjectId = {},
+  virtualDashboardsByProjectId: shellVirtualDashboardsByProjectId = {},
   joinError,
 }: Props) {
   const router = useRouter();
@@ -1754,8 +1757,9 @@ export function WorkspaceClient({
   const [, startStatusRefreshTransition] = useTransition();
   const [projectPropertiesOpen, setProjectPropertiesOpen] = useState(false);
   const [projectPropertiesPending, setProjectPropertiesPending] = useState(false);
-  const [liveUserPresence, setLiveUserPresence] = useState<UserPresenceRow[]>(userPresence);
+  const [liveUserPresence, setLiveUserPresence] = useState<UserPresenceRow[]>(shellUserPresence);
   const [liveActivityLogs, setLiveActivityLogs] = useState<ActivityLogRow[]>(activityLogs);
+  const [activityLogsLoading, setActivityLogsLoading] = useState(false);
   const [tableTaskDialogOpen, setTableTaskDialogOpen] = useState(false);
   const [monitoringAddChildOpen, setMonitoringAddChildOpen] = useState(false);
   const [monitoringAddChildFormNonce, setMonitoringAddChildFormNonce] = useState(0);
@@ -2003,7 +2007,7 @@ export function WorkspaceClient({
     () => new Set()
   );
   const [collapsedIssueIds, setCollapsedIssueIds] = useState<Set<string>>(() =>
-    parentIssueIdsWithChildren(issues)
+    parentIssueIdsWithChildren(shellIssues)
   );
   const isBelowMd = useIsBelowMd();
   const [mobileChatKeyboardOpen, setMobileChatKeyboardOpen] = useState(false);
@@ -2020,8 +2024,8 @@ export function WorkspaceClient({
   }, [isBelowMd]);
 
   useEffect(() => {
-    setLiveUserPresence(userPresence);
-  }, [userPresence]);
+    setLiveUserPresence(shellUserPresence);
+  }, [shellUserPresence]);
 
   const orgsWithProjects = useMemo(() => {
     const ids = new Set(projects.map((p) => p.organization_id));
@@ -2089,6 +2093,92 @@ export function WorkspaceClient({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     projectIdFromSearchParams
   );
+
+  const activeViewFromUrl = useMemo((): ViewId => {
+    const viewParam = searchParams.get("view");
+    const raw = parseViewParam(viewParam) ?? "Dashboard";
+    const enabled = effectiveEnabledModuleCodes(
+      canonicalOrgId,
+      organizationModules
+    );
+    if (!isViewAllowedForModules(raw, enabled)) return "Dashboard";
+    return raw;
+  }, [searchParams, canonicalOrgId, organizationModules]);
+  const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
+  committedViewRef.current = activeViewFromUrl;
+
+  const deferredWorkspace = useWorkspaceDeferredPayload({
+    issues: shellIssues,
+    statuses: shellStatuses,
+    projectMembers: shellProjectMembers,
+    footprints: shellFootprints,
+    bidangHasilUkurMap: shellBidangHasilUkurMap,
+    issueGeometryFeatureMap: shellIssueGeometryFeatureMap,
+    issueFeatureAttributes: shellIssueFeatureAttributes,
+    berkasPermohonan: shellBerkasPermohonan,
+    legalisasiGu: shellLegalisasiGu,
+    legalisasiGuFiles: shellLegalisasiGuFiles,
+    legalisasiGuHistory: shellLegalisasiGuHistory,
+    permohonanInfoSpasial: shellPermohonanInfoSpasial,
+    pengukuranLapangan: shellPengukuranLapangan,
+    pengukuranSurveyor: shellPengukuranSurveyor,
+    pengukuranAlat: shellPengukuranAlat,
+    pengukuranDokumen: shellPengukuranDokumen,
+    alatUkur: shellAlatUkur,
+    plmBerkasStatusSummary: shellPlmBerkasStatusSummary,
+    plmLegalisasiTahapSummary: shellPlmLegalisasiTahapSummary,
+    plmPengukuranStatusSummary: shellPlmPengukuranStatusSummary,
+    financeInvoices: shellFinanceInvoices,
+    financeInvoiceItems: shellFinanceInvoiceItems,
+    financePembayaran: shellFinancePembayaran,
+    userPresence: shellUserPresence,
+    virtualDashboardsByProjectId: shellVirtualDashboardsByProjectId,
+    activeView,
+    canonicalOrgId,
+    selectedProjectId,
+    projectsInOrg,
+    organizationMembers,
+    organizationModules,
+    shellFetchError,
+  });
+
+  const {
+    issues,
+    statuses,
+    projectMembers,
+    footprints,
+    bidangHasilUkurMap,
+    issueGeometryFeatureMap,
+    issueFeatureAttributes,
+    berkasPermohonan,
+    legalisasiGu,
+    legalisasiGuFiles,
+    legalisasiGuHistory,
+    permohonanInfoSpasial,
+    pengukuranLapangan,
+    pengukuranSurveyor,
+    pengukuranAlat,
+    pengukuranDokumen,
+    alatUkur,
+    plmBerkasStatusSummary,
+    plmLegalisasiTahapSummary,
+    plmPengukuranStatusSummary,
+    financeInvoices,
+    financeInvoiceItems,
+    financePembayaran,
+    userPresence,
+    virtualDashboardsByProjectId,
+    fetchError,
+    loading: deferredPayloadLoading,
+  } = deferredWorkspace;
+
+  useEffect(() => {
+    setLiveUserPresence(userPresence);
+  }, [userPresence]);
+
+  useEffect(() => {
+    setCollapsedIssueIds(parentIssueIdsWithChildren(issues));
+  }, [issues, selectedProjectId]);
 
   const showMobileScopeWizard = isBelowMd && mobileScopePhase !== "workspace";
 
@@ -2325,19 +2415,6 @@ export function WorkspaceClient({
     return s;
   }, [bidangHasilUkurMap, selectedProjectId]);
 
-  const activeViewFromUrl = useMemo((): ViewId => {
-    const viewParam = searchParams.get("view");
-    const raw = parseViewParam(viewParam) ?? "Dashboard";
-    const enabled = effectiveEnabledModuleCodes(
-      canonicalOrgId,
-      organizationModules
-    );
-    if (!isViewAllowedForModules(raw, enabled)) return "Dashboard";
-    return raw;
-  }, [searchParams, canonicalOrgId, organizationModules]);
-  const [activeView, setActiveView] = useState<ViewId>(activeViewFromUrl);
-  committedViewRef.current = activeViewFromUrl;
-
   const applyActiveView = useCallback((v: ViewId) => {
     committedViewRef.current = v;
     setActiveView(v);
@@ -2354,7 +2431,10 @@ export function WorkspaceClient({
   }, [canonicalOrgId, projectsInOrg, activityLogsCacheKey]);
 
   useEffect(() => {
-    if (activeView !== "Aktivitas") return;
+    if (activeView !== "Aktivitas") {
+      setActivityLogsLoading(false);
+      return;
+    }
     const cached =
       activityLogsCacheKey != null
         ? getActivityLogsCache(activityLogsCacheKey)
@@ -2362,10 +2442,20 @@ export function WorkspaceClient({
     if (cached?.logs.length) {
       setLiveActivityLogs(cached.logs);
     }
-    void refreshActivityLogs();
+    const showSkeleton = !cached?.logs.length && activityLogs.length === 0;
+    if (showSkeleton) setActivityLogsLoading(true);
+
+    let cancelled = false;
+    void refreshActivityLogs().finally(() => {
+      if (!cancelled) setActivityLogsLoading(false);
+    });
     const timer = setInterval(() => void refreshActivityLogs(), 20_000);
-    return () => clearInterval(timer);
-  }, [activeView, refreshActivityLogs, activityLogsCacheKey]);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      setActivityLogsLoading(false);
+    };
+  }, [activeView, refreshActivityLogs, activityLogsCacheKey, activityLogs.length]);
 
   /** Sinkron dari URL hanya saat navigasi eksternal (back/forward, notifikasi, RSC). */
   useEffect(() => {
@@ -5556,6 +5646,11 @@ export function WorkspaceClient({
                     ? "Pilih project dari menu scope di header untuk melihat dashboard."
                     : "Pilih project di sidebar untuk melihat dashboard."}
                 </p>
+              ) : deferredPayloadLoading &&
+                viewNeedsDeferredPayload("Dashboard") ? (
+                <div className="mt-5 px-1" aria-busy aria-label="Memuat dashboard">
+                  <WorkspaceMobileListSkeleton count={5} variant="activity" />
+                </div>
               ) : (
                 <VirtualDashboardView
                   key={selectedProjectId}
@@ -5644,6 +5739,7 @@ export function WorkspaceClient({
                   virtualTableIds={virtualTableIds}
                   virtualTableNameById={virtualTableNameById}
                   isBelowMd={isBelowMd}
+                  isLoading={activityLogsLoading}
                   onOpenTable={openActivityVirtualTable}
                   onOpenRow={openActivityVirtualRow}
                   onOpenProject={openActivityProject}
