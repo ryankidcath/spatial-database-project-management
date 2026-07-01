@@ -8,7 +8,6 @@ const MIN_PLAY_INTERVAL_MS = 400;
 const recentKeys = new Map<string, number>();
 let lastPlayAt = 0;
 let audioContext: AudioContext | null = null;
-let unlocked = false;
 
 function pruneDedupe(): void {
   const now = Date.now();
@@ -64,17 +63,20 @@ export function setNotificationSoundEnabled(enabled: boolean): void {
   }
 }
 
-/** Panggil sekali setelah interaksi user (autoplay policy). */
-export async function unlockNotificationSound(): Promise<void> {
-  if (unlocked) return;
+async function ensureAudioContextReady(): Promise<AudioContext | null> {
   const ctx = getAudioContext();
-  if (!ctx) return;
+  if (!ctx) return null;
   try {
     if (ctx.state === "suspended") await ctx.resume();
-    unlocked = true;
   } catch {
-    /* ignore */
+    return null;
   }
+  return ctx.state === "running" ? ctx : null;
+}
+
+/** Panggil pada interaksi user (autoplay policy); boleh dipanggil berulang. */
+export async function unlockNotificationSound(): Promise<void> {
+  await ensureAudioContextReady();
 }
 
 function vibrateShort(): void {
@@ -86,14 +88,12 @@ function vibrateShort(): void {
 }
 
 function playToneSequence(
+  ctx: AudioContext,
   frequencies: number[],
   toneMs: number,
   gapMs: number,
   gainPeak: number
 ): void {
-  const ctx = getAudioContext();
-  if (!ctx || ctx.state === "suspended") return;
-
   let offset = ctx.currentTime;
   for (const freq of frequencies) {
     const osc = ctx.createOscillator();
@@ -111,14 +111,24 @@ function playToneSequence(
   }
 }
 
-export function playChatNotificationSound(messageId: string): void {
-  if (!shouldPlay(`chat:${messageId}`)) return;
-  playToneSequence([880, 1175], 90, 50, 0.12);
+async function playNotificationSound(
+  dedupeKey: string,
+  frequencies: number[],
+  toneMs: number,
+  gapMs: number,
+  gainPeak: number
+): Promise<void> {
+  if (!shouldPlay(dedupeKey)) return;
+  const ctx = await ensureAudioContextReady();
+  if (!ctx) return;
+  playToneSequence(ctx, frequencies, toneMs, gapMs, gainPeak);
   vibrateShort();
 }
 
+export function playChatNotificationSound(messageId: string): void {
+  void playNotificationSound(`chat:${messageId}`, [880, 1175], 90, 50, 0.12);
+}
+
 export function playWorkspaceNotificationSound(notificationId: string): void {
-  if (!shouldPlay(`workspace:${notificationId}`)) return;
-  playToneSequence([660], 140, 0, 0.1);
-  vibrateShort();
+  void playNotificationSound(`workspace:${notificationId}`, [660], 140, 0, 0.1);
 }

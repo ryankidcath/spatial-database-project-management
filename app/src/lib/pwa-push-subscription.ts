@@ -5,6 +5,17 @@ import {
 
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
 
+const NO_RETRY_REASONS = new Set([
+  "non_production",
+  "unsupported",
+  "permission_denied",
+]);
+
+export function isRetryablePushSubscriptionFailure(reason?: string): boolean {
+  if (!reason) return true;
+  return !NO_RETRY_REASONS.has(reason);
+}
+
 function isPushSupported(): boolean {
   return (
     typeof window !== "undefined" &&

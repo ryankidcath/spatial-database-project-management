@@ -3,17 +3,23 @@
 import { useEffect } from "react";
 import { unlockNotificationSound } from "@/lib/notification-sound";
 
-/** Unlock AudioContext pada interaksi pertama (kebijakan autoplay browser). */
+/** Keep AudioContext siap (autoplay policy — resume saat interaksi / tab visible). */
 export function NotificationSoundUnlock() {
   useEffect(() => {
     const unlock = () => {
       void unlockNotificationSound();
     };
-    window.addEventListener("pointerdown", unlock, { once: true, passive: true });
-    window.addEventListener("keydown", unlock, { once: true });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") unlock();
+    };
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock);
+    document.addEventListener("visibilitychange", onVisible);
+    unlock();
     return () => {
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
