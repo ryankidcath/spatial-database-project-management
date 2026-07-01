@@ -11,6 +11,7 @@ import {
 } from "@/lib/client-durable-storage";
 import {
   buildChatInboxCacheKey,
+  CHAT_INBOX_ROW_PAGE_SIZE,
   getChatInboxCache,
   setChatInboxCache,
 } from "@/lib/chat-inbox-cache";
@@ -20,7 +21,6 @@ import {
   fetchChatInboxUnreadMentionKeysClient,
 } from "@/lib/chat-client";
 
-const ROW_INBOX_PAGE_SIZE = 25;
 const PREFETCH_IDLE_TIMEOUT_MS = 4000;
 const PREFETCH_FALLBACK_DELAY_MS = 800;
 
@@ -74,7 +74,7 @@ export async function prefetchChatInboxIfNeeded(input: {
     const [rowsRes, metaRes, mentionRes] = await Promise.all([
       fetchChatInboxActiveRowRoomsClient({
         tableIds: input.tableIds,
-        limit: ROW_INBOX_PAGE_SIZE,
+        limit: CHAT_INBOX_ROW_PAGE_SIZE,
         offset: 0,
       }),
       fetchChatInboxRoomMetaClient({ organizationId: input.organizationId }),

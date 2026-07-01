@@ -21,10 +21,27 @@ export type ChatInboxCacheSnapshot = {
   updatedAt: number;
 };
 
+import { resolveSnapshotFetchLimit } from "@/lib/client-snapshot-cache-pattern";
+
 const STORAGE_KEY = "pm-chat-inbox-cache-v1";
 const LEGACY_SESSION_KEY = STORAGE_KEY;
 const MAX_SCOPES = 12;
 const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
+
+/** Halaman room baris aktif di inbox (mobile + prefetch). */
+export const CHAT_INBOX_ROW_PAGE_SIZE = 25;
+
+/** Selaraskan limit fetch dengan jumlah yang sudah di-cache / dimuat (PR-I fix). */
+export function inboxRowFetchLimit(
+  cachedRowCount: number,
+  loadedRowCount: number
+): number {
+  return resolveSnapshotFetchLimit(
+    cachedRowCount,
+    loadedRowCount,
+    CHAT_INBOX_ROW_PAGE_SIZE
+  );
+}
 
 const memory = new Map<string, ChatInboxCacheSnapshot>();
 

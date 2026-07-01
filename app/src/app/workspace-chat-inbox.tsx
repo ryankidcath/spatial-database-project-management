@@ -35,7 +35,9 @@ import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import { CHAT_UNREAD_INVALIDATE_EVENT } from "@/lib/chat-unread-invalidate";
 import {
   buildChatInboxCacheKey,
+  CHAT_INBOX_ROW_PAGE_SIZE,
   getChatInboxCache,
+  inboxRowFetchLimit,
   setChatInboxCache,
 } from "@/lib/chat-inbox-cache";
 import { PUSH_CACHE_APPLIED_EVENT } from "@/lib/push-cache-contract";
@@ -128,7 +130,6 @@ function inboxPreviewLine(preview: string | null | undefined): string {
   return text;
 }
 
-const ROW_INBOX_PAGE_SIZE = 25;
 const INBOX_LIVE_POLL_MS = 3000;
 
 export function WorkspaceChatInbox({
@@ -370,7 +371,7 @@ export function WorkspaceChatInbox({
         return;
       }
 
-      const limit = options?.limit ?? ROW_INBOX_PAGE_SIZE;
+      const limit = options?.limit ?? CHAT_INBOX_ROW_PAGE_SIZE;
 
       if (append) setRowLoadingMore(true);
       else if (!options?.silent) {
@@ -459,19 +460,31 @@ export function WorkspaceChatInbox({
     }
   }, [organizationId]);
 
+  const resolveInboxRowFetchLimit = useCallback(() => {
+    const cached = inboxCacheKey ? getChatInboxCache(inboxCacheKey) : null;
+    return inboxRowFetchLimit(
+      cached?.rowEntries.length ?? 0,
+      rowEntriesCountRef.current
+    );
+  }, [inboxCacheKey]);
+
   const syncInboxFromServer = useCallback(() => {
-    const limit = Math.max(rowEntriesCountRef.current, ROW_INBOX_PAGE_SIZE);
+    const limit = resolveInboxRowFetchLimit();
     const tasks: Promise<unknown>[] = [loadRoomMeta(), loadMentionKeys()];
     if (!mobileConversationOpenRef.current) {
       tasks.push(loadRowEntries(0, false, { silent: true, limit }));
     }
     void Promise.all(tasks);
-  }, [loadRoomMeta, loadMentionKeys, loadRowEntries]);
+  }, [loadRoomMeta, loadMentionKeys, loadRowEntries, resolveInboxRowFetchLimit]);
 
   useEffect(() => {
     const cached = inboxCacheKey ? getChatInboxCache(inboxCacheKey) : null;
+    const limit = inboxRowFetchLimit(
+      cached?.rowEntries.length ?? 0,
+      rowEntriesCountRef.current
+    );
     void Promise.all([
-      loadRowEntries(0, false, { silent: Boolean(cached) }),
+      loadRowEntries(0, false, { silent: Boolean(cached), limit }),
       loadRoomMeta(),
       loadMentionKeys(),
     ]);
@@ -537,8 +550,12 @@ export function WorkspaceChatInbox({
   useEffect(() => {
     if (mobileConversationWasOpenRef.current && !mobileConversationOpen) {
       const cached = inboxCacheKey ? getChatInboxCache(inboxCacheKey) : null;
+      const limit = inboxRowFetchLimit(
+        cached?.rowEntries.length ?? 0,
+        rowEntriesCountRef.current
+      );
       void Promise.all([
-        loadRowEntries(0, false, { silent: Boolean(cached) }),
+        loadRowEntries(0, false, { silent: Boolean(cached), limit }),
         loadRoomMeta(),
         loadMentionKeys(),
       ]);

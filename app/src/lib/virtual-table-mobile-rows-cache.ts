@@ -11,6 +11,8 @@ import {
   flushIndexedDbRecordMemory,
 } from "@/lib/client-durable-record-storage";
 
+import { resolveSnapshotFetchLimit } from "@/lib/client-snapshot-cache-pattern";
+
 export type VirtualTableMobileRowsCacheEntry = {
   rows: VirtualDataRow[];
   totalCount: number;
@@ -21,6 +23,20 @@ export type VirtualTableMobileRowsCacheEntry = {
 const STORAGE_KEY = "pm-vtable-mobile-rows-cache-v1";
 const MAX_TABLES = 24;
 const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
+
+/** Baris per batch fetch mobile (overlay + warm-up). */
+export const VIRTUAL_TABLE_MOBILE_ROW_PAGE_SIZE = 50;
+
+export function virtualTableMobileRowFetchLimit(
+  cachedRowCount: number,
+  loadedRowCount: number
+): number {
+  return resolveSnapshotFetchLimit(
+    cachedRowCount,
+    loadedRowCount,
+    VIRTUAL_TABLE_MOBILE_ROW_PAGE_SIZE
+  );
+}
 
 const storeConfig = {
   namespace: "vtable-mobile-rows-v1",

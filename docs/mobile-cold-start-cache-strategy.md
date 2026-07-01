@@ -379,6 +379,37 @@ APK dengan SQLite native + background task — keluar dari scope PWA murni.
 
 ---
 
+## Pola snapshot + revalidate (seragam)
+
+File kontrak: `app/src/lib/client-snapshot-cache-pattern.ts`.
+
+| Langkah | Inbox (`workspace-chat-inbox.tsx`) | Tabel mobile (`workspace-mobile-virtual-table-overlay.tsx`) |
+|---------|--------------------------------------|-------------------------------------------------------------|
+| 1 Paint | `useLayoutEffect` + `getChatInboxCache` | `useLayoutEffect` + `hydrateVirtualTableMobileRowsCache` |
+| 2 Revalidate | `inboxRowFetchLimit(cached, loaded)` | `virtualTableMobileRowFetchLimit(cached, loaded)` |
+| 3 Persist | `setChatInboxCache` on state change | `setVirtualTableMobileRowsCache` on state change |
+
+Revalidate **tidak boleh** memotong jumlah item yang sudah pernah dimuat (Muat lebih). Perbaikan inbox: mount/sync memakai limit yang sama dengan `syncInboxFromServer`.
+
+---
+
+## Batas cache platform mobile (PWA / browser) — umum
+
+Ini **bukan** kebijakan Spatial PM saja, melainkan langit-langit teknis di perangkat user.
+
+| Dimensi | Apa batasnya? | Catatan |
+|---------|---------------|---------|
+| **Ukuran (size)** | **Ya, utama** | `localStorage` / `sessionStorage` ~**5 MB** per origin. **IndexedDB** jauh lebih besar (sering puluhan % disk kosong, praktis **ratusan MB–GB** di Chromium; iOS lebih ketat & bisa purge). **Cache API** (SW) berbagi kuota “storage bucket” dengan IDB. |
+| **Waktu (time)** | **Tidak ada TTL bawaan browser** | Data bisa tinggal sampai dihapus app/user. **iOS/Safari** kadang purge storage PWA yang lama tidak dibuka (~7 hari tidak dipakai, tidak pasti). TTL 30 menit di app kita = **kebijakan aplikasi**, bukan OS. |
+| **Jumlah aksi / item** | **Tidak ada cap global** | Browser tidak membatasi “maks 1000 write”. Yang ada: **QuotaExceededError** saat penuh, eviction di bawah tekanan storage. |
+| **Background** | **Terbatas** | Background Sync / periodic sync hanya **Chromium**; iOS hampir tidak. Bukan batas ukuran, tapi **kapan** kode boleh jalan. |
+| **Mode private** | **Persistensi lemah/nol** | Incognito: data hilang saat sesi ditutup. |
+| **Eviction** | Tekanan disk / storage penuh | Browser buang origin lama (LRU). `navigator.storage.estimate()` untuk cek terpakai. |
+
+**Implikasi produk:** snapshot besar → **IndexedDB**; metadata kecil → `localStorage`; jangan andalkan cache tanpa batas waktu di iOS; selalu **revalidate** agar data tidak dianggap benar selamanya.
+
+---
+
 ## Pengujian QA (setelah implementasi)
 
 | # | Skenario | Harapan |
@@ -392,6 +423,7 @@ APK dengan SQLite native + background task — keluar dari scope PWA murni.
 | 6 | Dashboard Supabase | Read count cold start tidak melonjak tak terkendali |
 | 7 | PR-G2: tunggu 30s di Dashboard → buka Chat project lain | Inbox project lain dari cache warm-up |
 | 9 | PR-I: mode pesawat → kirim chat → online | Pesan pending terkirim otomatis |
+| 10 | Inbox Muat lebih >25 → kill → buka Chat | Daftar tidak menyusut ke 25 setelah revalidate |
 
 ---
 

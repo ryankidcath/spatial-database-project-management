@@ -12,9 +12,10 @@ import {
   getVirtualTableMobileRowsCache,
   setVirtualTableMobileRowsCache,
   virtualTableMobileRowsCacheKey,
+  VIRTUAL_TABLE_MOBILE_ROW_PAGE_SIZE,
 } from "@/lib/virtual-table-mobile-rows-cache";
 
-const WARMUP_ROW_BATCH = 50;
+const WARMUP_ROW_BATCH = VIRTUAL_TABLE_MOBILE_ROW_PAGE_SIZE;
 
 const inFlightByTable = new Map<string, Promise<void>>();
 

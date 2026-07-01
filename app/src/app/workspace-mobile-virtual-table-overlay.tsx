@@ -33,12 +33,12 @@ import {
   getVirtualTableMobileRowsCache,
   hydrateVirtualTableMobileRowsCache,
   setVirtualTableMobileRowsCache,
+  virtualTableMobileRowFetchLimit,
+  VIRTUAL_TABLE_MOBILE_ROW_PAGE_SIZE,
   virtualTableMobileRowsCacheKey,
 } from "@/lib/virtual-table-mobile-rows-cache";
 import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
 import { WORKSPACE_MOBILE_TAB_BAR_PADDING } from "./workspace-mobile-tabs";
-
-const MOBILE_ROW_BATCH_SIZE = 50;
 
 type Props = {
   table: VirtualTableRow;
@@ -180,20 +180,28 @@ export function WorkspaceMobileVirtualTableOverlay({
     [mergeRelationLabels]
   );
 
+  const resolveMobileRowFetchLimit = useCallback(() => {
+    const cached = getVirtualTableMobileRowsCache(cacheKey);
+    return virtualTableMobileRowFetchLimit(
+      cached?.rows.length ?? 0,
+      rowsLengthRef.current
+    );
+  }, [cacheKey]);
+
   const loadInitial = useCallback(async () => {
     const hadCache = rowsLengthRef.current > 0;
     if (!hadCache) setLoading(true);
-    const limit = Math.max(rowsLengthRef.current, MOBILE_ROW_BATCH_SIZE);
+    const limit = resolveMobileRowFetchLimit();
     const result = await fetchVirtualRowsAction(table.id, {
       limit,
       offset: 0,
     });
     await applyFetchResult(result, false);
     setLoading(false);
-  }, [table.id, applyFetchResult]);
+  }, [table.id, applyFetchResult, resolveMobileRowFetchLimit]);
 
   const reloadVisible = useCallback(async () => {
-    const limit = Math.max(rowsLengthRef.current, MOBILE_ROW_BATCH_SIZE);
+    const limit = resolveMobileRowFetchLimit();
     setLoading(true);
     const result = await fetchVirtualRowsAction(table.id, {
       limit,
@@ -201,13 +209,13 @@ export function WorkspaceMobileVirtualTableOverlay({
     });
     await applyFetchResult(result, false);
     setLoading(false);
-  }, [table.id, applyFetchResult]);
+  }, [table.id, applyFetchResult, resolveMobileRowFetchLimit]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || loading) return;
     setLoadingMore(true);
     const result = await fetchVirtualRowsAction(table.id, {
-      limit: MOBILE_ROW_BATCH_SIZE,
+      limit: VIRTUAL_TABLE_MOBILE_ROW_PAGE_SIZE,
       offset: rowsLengthRef.current,
     });
     await applyFetchResult(result, true);
