@@ -65,7 +65,7 @@ Trigger DB → `push_outbox` → `pg_net` / webhook → Edge Function `send-web-
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | Vercel + lokal |
 | `VAPID_PRIVATE_KEY` | Edge Function secrets saja |
 | `VAPID_SUBJECT` | `mailto:...` (Edge Function) |
-| `PUSH_WEBHOOK_SECRET` | Edge Function + DB `core_pm.push_function_secret` |
+| `PUSH_WEBHOOK_SECRET` | Edge Function + `core_pm.push_dispatch_config` |
 
 Generate VAPID (sekali):
 
@@ -75,17 +75,21 @@ npx web-push generate-vapid-keys
 
 ### Deploy checklist
 
-1. `npx supabase db push` — migration `0069`
+1. `npx supabase db push` — migration `0069` + `0070`
 2. Deploy function: `npx supabase functions deploy send-web-push --no-verify-jwt`
 3. Set secrets: `VAPID_*`, `SUPABASE_SERVICE_ROLE_KEY`, `PUSH_WEBHOOK_SECRET`
-4. SQL (sekali di Supabase SQL editor):
+4. **SQL Editor** — isi config dispatch (ganti project ref & secret):
 
 ```sql
-alter database postgres set core_pm.push_function_url = 'https://<PROJECT_REF>.supabase.co/functions/v1/send-web-push';
-alter database postgres set core_pm.push_function_secret = '<PUSH_WEBHOOK_SECRET>';
+update core_pm.push_dispatch_config
+set
+  function_url = 'https://<PROJECT_REF>.supabase.co/functions/v1/send-web-push',
+  webhook_secret = '<PUSH_WEBHOOK_SECRET>',
+  updated_at = now()
+where id = 1;
 ```
 
-Alternatif: **Database Webhook** pada `push_outbox` INSERT → Edge Function (body berisi `record`).
+**Catatan Supabase hosted:** `alter database set core_pm.push_*` dan `supabase_functions.http_request` **tidak tersedia**. UI webhook hanya menampilkan tabel `public`; `core_pm.push_outbox` diproses otomatis via trigger `pg_net` setelah langkah 4.
 
 ---
 

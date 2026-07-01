@@ -66,11 +66,16 @@ Panduan lengkap: **`docs/mobile-notifications-sound-push.md`**.
    npx supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:admin@contoh.com PUSH_WEBHOOK_SECRET=...
    ```
    (`SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` biasanya sudah tersedia di secrets project.)
-4. **Trigger pg_net** — di SQL Editor (ganti project ref & secret):
+4. **Config dispatch** — di SQL Editor setelah `0070` (ganti project ref & secret):
    ```sql
-   alter database postgres set core_pm.push_function_url = 'https://<PROJECT_REF>.supabase.co/functions/v1/send-web-push';
-   alter database postgres set core_pm.push_function_secret = '<PUSH_WEBHOOK_SECRET>';
+   update core_pm.push_dispatch_config
+   set
+     function_url = 'https://<PROJECT_REF>.supabase.co/functions/v1/send-web-push',
+     webhook_secret = '<PUSH_WEBHOOK_SECRET>',
+     updated_at = now()
+   where id = 1;
    ```
+   (`alter database` dan webhook UI untuk schema `core_pm` tidak didukung di Supabase hosted.)
 5. **Uji:** install PWA → buka workspace → tap sekali (izin notifikasi) → kill app → kirim pesan chat dari akun lain.
 
 ## Supabase Auth — URL redirect
