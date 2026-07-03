@@ -2,6 +2,8 @@
 
 Panduan operasional melengkapi fitur di aplikasi: **kontrol pendaftaran**, **banner pilot**, dan **matriks modul** per organisasi.
 
+**Istilah untuk user pilot:** lihat [`product-terminology.md`](product-terminology.md) — **Portal** (aplikasi), **Ruang Kerja** (scope tim di header; bukan tabel virtual “proyek” buatan user).
+
 ## Checklist cepat operator (isi manual)
 
 - [ ] Isi tabel organisasi pilot di bagian 1 (nama, UUID, kontak admin).

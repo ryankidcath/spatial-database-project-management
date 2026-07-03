@@ -88,6 +88,14 @@ import {
   updateTaskLastNoteAction,
 } from "./core-task-actions";
 import { updateProjectPropertiesAction } from "./project-properties-actions";
+import {
+  pilihRuangKerja,
+  pilihRuangKerjaUntuk,
+  PORTAL_LABEL,
+  RUANG_KERJA_LABEL,
+  ruangKerjaIni,
+  ruangKerjaLc,
+} from "@/lib/product-labels";
 import { heartbeatUserPresenceAction } from "./user-presence-actions";
 import {
   deleteAllIssueGeometryFeaturesForIssueAction,
@@ -971,10 +979,10 @@ function formatAuditActionLabel(action: string): string {
     task_marked_done: "Tandai tugas selesai",
     task_reopened: "Buka ulang tugas",
     task_children_cloned: "Duplikasi turunan tugas",
-    project_deleted: "Hapus project",
-    project_created: "Buat project",
-    project_member_added: "Tambah anggota project",
-    project_properties_updated: "Ubah properti project",
+    project_deleted: `Hapus ${ruangKerjaLc}`,
+    project_created: `Buat ${ruangKerjaLc}`,
+    project_member_added: `Tambah anggota ${ruangKerjaLc}`,
+    project_properties_updated: `Ubah properti ${ruangKerjaLc}`,
     geometry_feature_upserted: "Simpan geometri",
     geometry_feature_batch_upserted: "Impor geometri batch",
     geometry_feature_dxf_imported: "Impor geometri DXF",
@@ -1255,7 +1263,7 @@ function ProjectPropertiesDialog({
     if (!project) return;
     const nameTrim = name.trim();
     if (!nameTrim) {
-      setSaveError("Nama project tidak boleh kosong.");
+      setSaveError(`Nama ${ruangKerjaLc} tidak boleh kosong.`);
       return;
     }
     const nextLabels: Record<number, string> = {};
@@ -1285,7 +1293,7 @@ function ProjectPropertiesDialog({
         showCloseButton
       >
         <DialogHeader>
-          <DialogTitle>Properti project</DialogTitle>
+          <DialogTitle>Properti {ruangKerjaLc}</DialogTitle>
           <DialogDescription>
             Ubah nama, deskripsi, dan istilah level untuk dashboard. Istilah dapat diubah oleh
             anggota; nama dan deskripsi hanya owner.
@@ -1315,7 +1323,7 @@ function ProjectPropertiesDialog({
             </p>
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="project-prop-name">Nama project</Label>
+            <Label htmlFor="project-prop-name">Nama {ruangKerjaLc}</Label>
             <Input
               id="project-prop-name"
               value={name}
@@ -1512,7 +1520,7 @@ function MonitoringMatrixCard({
                             const nextStatusId = firstStatusIdByCategory.get(nextCategory);
                             if (!nextStatusId) {
                               setTaskMsg(
-                                `Status ${nextCategory} belum tersedia di project ini`
+                                `Status ${nextCategory} belum tersedia di ${ruangKerjaIni}`
                               );
                               return;
                             }
@@ -2802,7 +2810,7 @@ export function WorkspaceClient({
       hierarchyLabels: Record<number, string>;
     }): Promise<{ error: string | null }> => {
       if (!selectedProjectId) {
-        return { error: "Project tidak dipilih" };
+        return { error: `${RUANG_KERJA_LABEL} tidak dipilih` };
       }
       setProjectPropertiesPending(true);
       try {
@@ -3789,18 +3797,18 @@ export function WorkspaceClient({
       return {
         panelTitle: labelForDepth(0),
         addTargetLabel: labelForDepth(0),
-        indukFieldLabel: "Project",
+        indukFieldLabel: RUANG_KERJA_LABEL,
         indukDisplay: "—",
-        parentColumnHeader: "Project",
+        parentColumnHeader: RUANG_KERJA_LABEL,
       };
     }
     if (!selectedTaskId) {
       return {
         panelTitle: labelForDepth(0),
         addTargetLabel: labelForDepth(0),
-        indukFieldLabel: "Project",
+        indukFieldLabel: RUANG_KERJA_LABEL,
         indukDisplay: selectedProject?.name ?? "—",
-        parentColumnHeader: "Project",
+        parentColumnHeader: RUANG_KERJA_LABEL,
       };
     }
     const pd = projectIssueDepthById.get(selectedTaskId) ?? 0;
@@ -3831,7 +3839,7 @@ export function WorkspaceClient({
   const completionBars = useMemo(() => {
     const empty = {
       title: "Progres penyelesaian",
-      subtitle: "Pilih project untuk melihat progres.",
+      subtitle: `${pilihRuangKerja()} untuk melihat progres.`,
       rows: [] as CompletionBarRow[],
     };
     if (!selectedProjectId) return empty;
@@ -4609,7 +4617,7 @@ export function WorkspaceClient({
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
         <div className="max-w-lg rounded-lg border border-destructive/30 bg-card p-6 text-sm text-destructive">
-          <p className="font-semibold">Gagal memuat data workspace</p>
+          <p className="font-semibold">Gagal memuat data {PORTAL_LABEL}</p>
           <p className="mt-2 text-red-700">
             Aplikasi belum dapat mengambil data. Coba muat ulang halaman.
           </p>
@@ -4626,15 +4634,15 @@ export function WorkspaceClient({
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-muted/30 p-6">
         <div className="max-w-lg rounded-lg border border-border bg-card p-6 text-sm text-foreground">
-          <p className="font-semibold">Tidak ada project yang dapat diakses</p>
+          <p className="font-semibold">Tidak ada {ruangKerjaLc} yang dapat diakses</p>
           <p className="mt-2 text-muted-foreground">
-            Anda belum memiliki akses ke project mana pun. Minta pemilik project
+            Anda belum memiliki akses ke {ruangKerjaLc} mana pun. Minta pemilik {ruangKerjaLc}{" "}
             menambahkan email Anda sebagai anggota, lalu muat ulang halaman.
           </p>
           {userEmail && (
             <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
               <p className="font-medium text-foreground dark:text-amber-50">
-                Sudah punya akun tapi daftar project kosong?
+                Sudah punya akun tapi daftar {ruangKerjaLc} kosong?
               </p>
               <p className="mt-2">
                 Anda masuk sebagai <span className="font-mono">{userEmail}</span>.
@@ -4648,7 +4656,7 @@ export function WorkspaceClient({
                   muat ulang halaman
                 </a>{" "}
                 atau keluar lalu masuk lagi. Minta owner memastikan tidak ada
-                pesan error merah setelah klik &quot;Tambahkan ke project&quot;.
+                pesan error merah setelah klik &quot;Tambahkan ke {ruangKerjaLc}&quot;.
               </p>
             </div>
           )}
@@ -4659,7 +4667,7 @@ export function WorkspaceClient({
           )}
           <p className="mt-4 text-xs text-muted-foreground">
             Jika akun tetap belum mendapat akses, minta admin memeriksa data
-            keanggotaan project Anda di sistem.
+            keanggotaan {ruangKerjaLc} Anda di sistem.
           </p>
           {userEmail && (
             <form action={signOut} className="mt-6">
@@ -4683,7 +4691,7 @@ export function WorkspaceClient({
     process.env.NEXT_PUBLIC_SHOW_PILOT_BANNER === "true";
   const pilotBannerText =
     process.env.NEXT_PUBLIC_PILOT_BANNER_TEXT?.trim() ||
-    "Versi pilot — fitur dan data dapat berubah. Laporkan masalah ke tim proyek.";
+    "Versi pilot — fitur dan data dapat berubah. Laporkan masalah ke tim pilot.";
 
   return (
     <VirtualTableChatUnreadProvider
@@ -4847,7 +4855,7 @@ export function WorkspaceClient({
                     <Input name="organization_slug" placeholder="kjsb-cirebon" />
                   </div>
                   <div className="space-y-1">
-                    <Label>Nama project pertama *</Label>
+                    <Label>Nama {ruangKerjaLc} pertama *</Label>
                     <Input
                       name="project_name"
                       required
@@ -4855,19 +4863,19 @@ export function WorkspaceClient({
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label>Kode project (opsional)</Label>
+                    <Label>Kode {ruangKerjaLc} (opsional)</Label>
                     <Input name="project_key" placeholder="PLM28" />
                   </div>
                   <div className="space-y-1">
-                    <Label>Deskripsi project (opsional)</Label>
+                    <Label>Deskripsi {ruangKerjaLc} (opsional)</Label>
                     <Textarea
                       name="project_description"
                       rows={3}
-                      placeholder="Catatan singkat project"
+                      placeholder={`Catatan singkat ${ruangKerjaLc}`}
                     />
                   </div>
                   <Button type="submit" disabled={taskPending}>
-                    Buat organisasi & project
+                    Buat organisasi & {ruangKerjaLc}
                   </Button>
                   {organizationMsg && (
                     <p className="text-xs text-red-600" role="alert">
@@ -4916,7 +4924,7 @@ export function WorkspaceClient({
         </div>
         <div className="mt-6 space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium text-muted-foreground">Project</p>
+            <p className="text-sm font-medium text-muted-foreground">{RUANG_KERJA_LABEL}</p>
             <div className="flex items-center gap-1">
               {canonicalOrgId && canManageOrgStaff ? (
                 <Dialog
@@ -4934,9 +4942,9 @@ export function WorkspaceClient({
                       <DialogTitle>Tambah tim inti organisasi</DialogTitle>
                       <DialogDescription>
                         Karyawan inti otomatis menjadi anggota{" "}
-                        <strong>member</strong> di semua project organisasi ini
-                        (bukan owner). Hire per project tetap lewat + Anggota
-                        pada project yang dipilih.
+                        <strong>member</strong> di semua {ruangKerjaLc} organisasi ini
+                        (bukan owner). Hire per {ruangKerjaLc} tetap lewat + Anggota
+                        pada {ruangKerjaLc} yang dipilih.
                       </DialogDescription>
                     </DialogHeader>
                     <form
@@ -5002,25 +5010,25 @@ export function WorkspaceClient({
                   </DialogTrigger>
                   <DialogContent>
                     <DialogHeader>
-                      <DialogTitle>Tambah anggota project</DialogTitle>
+                      <DialogTitle>Tambah anggota {ruangKerjaLc}</DialogTitle>
                       <DialogDescription>
-                        Tambahkan user ke project{" "}
+                        Tambahkan user ke {ruangKerjaLc}{" "}
                         <span className="font-medium text-foreground">
                           {selectedProject?.name ?? "aktif"}
                         </span>{" "}
                         berdasarkan email.{" "}
                         {selectedProjectHasNoOwner ? (
                           <>
-                            Project ini belum punya owner — Anda (anggota)
+                            {RUANG_KERJA_LABEL} ini belum punya owner — Anda (anggota)
                             dapat menambah anggota dan menetapkan role owner.
                           </>
                         ) : isOrgAdminOfCanonicalOrg ? (
                           <>
                             Sebagai admin organisasi Anda dapat mengelola anggota
-                            project ini.
+                            {ruangKerjaLc} ini.
                           </>
                         ) : (
-                          <>Hanya owner project atau admin organisasi yang dapat mengelola anggota.</>
+                          <>Hanya owner {ruangKerjaLc} atau admin organisasi yang dapat mengelola anggota.</>
                         )}{" "}
                         Email harus sudah punya akun di aplikasi (sudah daftar
                         / login minimal sekali).
@@ -5064,7 +5072,7 @@ export function WorkspaceClient({
                         </select>
                       </div>
                       <Button type="submit" disabled={memberPending}>
-                        Tambahkan ke project
+                        Tambahkan ke {ruangKerjaLc}
                       </Button>
                       {memberMsg && (
                         <p className="text-xs text-red-600" role="alert">
@@ -5084,16 +5092,16 @@ export function WorkspaceClient({
                   }}
                 >
                   <DialogTrigger render={<Button size="sm" variant="outline" />}>
-                    + Project
+                    + {RUANG_KERJA_LABEL}
                   </DialogTrigger>
                   <DialogContent>
                     <DialogHeader>
-                      <DialogTitle>Tambah project</DialogTitle>
+                      <DialogTitle>Tambah {ruangKerjaLc}</DialogTitle>
                       <DialogDescription>
-                        Buat project baru di organisasi aktif (Anda jadi owner).
+                        Buat {ruangKerjaLc} baru di organisasi aktif (Anda jadi owner).
                         Ini bukan mengundang user: orang lain tidak otomatis
-                        masuk. Untuk menambahkan rekan ke project yang sudah ada,
-                        pilih project di sidebar lalu gunakan tombol + Anggota.
+                        masuk. Untuk menambahkan rekan ke {ruangKerjaLc} yang sudah ada,
+                        pilih {ruangKerjaLc} di sidebar lalu gunakan tombol + Anggota.
                       </DialogDescription>
                     </DialogHeader>
                     <form
@@ -5114,11 +5122,11 @@ export function WorkspaceClient({
                       }}
                     >
                       <div className="space-y-1">
-                        <Label>Nama project *</Label>
+                        <Label>Nama {ruangKerjaLc} *</Label>
                         <Input name="project_name" required placeholder="Contoh: PLM Cirebon 2028" />
                       </div>
                       <div className="space-y-1">
-                        <Label>Kode project (opsional)</Label>
+                        <Label>Kode {ruangKerjaLc} (opsional)</Label>
                         <Input name="project_key" placeholder="PLM28" />
                       </div>
                       <div className="space-y-1">
@@ -5126,11 +5134,11 @@ export function WorkspaceClient({
                         <Textarea
                           name="project_description"
                           rows={3}
-                          placeholder="Catatan singkat project"
+                          placeholder={`Catatan singkat ${ruangKerjaLc}`}
                         />
                       </div>
                       <Button type="submit" disabled={taskPending}>
-                        Buat project
+                        Buat {ruangKerjaLc}
                       </Button>
                       {projectMsg && (
                         <p className="text-xs text-red-600" role="alert">
@@ -5213,11 +5221,11 @@ export function WorkspaceClient({
                           name: p.name,
                         });
                       }}
-                      aria-label={`Hapus project ${p.name}`}
+                      aria-label={`Hapus ${ruangKerjaLc} ${p.name}`}
                       title={
                         projectIdsWithOwner.has(p.id)
-                          ? "Hapus project (owner)"
-                          : "Hapus project (belum ada owner)"
+                          ? `Hapus ${ruangKerjaLc} (owner)`
+                          : `Hapus ${ruangKerjaLc} (belum ada owner)`
                       }
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -5238,7 +5246,7 @@ export function WorkspaceClient({
                         return next;
                       });
                     }}
-                    aria-label={collapsedProjectIds.has(p.id) ? "Expand project" : "Collapse project"}
+                    aria-label={collapsedProjectIds.has(p.id) ? `Expand ${ruangKerjaLc}` : `Collapse ${ruangKerjaLc}`}
                   >
                     <ChevronRight
                       className={`h-3.5 w-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none ${
@@ -5340,13 +5348,13 @@ export function WorkspaceClient({
           >
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Hapus project</DialogTitle>
+                <DialogTitle>Hapus {ruangKerjaLc}</DialogTitle>
                 <DialogDescription>
-                  Project "{projectDeleteConfirm?.name ?? "ini"}" akan dihapus
+                  {RUANG_KERJA_LABEL} &quot;{projectDeleteConfirm?.name ?? "ini"}&quot; akan dihapus
                   (soft delete) beserta unit kerja di dalamnya tidak lagi tampil.
                   {projectDeleteConfirm &&
                   !projectIdsWithOwner.has(projectDeleteConfirm.projectId)
-                    ? " Project ini belum punya owner — penghapusan diizinkan untuk anggota sebagai pemulihan data demo."
+                    ? ` ${RUANG_KERJA_LABEL} ini belum punya owner — penghapusan diizinkan untuk anggota sebagai pemulihan data demo.`
                     : null}
                 </DialogDescription>
               </DialogHeader>
@@ -5437,20 +5445,20 @@ export function WorkspaceClient({
           <div className="mt-4 border-t border-border pt-3">
             <div className="mb-1 flex items-center justify-between px-1">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Tabel Project
+                Tabel {RUANG_KERJA_LABEL}
               </p>
               <button
                 type="button"
                 className="text-xs text-muted-foreground transition-colors hover:text-foreground"
                 onClick={() => { setVtableCreateScope("project"); setVtableCreateDialogOpen(true); }}
-                title="Buat tabel project baru"
+                title={`Buat tabel ${ruangKerjaLc} baru`}
               >
                 + Baru
               </button>
             </div>
             {vtablesForProject.length === 0 ? (
               <p className="px-1 text-xs text-muted-foreground italic">
-                Belum ada tabel project.
+                Belum ada tabel {ruangKerjaLc}.
               </p>
             ) : (
               <ul className="space-y-0.5">
@@ -5519,7 +5527,7 @@ export function WorkspaceClient({
                 <PanelLeft className={isBelowMd ? "h-5 w-5" : "h-4 w-4"} />
               </button>
               <div className="h-6 w-px bg-border" aria-hidden="true" />
-              <nav aria-label="Lokasi workspace" className="min-w-0 flex-1">
+              <nav aria-label={`Lokasi ${PORTAL_LABEL}`} className="min-w-0 flex-1">
                 <ol className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm">
                   {workspaceHeaderBreadcrumb.map((segment, idx) => (
                     <li
@@ -5593,7 +5601,7 @@ export function WorkspaceClient({
                       </PopoverHeader>
                       {memberPresenceRowsForSelectedProject.length === 0 ? (
                         <p className="text-xs text-muted-foreground">
-                          Belum ada anggota project.
+                          Belum ada anggota {ruangKerjaLc}.
                         </p>
                       ) : (
                         <ul className="space-y-1.5">
@@ -5711,8 +5719,8 @@ export function WorkspaceClient({
               {!selectedProjectId ? (
                 <p className="mt-5 text-sm text-muted-foreground">
                   {isBelowMd
-                    ? "Pilih project dari menu scope di header untuk melihat dashboard."
-                    : "Pilih project di sidebar untuk melihat dashboard."}
+                    ? `${pilihRuangKerja()} dari menu scope di header untuk melihat dashboard.`
+                    : `${pilihRuangKerja()} di sidebar untuk melihat dashboard.`}
                 </p>
               ) : deferredPayloadLoading &&
                 viewNeedsDeferredPayload("Dashboard") ? (
@@ -5723,7 +5731,7 @@ export function WorkspaceClient({
                 <VirtualDashboardView
                   key={selectedProjectId}
                   projectId={selectedProjectId}
-                  projectName={selectedProject?.name ?? "Project"}
+                  projectName={selectedProject?.name ?? RUANG_KERJA_LABEL}
                   virtualTables={allAccessibleVtables}
                   virtualColumns={virtualColumns}
                   initialDashboard={
@@ -5898,7 +5906,7 @@ export function WorkspaceClient({
               {selectedProjectId && vtablesForProject.length > 0 ? (
                 isBelowMd ? (
                   <VirtualTableMobileList
-                    sectionTitle="Tabel Project"
+                    sectionTitle={`Tabel ${RUANG_KERJA_LABEL}`}
                     tables={vtablesForProject}
                     virtualColumnsByTableId={virtualColumnsByTableId}
                     onOpenTable={(slug) => setActiveVirtualTableSlug(slug)}
@@ -5906,7 +5914,7 @@ export function WorkspaceClient({
                 ) : (
                   <div className="mt-6 space-y-4">
                     <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Tabel Project
+                      Tabel {RUANG_KERJA_LABEL}
                     </p>
                     {vtablesForProject.map((vt) => (
                       <div
@@ -5945,7 +5953,7 @@ export function WorkspaceClient({
                   )}
                 >
                   {!selectedProjectId && !canonicalOrgId
-                    ? "Pilih organisasi dan project untuk melihat tabel custom."
+                    ? "Pilih organisasi dan ruang kerja untuk melihat tabel custom."
                     : "Belum ada tabel custom pada scope ini."}
                 </p>
               ) : null}
@@ -5957,20 +5965,20 @@ export function WorkspaceClient({
               <div className="mt-4 space-y-3">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
-                    Pilih project untuk melihat daftar berkas.
+                    {pilihRuangKerjaUntuk("untuk melihat daftar berkas.")}
                   </p>
                 ) : (
                   <>
                     {!hasOrgStaffAccess ? (
                       <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                        Hire project: daftar berkas hanya untuk project aktif (
+                        Hire {ruangKerjaLc}: daftar berkas hanya untuk {ruangKerjaLc} aktif (
                         <strong>{selectedProject?.name ?? "—"}</strong>).
                       </p>
                     ) : null}
                     {selectedTaskId && hasOrgStaffAccess ? (
                       <p className="rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                         Scope <strong>unit kerja</strong> aktif — daftar berkas tetap
-                        untuk seluruh <strong>project</strong> ini.
+                        untuk seluruh <strong>{ruangKerjaLc}</strong> ini.
                       </p>
                     ) : null}
                     {selectedBerkasId && selectedBerkas ? (
@@ -6067,7 +6075,7 @@ export function WorkspaceClient({
               <div className="flex h-0 min-h-0 flex-1 basis-0 flex-col">
                 {!selectedProjectId ? (
                   <p className="text-sm text-muted-foreground">
-                    Pilih project untuk melihat peta.
+                    {pilihRuangKerjaUntuk("untuk melihat peta.")}
                   </p>
                 ) : (
                   <div className="flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col">
@@ -7530,7 +7538,7 @@ export function WorkspaceClient({
                         {mapLayersForSelectedProject.length === 0 &&
                           mapImportPreviewLayers.length === 0 && (
                           <p className="text-sm text-muted-foreground">
-                            Belum ada geometri di peta untuk project ini. Impor
+                            Belum ada geometri di peta untuk {ruangKerjaIni}. Impor
                             GeoJSON atau DXF ke tabel virtual di atas, atau pilih
                             unit kerja untuk geometri issue (legacy).
                           </p>
@@ -7684,13 +7692,13 @@ export function WorkspaceClient({
                 {selectedTaskId && (
                   <p className="mb-3 rounded-md border border-primary/25 bg-primary/10 px-3 py-2 text-sm text-foreground">
                     Scope <strong>unit kerja</strong> aktif — board tetap menampilkan
-                    semua unit kerja level atas project ini. Klik nama project di kiri
-                    untuk fokus project saja.
+                    semua unit kerja level atas {ruangKerjaIni}. Klik nama {ruangKerjaLc} di kiri
+                    untuk fokus {ruangKerjaLc} saja.
                   </p>
                 )}
                 {statusesForProject.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    Belum ada status untuk project ini.
+                    Belum ada status untuk {ruangKerjaIni}.
                   </p>
                 ) : (
                   <KanbanBoard

@@ -45,6 +45,7 @@ import {
   statusPieCounts,
 } from "./virtual-dashboard-lib";
 import type { VirtualDataRow } from "./virtual-table-types";
+import { RUANG_KERJA_LABEL, ruangKerjaLc } from "@/lib/product-labels";
 
 const CARD_CLASS =
   "rounded-xl border border-border bg-card shadow-sm bg-gradient-to-b from-card to-muted/20";
@@ -583,7 +584,7 @@ export function VirtualDashboardView({
           </p>
           {projectTables.length === 0 ? (
             <p className="mt-2 text-xs text-muted-foreground">
-              Buat tabel project dulu di sidebar (Tabel Project).
+              Buat tabel {ruangKerjaLc} dulu di sidebar (Tabel {RUANG_KERJA_LABEL}).
             </p>
           ) : null}
         </div>

@@ -1,5 +1,7 @@
 # Mobile scope flow v2 — rencana perubahan
 
+> **Catatan istilah (2026-07):** UI memakai **Portal** dan **Ruang Kerja** — lihat `docs/product-terminology.md`. Di dokumen ini, *proyek* / *workspace* mengacu pada fase teknis yang sama.
+
 **Status:** Step 1–6 selesai (2026-06-03). Mobile v2 siap QA. Chat: **Opsi B** (`chat-tab-navigation-options.md`).
 **Tanggal:** 2026-06-04  
 **Tujuan:** Di HP, user memilih **organisasi → proyek → workspace** secara full screen; edit data lewat **detail vertikal**, bukan grid; desktop tetap layout saat ini.

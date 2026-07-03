@@ -2,6 +2,11 @@
 
 import { ArrowLeft, ChevronRight, FolderKanban } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  pilihRuangKerja,
+  RUANG_KERJA_LABEL,
+  ruangKerjaLc,
+} from "@/lib/product-labels";
 import { cn } from "@/lib/utils";
 
 export type MobilePickerOrganization = {
@@ -51,19 +56,19 @@ export function WorkspaceMobileProjectPicker({
           Langkah 2 dari 2
         </p>
         <h1 className="mt-1 text-xl font-semibold text-foreground">
-          Pilih project
+          {pilihRuangKerja()}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {organization
-            ? `Project di ${organization.name}`
-            : "Pilih project untuk melanjutkan."}
+            ? `${RUANG_KERJA_LABEL} di ${organization.name}`
+            : `${pilihRuangKerja()} untuk melanjutkan.`}
         </p>
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
         {projects.length === 0 ? (
           <p className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-            Tidak ada project di organisasi ini.
+            Tidak ada {ruangKerjaLc} di organisasi ini.
           </p>
         ) : (
           <ul className="space-y-2">

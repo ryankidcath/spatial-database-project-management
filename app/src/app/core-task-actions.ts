@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog } from "./audit-log-actions";
 import { dispatchWorkspaceNotification } from "./workspace-notification-dispatch";
+import { ruangKerjaIni } from "@/lib/product-labels";
 
 export type CreateProjectTaskResult = { error: string | null };
 export type SetTaskDoneResult = { error: string | null };
@@ -142,7 +143,7 @@ async function markIssueDoneWithHierarchy(
     .maybeSingle();
 
   if (doneErr) return doneErr.message;
-  if (!doneStatus?.id) return "Status Done belum tersedia di project ini";
+  if (!doneStatus?.id) return `Status Done belum tersedia di ${ruangKerjaIni}`;
 
   const { data: doneStatuses, error: doneListErr } = await supabase
     .schema("core_pm")
@@ -717,7 +718,7 @@ export async function reopenTaskAction(
     return { error: stErr.message };
   }
   if (!reopenStatus?.id) {
-    return { error: "Status To Do / In Progress belum tersedia di project ini" };
+    return { error: `Status To Do / In Progress belum tersedia di ${ruangKerjaIni}` };
   }
 
   const { data: issueTreeRows, error: treeErr } = await supabase
@@ -997,7 +998,7 @@ export async function cycleTaskStatusAction(
     return { error: nextStatusErr.message };
   }
   if (!nextStatus?.id) {
-    return { error: `Status ${nextCategory} belum tersedia di project ini` };
+    return { error: `Status ${nextCategory} belum tersedia di ${ruangKerjaIni}` };
   }
 
   const { error } = await supabase

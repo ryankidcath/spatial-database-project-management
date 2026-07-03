@@ -48,7 +48,7 @@ export async function loginToWorkspace(page: Page, email: string, password: stri
     page
       .getByRole("tablist", { name: "Navigasi tab utama" })
       .or(page.getByRole("heading", { name: "Pilih organisasi" }))
-      .or(page.getByRole("heading", { name: "Pilih project" }))
+      .or(page.getByRole("heading", { name: "Pilih ruang kerja" }))
   ).toBeVisible({ timeout: 45_000 });
 }
 
@@ -97,7 +97,7 @@ export async function openWorkspaceChat(
     return "organization";
   }
 
-  const projectSidebar = sidebar.getByRole("button", { name: "Chat proyek" });
+  const projectSidebar = sidebar.getByRole("button", { name: "Chat ruang kerja" });
   await expect(projectSidebar.first()).toBeVisible({ timeout: 15_000 });
   await projectSidebar.first().scrollIntoViewIfNeeded();
   await projectSidebar.first().click();
@@ -118,11 +118,11 @@ export async function ensureMobileWorkspaceReady(page: Page) {
       timeout: 15_000,
     });
     await expect(
-      page.getByRole("heading", { name: "Pilih project" })
+      page.getByRole("heading", { name: "Pilih ruang kerja" })
     ).toBeVisible({ timeout: 20_000 });
   }
 
-  const projectHeading = page.getByRole("heading", { name: "Pilih project" });
+  const projectHeading = page.getByRole("heading", { name: "Pilih ruang kerja" });
   if (await projectHeading.isVisible().catch(() => false)) {
     await page.getByRole("listitem").first().getByRole("button").click({
       timeout: 15_000,

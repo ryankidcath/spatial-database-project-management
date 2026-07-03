@@ -24,6 +24,7 @@ import type {
   PermohonanInfoSpasialRow,
 } from "./plm-pengukuran-types";
 import { pemilikLinesForBerkas, type BerkasPermohonanRow } from "./plm-berkas-types";
+import { ruangKerjaLc } from "@/lib/product-labels";
 
 type Props = {
   berkas: BerkasPermohonanRow;
@@ -157,7 +158,7 @@ export function BerkasDetailPanel({
           Alur status
         </p>
         <p className="mt-1 text-xs text-slate-500">
-          Klik langkah untuk memperbarui status (RLS anggota project).
+          Klik langkah untuk memperbarui status (RLS anggota {ruangKerjaLc}).
         </p>
         <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
           {BERKAS_STATUS_STEPS.map((step, idx) => {

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { overlapDisplayLabelForIssueGeometryRow } from "./issue-geometry-overlap-label";
 import { findMapOverlapWarnings } from "./map-spatial-overlap";
+import { ruangKerjaIni } from "@/lib/product-labels";
 
 type ProjectLite = { id: string; organization_id: string };
 
@@ -90,7 +91,7 @@ export async function syncSpatialOverlapNotifications(
     }
 
     const title = "Peringatan overlap area di peta";
-    const body = `${warnings.length} pasangan poligon tumpang tindih (overlap area) pada project ini (hasil ukur, geometri unit kerja, atau demo vs poligon lain). Buka tab Map untuk rincian.`;
+    const body = `${warnings.length} pasangan poligon tumpang tindih (overlap area) pada ${ruangKerjaIni} (hasil ukur, geometri unit kerja, atau demo vs poligon lain). Buka tab Map untuk rincian.`;
 
     const { error: insErr } = await supabase
       .schema("core_pm")

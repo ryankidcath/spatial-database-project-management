@@ -6,11 +6,12 @@ import {
   MAX_SHAPEFILE_ZIP_BYTES,
   MAX_SPATIAL_GEOMETRY_TEXT_MB,
 } from "@/lib/spatial-import-limits";
+import { PORTAL_LABEL } from "@/lib/product-labels";
 
 export const metadata: Metadata = {
   title: "Bantuan impor geometri & atribut",
   description:
-    "CRS, feature_key, GeoJSON, ZIP shapefile, DXF, dan import CSV atribut di workspace.",
+    "CRS, feature_key, GeoJSON, ZIP shapefile, DXF, dan import CSV atribut di Portal.",
 };
 
 export default function SpatialImportHelpPage() {
@@ -24,7 +25,7 @@ export default function SpatialImportHelpPage() {
             href="/"
             className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
           >
-            ← Kembali ke workspace
+            ← Kembali ke Portal
           </Link>
         </div>
 

@@ -13,6 +13,7 @@ import {
   visibleIssuesForSchedule,
   type ScheduleIssue,
 } from "./schedule-utils";
+import { pilihRuangKerja, ruangKerjaIni, ruangKerjaLc } from "@/lib/product-labels";
 
 const WEEKDAYS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
 
@@ -74,7 +75,7 @@ export function CalendarScheduleView({
   });
 
   if (!projectId) {
-    return <p className="text-sm text-slate-500">Pilih project.</p>;
+    return <p className="text-sm text-slate-500">{pilihRuangKerja()}.</p>;
   }
 
   return (
@@ -82,7 +83,7 @@ export function CalendarScheduleView({
       {taskId && (
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
           Kalender memfilter <strong>unit kerja terpilih dan unit turunan</strong> dalam
-          project ini. Item ditampilkan berdasarkan tanggal <strong>Kapan</strong>{" "}
+          {ruangKerjaIni}. Item ditampilkan berdasarkan tanggal <strong>Kapan</strong>{" "}
           (catatan terakhir).
         </p>
       )}
@@ -250,7 +251,7 @@ export function GanttScheduleView({
   );
 
   if (!projectId) {
-    return <p className="text-sm text-slate-500">Pilih project.</p>;
+    return <p className="text-sm text-slate-500">{pilihRuangKerja()}.</p>;
   }
 
   return (
@@ -258,7 +259,7 @@ export function GanttScheduleView({
       {taskId && (
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
           Gantt menampilkan <strong>unit kerja terpilih + unit turunan</strong> yang punya
-          jadwal. Scope project menampilkan hanya unit kerja level atas.
+          jadwal. Scope {ruangKerjaLc} menampilkan hanya unit kerja level atas.
         </p>
       )}
       {!taskId && (

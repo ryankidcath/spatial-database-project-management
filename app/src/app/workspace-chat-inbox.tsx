@@ -44,6 +44,7 @@ import { PUSH_CACHE_APPLIED_EVENT } from "@/lib/push-cache-contract";
 import { hydratePushInboxPatchesFromIdb } from "@/lib/push-cache-inbox";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
+import { CHAT_RUANG_KERJA_LABEL, pilihRuangKerja, RUANG_KERJA_LABEL } from "@/lib/product-labels";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
@@ -332,7 +333,7 @@ export function WorkspaceChatInbox({
         kind: "virtual_table",
         scopeType: "virtual_table",
         title: table.display_name,
-        subtitle: table.project_id ? (tblProjectName ?? "Proyek") : "Organisasi",
+        subtitle: table.project_id ? (tblProjectName ?? RUANG_KERJA_LABEL) : "Organisasi",
         unreadCount: tableRoomUnreadByTableId[table.id] ?? 0,
         organizationId,
         projectId: table.project_id,
@@ -739,7 +740,7 @@ export function WorkspaceChatInbox({
   if (!projectId && !hasOrgStaffAccess) {
     return (
       <p className="text-sm text-muted-foreground">
-        Pilih proyek untuk melihat chat proyek dan tabel yang Anda bisa akses.
+        {pilihRuangKerja()} untuk melihat {CHAT_RUANG_KERJA_LABEL} dan tabel yang Anda bisa akses.
       </p>
     );
   }

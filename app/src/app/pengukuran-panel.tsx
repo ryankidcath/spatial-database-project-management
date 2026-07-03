@@ -26,6 +26,7 @@ import {
   pengukuranStorageObjectPath,
 } from "./plm-storage";
 import { formatShortDate } from "./schedule-utils";
+import { ruangKerjaIni } from "@/lib/product-labels";
 
 type Props = {
   berkasId: string;
@@ -410,7 +411,7 @@ export function PengukuranPanel({
             </ul>
             {alatChoices.length === 0 ? (
               <p className="mt-2 text-xs text-amber-800">
-                Tidak ada master alat untuk organisasi project ini.
+                Tidak ada master alat untuk organisasi {ruangKerjaIni}.
               </p>
             ) : (
               <form

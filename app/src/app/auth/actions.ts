@@ -9,6 +9,7 @@ import {
   getSignupMode,
   isEmailAllowedForSignup,
 } from "@/lib/pilot-config";
+import { RUANG_KERJA_LABEL, ruangKerjaLc } from "@/lib/product-labels";
 
 export async function login(formData: FormData) {
   const supabase = await createServerSupabaseClient();
@@ -136,7 +137,7 @@ export async function createOrganizationProjectAction(formData: FormData) {
   if (!organizationName || !projectName) {
     redirect(
       "/?joinError=" +
-        encodeURIComponent("Nama organisasi dan nama project wajib diisi")
+        encodeURIComponent(`Nama organisasi dan nama ${ruangKerjaLc} wajib diisi`)
     );
   }
 
@@ -188,7 +189,7 @@ export async function createProjectInOrganizationAction(
   const projectDescription = String(formData.get("project_description") ?? "").trim();
 
   if (!organizationId || !projectName) {
-    return { error: "Organisasi dan nama project wajib diisi" };
+    return { error: `Organisasi dan nama ${ruangKerjaLc} wajib diisi` };
   }
 
   const { error } = await supabase.schema("core_pm").rpc("create_project_in_organization", {
@@ -204,7 +205,7 @@ export async function createProjectInOrganizationAction(
     ) {
       return {
         error:
-          "Fitur tambah project belum aktif di sistem. Hubungi admin untuk menyelesaikan setup database.",
+          `Fitur tambah ${ruangKerjaLc} belum aktif di sistem. Hubungi admin untuk menyelesaikan setup database.`,
       };
     }
     return { error: error.message };
@@ -236,7 +237,7 @@ export async function createOrganizationProjectInlineAction(
   const projectDescription = String(formData.get("project_description") ?? "").trim();
 
   if (!organizationName || !projectName) {
-    return { error: "Nama organisasi dan nama project wajib diisi" };
+    return { error: `Nama organisasi dan nama ${ruangKerjaLc} wajib diisi` };
   }
 
   const { data: projectId, error } = await supabase.schema("core_pm").rpc(
@@ -266,7 +267,7 @@ export async function createOrganizationProjectInlineAction(
     return { error: projectErr.message };
   }
   if (!projectRow) {
-    return { error: "Gagal membaca organisasi/project yang baru dibuat." };
+    return { error: `Gagal membaca organisasi/${ruangKerjaLc} yang baru dibuat.` };
   }
 
   await writeProjectAuditLog(supabase, {
@@ -338,7 +339,7 @@ export async function addProjectMemberByEmailAction(
     ) {
       return {
         error:
-          "Fitur anggota project belum aktif di database. Jalankan: npx supabase db push",
+          `Fitur anggota ${ruangKerjaLc} belum aktif di database. Jalankan: npx supabase db push`,
       };
     }
     return { error: error.message };
@@ -361,7 +362,7 @@ export async function addProjectMemberByEmailAction(
     .maybeSingle();
   if (projectMeta?.organization_id) {
     const projectLabel =
-      typeof projectMeta.name === "string" ? projectMeta.name : "proyek";
+      typeof projectMeta.name === "string" ? projectMeta.name : ruangKerjaLc;
     await dispatchWorkspaceNotification(supabase, {
       preferenceCategory: "workspace_membership",
       kind: "workspace_member",

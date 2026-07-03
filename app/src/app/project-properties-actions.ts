@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog } from "./audit-log-actions";
+import { RUANG_KERJA_LABEL, ruangKerjaLc } from "@/lib/product-labels";
 
 export type UpdateProjectPropertiesResult = { error: string | null };
 
@@ -42,12 +43,12 @@ export async function updateProjectPropertiesAction(input: {
 
   const pid = input.projectId.trim();
   if (!pid) {
-    return { error: "Project tidak valid" };
+    return { error: `${RUANG_KERJA_LABEL} tidak valid` };
   }
 
   let name = input.name.trim();
   if (!name) {
-    return { error: "Nama project tidak boleh kosong" };
+    return { error: `Nama ${ruangKerjaLc} tidak boleh kosong` };
   }
   if (name.length > MAX_NAME_LEN) {
     name = name.slice(0, MAX_NAME_LEN);

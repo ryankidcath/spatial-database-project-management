@@ -1,4 +1,5 @@
 import type { ActivityLogRow } from "@/app/activity-log-types";
+import { RUANG_KERJA_LABEL, ruangKerjaLc } from "@/lib/product-labels";
 
 export type AuditActivityDisplay = {
   title: string;
@@ -41,25 +42,25 @@ export function formatAuditActivity(
   switch (log.action) {
     case "project_created":
       return {
-        title: `Proyek ${payloadStr(p, "project_name") ?? "baru"} dibuat`,
+        title: `${RUANG_KERJA_LABEL} ${payloadStr(p, "project_name") ?? "baru"} dibuat`,
         detail: null,
         scopeLabel,
       };
     case "project_member_added":
       return {
-        title: "Anggota ditambahkan ke proyek",
+        title: `Anggota ditambahkan ke ${ruangKerjaLc}`,
         detail: payloadStr(p, "email") ?? null,
         scopeLabel,
       };
     case "project_deleted":
       return {
-        title: `Proyek dihapus`,
+        title: `${RUANG_KERJA_LABEL} dihapus`,
         detail: null,
         scopeLabel,
       };
     case "project_properties_updated":
       return {
-        title: "Properti proyek diperbarui",
+        title: `Properti ${ruangKerjaLc} diperbarui`,
         detail: payloadStr(p, "name") ?? null,
         scopeLabel,
       };

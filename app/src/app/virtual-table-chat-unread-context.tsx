@@ -17,6 +17,7 @@ import {
 import { CHAT_UNREAD_INVALIDATE_EVENT } from "@/lib/chat-unread-invalidate";
 import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { ruangKerjaIni } from "@/lib/product-labels";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 export type VirtualTableChatUnreadScope = {
@@ -345,7 +346,7 @@ export function ProjectChatUnreadBadge({
   return (
     <ChatUnreadCountBadge
       count={n}
-      ariaLabel={`${n} pesan chat belum dibaca di project ini`}
+      ariaLabel={`${n} pesan chat belum dibaca di ${ruangKerjaIni}`}
       className={className}
     />
   );

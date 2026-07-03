@@ -35,6 +35,7 @@ import type {
   IssueGeometryFeatureMapRow,
   SpatialAttributeTableRow,
 } from "./spatial-attribute-types";
+import { ruangKerjaIni, ruangKerjaLc } from "@/lib/product-labels";
 
 const SPATIAL_TABLE_PAGE_SIZE = 100;
 
@@ -913,7 +914,7 @@ function SpatialAttributesPanelInner({
               ? "Tidak ada data yang cocok dengan kata kunci pencarian."
               : selectedTaskId
                 ? "Belum ada data atribut/geometri untuk unit kerja terpilih."
-                : "Belum ada data atribut/geometri unit kerja pada project ini."}
+                : `Belum ada data atribut/geometri unit kerja pada ${ruangKerjaIni}.`}
           </p>
         )}
       </div>
@@ -1055,7 +1056,7 @@ function SpatialAttributesPanelInner({
                         r = await updateIssueGeometryFeaturePropertiesAction(fd);
                       } else {
                         if (!selectedProjectId || !spatialAttributeEditAttrRow) {
-                          setSpatialAttributeEditMsg("Unit kerja/project belum terpilih.");
+                          setSpatialAttributeEditMsg(`Unit kerja/${ruangKerjaLc} belum terpilih.`);
                           return;
                         }
                         const fd = new FormData();

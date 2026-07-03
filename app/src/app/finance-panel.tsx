@@ -15,6 +15,7 @@ import type {
   FinancePembayaranRow,
 } from "./finance-types";
 import { formatShortDate } from "./schedule-utils";
+import { pilihRuangKerja, ruangKerjaLc } from "@/lib/product-labels";
 
 type BerkasOpt = { id: string; nomor_berkas: string };
 
@@ -95,7 +96,7 @@ export function FinancePanel({
   if (!projectId || !organizationId) {
     return (
       <p className="text-sm text-slate-600">
-        Pilih project untuk melihat invoice.
+        {pilihRuangKerja()} untuk melihat invoice.
       </p>
     );
   }
@@ -105,7 +106,7 @@ export function FinancePanel({
       <div>
         <h3 className="text-base font-semibold text-emerald-950">Keuangan</h3>
         <p className="mt-1 text-xs text-slate-600">
-          Invoice & pembayaran per project. Satu berkas aktif hanya boleh punya
+          Invoice & pembayaran per {ruangKerjaLc}. Satu berkas aktif hanya boleh punya
           satu invoice (selaras §9.3).
         </p>
       </div>

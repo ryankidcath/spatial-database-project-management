@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ruangKerjaIni } from "@/lib/product-labels";
 import { formatShortDate } from "./schedule-utils";
 import {
   pemilikLabelsForBerkas,
@@ -61,7 +62,7 @@ export function BerkasListPanel({
                   colSpan={colSpan}
                   className="px-3 py-4 text-sm text-slate-500"
                 >
-                  Belum ada berkas untuk project ini.
+                  Belum ada berkas untuk {ruangKerjaIni}.
                 </td>
               </tr>
             ) : (

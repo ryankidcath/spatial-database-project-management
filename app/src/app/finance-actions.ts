@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { insertAuditLogRow } from "@/lib/audit-log";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { RUANG_KERJA_LABEL } from "@/lib/product-labels";
 
 const INVOICE_STATUSES = new Set(["draft", "issued", "paid", "cancelled"]);
 
@@ -69,7 +70,7 @@ export async function createDraftInvoiceAction(
   if (!projectId) return { error: "project_id kosong" };
 
   const ctx = await fetchOrgForProject(supabase, projectId);
-  if (!ctx) return { error: "Project tidak ditemukan" };
+  if (!ctx) return { error: `${RUANG_KERJA_LABEL} tidak ditemukan` };
 
   const year = new Date().getFullYear();
   const nomor =

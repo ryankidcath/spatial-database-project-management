@@ -20,7 +20,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Spatial Project Management",
-  description: "Core PM workspace with optional PLM, spatial, and finance modules",
+  description: "Core PM Portal with optional PLM, spatial, and finance modules",
   applicationName: "Spatial PM",
   manifest: "/manifest.webmanifest",
   appleWebApp: {

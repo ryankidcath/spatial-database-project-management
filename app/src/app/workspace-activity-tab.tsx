@@ -12,6 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
 import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
+import { pilihRuangKerja, ruangKerjaLc } from "@/lib/product-labels";
 
 type Props = {
   activityLogs: ActivityLogRow[];
@@ -85,7 +86,7 @@ export function WorkspaceActivityTab({
   if (!selectedProjectId && !hasOrgStaffAccess) {
     return (
       <p className="px-3 py-6 text-sm text-muted-foreground">
-        Pilih proyek untuk melihat aktivitas di assignment Anda.
+        {pilihRuangKerja()} untuk melihat aktivitas di assignment Anda.
       </p>
     );
   }
@@ -106,7 +107,7 @@ export function WorkspaceActivityTab({
               checked={crossProject}
               onChange={(e) => setCrossProject(e.target.checked)}
             />
-            Semua proyek di org
+            Semua {ruangKerjaLc} di org
           </label>
         </div>
       ) : null}

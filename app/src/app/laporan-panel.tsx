@@ -3,6 +3,7 @@
 import { BERKAS_STATUS_STEPS } from "./plm-berkas-status";
 import { statusTahapLabel } from "./plm-legalisasi-wizard";
 import { formatShortDate } from "./schedule-utils";
+import { RUANG_KERJA_LABEL } from "@/lib/product-labels";
 
 type ProjectLite = { id: string; name: string };
 
@@ -116,7 +117,7 @@ export function LaporanPanel({
           <table className="w-full min-w-[28rem] border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                <th className="px-3 py-2 font-medium">Project</th>
+                <th className="px-3 py-2 font-medium">{RUANG_KERJA_LABEL}</th>
                 <th className="px-3 py-2 font-medium">Status</th>
                 <th className="px-3 py-2 font-medium">Jumlah</th>
                 <th className="px-3 py-2 font-medium">Tanggal berkas terbaru</th>
@@ -179,7 +180,7 @@ export function LaporanPanel({
           <table className="w-full min-w-[28rem] border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                <th className="px-3 py-2 font-medium">Project</th>
+                <th className="px-3 py-2 font-medium">{RUANG_KERJA_LABEL}</th>
                 <th className="px-3 py-2 font-medium">Tahap</th>
                 <th className="px-3 py-2 font-medium">Jumlah</th>
               </tr>
@@ -243,7 +244,7 @@ export function LaporanPanel({
           <table className="w-full min-w-[28rem] border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
-                <th className="px-3 py-2 font-medium">Project</th>
+                <th className="px-3 py-2 font-medium">{RUANG_KERJA_LABEL}</th>
                 <th className="px-3 py-2 font-medium">Status</th>
                 <th className="px-3 py-2 font-medium">Jumlah</th>
               </tr>

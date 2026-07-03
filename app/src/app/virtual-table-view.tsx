@@ -131,6 +131,7 @@ import {
   VirtualTableRoomChatUnreadBadge,
 } from "./virtual-table-chat-unread-context";
 import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
+import { ruangKerjaLc } from "@/lib/product-labels";
 import type { ChatAttachmentRef, ChatMentionOption } from "./chat-types";
 import {
   MAX_SPATIAL_GEOMETRY_TEXT_CHARS,
@@ -4826,7 +4827,7 @@ export function VirtualTableCreateDialog({
     });
   }, [name, desc, projectId, organizationId, scope, onOpenChange, onCreated, router]);
 
-  const scopeLabel = scope === "organization" ? "organisasi" : "project";
+  const scopeLabel = scope === "organization" ? "organisasi" : ruangKerjaLc;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

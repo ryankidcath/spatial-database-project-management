@@ -21,6 +21,11 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 import type { MobilePickerOrganization } from "./workspace-mobile-org-picker";
 import type { MobilePickerProject } from "./workspace-mobile-project-picker";
+import {
+  pilihRuangKerja,
+  ruangKerjaLc,
+  SCOPE_PORTAL_LABEL,
+} from "@/lib/product-labels";
 
 type MemberPresenceRow = {
   userId: string;
@@ -185,7 +190,7 @@ export function WorkspaceMobileCompactHeader({
             </Button>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-foreground">
-                Pilih proyek
+                {pilihRuangKerja()}
               </p>
               {selectedOrgName ? (
                 <p className="truncate text-xs text-muted-foreground">
@@ -197,7 +202,7 @@ export function WorkspaceMobileCompactHeader({
           <ul className="max-h-[min(50vh,20rem)] space-y-1 overflow-auto">
             {projects.length === 0 ? (
               <li className="px-2 py-3 text-xs text-muted-foreground">
-                Tidak ada proyek di organisasi ini.
+                Tidak ada {ruangKerjaLc} di organisasi ini.
               </li>
             ) : (
               projects.map((project) => {
@@ -236,7 +241,7 @@ export function WorkspaceMobileCompactHeader({
       <>
         <div className="mb-2 border-b border-border px-1 pb-2">
           <p className="text-xs font-semibold text-foreground">
-            Scope workspace
+            {SCOPE_PORTAL_LABEL}
           </p>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {scopeTitle}
@@ -249,7 +254,7 @@ export function WorkspaceMobileCompactHeader({
             className="h-11 w-full justify-start"
             onClick={openProjectPanel}
           >
-            Ganti proyek
+            Ganti {ruangKerjaLc}
           </Button>
           {showOrgSwitcher ? (
             <Button
@@ -325,7 +330,7 @@ export function WorkspaceMobileCompactHeader({
               </p>
               {memberPresenceRows.length === 0 ? (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Belum ada anggota project.
+                  Belum ada anggota {ruangKerjaLc}.
                 </p>
               ) : (
                 <ul className="mt-2 max-h-40 space-y-1.5 overflow-auto">

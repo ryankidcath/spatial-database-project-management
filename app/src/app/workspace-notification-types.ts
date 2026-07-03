@@ -31,8 +31,9 @@ export const NOTIFICATION_PREFERENCE_META: Record<
   { label: string; description: string }
 > = {
   workspace_membership: {
-    label: "Proyek & anggota",
-    description: "Proyek baru, anggota ditambahkan, dan perubahan keanggotaan.",
+    label: "Ruang Kerja & anggota",
+    description:
+      "Ruang kerja baru, anggota ditambahkan, dan perubahan keanggotaan.",
   },
   schema_changes: {
     label: "Tabel & kolom",

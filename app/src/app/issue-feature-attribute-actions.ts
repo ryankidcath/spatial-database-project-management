@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { parseSimpleCsv } from "@/lib/csv-parse";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeProjectAuditLog } from "./audit-log-actions";
+import { ruangKerjaIni } from "@/lib/product-labels";
 
 export type UpsertIssueFeatureAttributesBatchResult = {
   error: string | null;
@@ -32,7 +33,7 @@ async function ensureIssueInProject(
     .is("deleted_at", null)
     .maybeSingle();
   if (issueErr) return { ok: false, error: issueErr.message };
-  if (!issue?.id) return { ok: false, error: "Unit kerja tidak ditemukan pada project ini" };
+  if (!issue?.id) return { ok: false, error: `Unit kerja tidak ditemukan pada ${ruangKerjaIni}` };
   return { ok: true };
 }
 

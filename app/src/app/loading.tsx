@@ -1,5 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { PORTAL_LABEL } from "@/lib/product-labels";
 
 export default function RootLoading() {
   return (
@@ -7,7 +8,7 @@ export default function RootLoading() {
       className="flex min-h-svh flex-col items-center justify-center gap-4 bg-background px-6 text-foreground"
       role="status"
       aria-live="polite"
-      aria-label="Memuat workspace"
+      aria-label={`Memuat ${PORTAL_LABEL}`}
     >
       <Spinner className="size-8 text-muted-foreground" />
       <div className="w-full max-w-xs space-y-2">
@@ -15,7 +16,7 @@ export default function RootLoading() {
         <Skeleton className="h-2.5 w-full" />
         <Skeleton className="h-2.5 w-[88%]" />
       </div>
-      <p className="text-sm text-muted-foreground">Memuat workspace…</p>
+      <p className="text-sm text-muted-foreground">Memuat {PORTAL_LABEL}…</p>
     </div>
   );
 }

@@ -383,7 +383,7 @@ export function NotificationsBell({
           Atur notifikasi
         </button>
         {" · "}
-        Default: proyek/anggota & import.
+        Default: ruang kerja/anggota & import.
       </p>
       <NotificationPreferencesPanel
         open={prefsOpen}

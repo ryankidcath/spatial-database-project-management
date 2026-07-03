@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { RowChatContextPath } from "@/components/row-chat-context-path";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { RUANG_KERJA_LABEL, ruangKerjaLc } from "@/lib/product-labels";
 import { useIsBelowMd } from "@/lib/use-media-query";
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { rowLabelFromPath } from "@/lib/chat-row-context";
@@ -115,7 +116,7 @@ function WorkspaceRightPanelInner({
       return organizationName ? [organizationName] : ["Organisasi"];
     }
     if (panel.kind === "project-chat") {
-      return projectForPanel ? [projectForPanel.name] : ["Proyek"];
+      return projectForPanel ? [projectForPanel.name] : [RUANG_KERJA_LABEL];
     }
     if (panel.kind === "row") return panel.pathSegments;
     return tablePathSegments ?? ["Tabel"];

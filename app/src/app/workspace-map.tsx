@@ -811,7 +811,7 @@ export function WorkspaceMap({
         isBelowMd && "touch-manipulation"
       )}
       role="presentation"
-      aria-label="Peta workspace"
+      aria-label="Peta Portal"
     />
   );
 }

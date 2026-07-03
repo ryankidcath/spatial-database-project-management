@@ -1,5 +1,7 @@
 # Panduan mobile workspace — penerapan bertahap
 
+> **Catatan istilah (2026-07):** UI memakai **Portal** dan **Ruang Kerja** — lihat `docs/product-terminology.md`. Istilah *workspace* di dokumen ini = shell **Portal**.
+
 Dokumen ini menjadi **guide implementasi** responsif untuk Spatial PM workspace (sidebar, tab utama, panel kanan chat, tabel virtual, peta).  
 **Status:** Fase 0–5 + **mobile v2 Step 1–6** selesai (2026-06-03). Rencana: `docs/mobile-scope-flow-v2.md`.
 

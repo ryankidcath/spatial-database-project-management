@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { setOrganizationModuleAction } from "./workspace-modules-actions";
 import type { ModuleRegistryRow, OrganizationModuleRow } from "./workspace-modules";
+import { ruangKerjaLc } from "@/lib/product-labels";
 
 type Props = {
   organizationId: string;
@@ -54,7 +55,7 @@ export function OrganizationModuleToggles({
         Modul organisasi
       </p>
       <p className="mt-1 text-xs text-slate-500">
-        Anggota project di organisasi ini dapat mengaktifkan atau menonaktifkan
+        Anggota {ruangKerjaLc} di organisasi ini dapat mengaktifkan atau menonaktifkan
         modul opsional (RPC aman — <code className="text-[11px]">core_pm</code>{" "}
         tetap aktif).
       </p>

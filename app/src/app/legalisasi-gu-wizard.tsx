@@ -27,6 +27,7 @@ import {
   statusTahapLabel,
 } from "./plm-legalisasi-wizard";
 import { formatShortDate } from "./schedule-utils";
+import { ruangKerjaIni, ruangKerjaLc } from "@/lib/product-labels";
 
 type Props = {
   berkasId: string;
@@ -173,7 +174,7 @@ export function LegalisasiGuWizard({ berkasId, rows, files, history }: Props) {
           <p className="mt-0.5 text-xs text-slate-500">
             Simpan data lalu «Lanjut» memvalidasi gating §3.11. Lampiran diunggah
             ke bucket <span className="font-mono">plm-legalisasi</span> (RLS
-            anggota project).
+            anggota {ruangKerjaLc}).
           </p>
         </div>
         {sortedRows.length > 1 ? (
