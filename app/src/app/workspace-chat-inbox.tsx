@@ -954,7 +954,7 @@ export function WorkspaceChatInbox({
   }
 
   return (
-    <div className="flex min-h-[min(70vh,720px)] w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+    <div className="flex h-[min(70vh,720px)] w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       {list}
       {detail}
     </div>
