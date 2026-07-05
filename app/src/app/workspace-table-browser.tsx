@@ -13,6 +13,7 @@ import {
 } from "./workspace-collapsible-rail";
 import { VirtualTableView } from "./virtual-table-view";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
+import type { ProjectEntity360Profile } from "@/lib/project-entity-360-profile";
 
 const EMPTY_COLUMNS: VirtualColumnRow[] = [];
 
@@ -35,6 +36,7 @@ type Props = {
   selectedSlug: string | null;
   onSelectSlug: (slug: string) => void;
   onActivityChange?: () => void;
+  entity360Profile?: ProjectEntity360Profile;
 };
 
 /**
@@ -58,6 +60,7 @@ export function WorkspaceTableBrowser({
   selectedSlug,
   onSelectSlug,
   onActivityChange,
+  entity360Profile,
 }: Props) {
   const [search, setSearch] = useState("");
   const rail = useWorkspaceCollapsibleRail("Data");
@@ -184,8 +187,10 @@ export function WorkspaceTableBrowser({
           projectsForMention={projectsForMention}
           memberNameByUserId={memberNameByUserId}
           allVirtualTables={allVirtualTables}
+          virtualColumnsByTableId={virtualColumnsByTableId}
           fillHeight
           onActivityChange={onActivityChange}
+          entity360Profile={entity360Profile}
           headerLeading={
             rail.railEnabled ? (
               <WorkspaceRailToggleButton

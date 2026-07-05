@@ -2,9 +2,12 @@
 
 import dynamic from "next/dynamic";
 import { useMemo } from "react";
+import { Map as MapIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { buildVirtualTableRowFootprints } from "@/lib/virtual-table-map-footprints";
+import { useWorkspaceSpatialDataSync } from "./workspace-spatial-data-sync-context";
 import type { MapFootprint, VirtualRowMapSelect } from "./workspace-map";
 import type {
   VirtualColumnRow,
@@ -35,6 +38,7 @@ type Props = {
   projectName?: string | null;
   onVirtualRowSelect?: (select: VirtualRowMapSelect) => void;
   highlightVirtualRowId?: string | null;
+  highlightVirtualRowIds?: ReadonlySet<string>;
   onMapBackgroundClick?: () => void;
   className?: string;
 };
@@ -49,9 +53,12 @@ export function VirtualTableMapView({
   projectName = null,
   onVirtualRowSelect,
   highlightVirtualRowId = null,
+  highlightVirtualRowIds,
   onMapBackgroundClick,
   className,
 }: Props) {
+  const spatialSync = useWorkspaceSpatialDataSync();
+
   const footprints = useMemo(
     (): MapFootprint[] =>
       buildVirtualTableRowFootprints({
@@ -74,6 +81,17 @@ export function VirtualTableMapView({
     ]
   );
 
+  const rowIdsWithGeometry = useMemo(
+    () =>
+      rows
+        .filter((row) => {
+          const geo = row.payload[geometryColumnSlug];
+          return geo != null && geo !== "" && typeof geo === "object";
+        })
+        .map((row) => row.id),
+    [rows, geometryColumnSlug]
+  );
+
   if (footprints.length === 0) {
     return (
       <p
@@ -94,9 +112,31 @@ export function VirtualTableMapView({
         className
       )}
     >
+      <div className="absolute right-2 top-2 z-[500]">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="gap-1.5 shadow-sm"
+          onClick={() =>
+            spatialSync.openInSpatial({
+              tableId: table.id,
+              rowIds:
+                highlightVirtualRowId != null
+                  ? [highlightVirtualRowId]
+                  : rowIdsWithGeometry,
+              zoomToSelection: true,
+            })
+          }
+        >
+          <MapIcon className="size-3.5" />
+          Buka di tab Spasial
+        </Button>
+      </div>
       <WorkspaceMap
         footprints={footprints}
         highlightVirtualRowId={highlightVirtualRowId}
+        highlightVirtualRowIds={highlightVirtualRowIds}
         onVirtualRowSelect={onVirtualRowSelect}
         onMapBackgroundClick={onMapBackgroundClick}
       />

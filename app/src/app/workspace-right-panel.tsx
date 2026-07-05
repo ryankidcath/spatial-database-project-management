@@ -1,6 +1,7 @@
 "use client";
 
-import { X } from "lucide-react";
+import { useMemo } from "react";
+import { Map as MapIcon, X } from "lucide-react";
 import { RowChatContextPath } from "@/components/row-chat-context-path";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -12,13 +13,31 @@ import { formatVirtualTableValueForMapPopup } from "@/lib/virtual-table-map-popu
 import { WorkspaceMobileRowDetailForm } from "./workspace-mobile-row-detail-form";
 import { ChatPanel } from "./chat-panel";
 import { VirtualTableView } from "./virtual-table-view";
+import { VirtualTableRelationExplorer } from "./virtual-table-relation-explorer";
+import { VirtualTableEntity360Panel } from "./virtual-table-entity-360-panel";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import {
   useWorkspaceRightPanel,
   type WorkspaceRightPanelRowTab,
   type WorkspaceRightPanelState,
 } from "./workspace-right-panel-context";
+import { Button } from "@/components/ui/button";
+import { useWorkspaceSpatialDataSync } from "./workspace-spatial-data-sync-context";
+import {
+  applySpatialFilterFromRowValue,
+  filterValueLabel,
+  pickSpatialFilterColumn,
+} from "@/lib/workspace-spatial-filter-from-row";
+import { saveSpatialFilterSyncEnabled } from "@/lib/workspace-spatial-layer-layout-preference";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
+import {
+  buildVirtualColumnsByTableId,
+  pickFindOnMapRelationPath,
+  resolveFindOnMapTarget,
+  tableHasGeometryColumn,
+} from "@/lib/virtual-table-find-on-map";
+import type { ProjectEntity360Profile } from "@/lib/project-entity-360-profile";
+import { toast } from "sonner";
 
 type Props = {
   organizationId: string | null;
@@ -37,6 +56,7 @@ type Props = {
    * dengan percakapan utama di tab Obrolan.
    */
   chatTabActive?: boolean;
+  entity360Profile?: ProjectEntity360Profile;
 };
 
 export function WorkspaceRightPanel(props: Props) {
@@ -69,7 +89,10 @@ export function WorkspaceRightPanel(props: Props) {
 
   if (!panel) return null;
 
-  const isDataKind = panel.kind === "table-data" || panel.kind === "row-detail";
+  const isDataKind =
+    panel.kind === "table-data" ||
+    panel.kind === "row-detail" ||
+    panel.kind === "entity-360";
   // Tab Obrolan (desktop): sembunyikan kind chat, hanya izinkan kind data.
   if (props.chatTabActive && !isDataKind) return null;
 
@@ -78,7 +101,7 @@ export function WorkspaceRightPanel(props: Props) {
       className={cn(
         "relative z-30 flex shrink-0 flex-col border-l border-border bg-card",
         // Grid tabel butuh ruang lebih; detail baris + chat cukup w-96.
-        panel.kind === "table-data" ? "w-[32rem] max-w-[46vw]" : "w-96"
+        panel.kind === "table-data" ? "w-[32rem] max-w-[46vw]" : "w-[28rem] max-w-[40vw]"
       )}
       aria-label="Panel sisi kanan"
     >
@@ -98,6 +121,7 @@ function WorkspaceRightPanelInner({
   memberNameByUserId,
   allVirtualTables,
   virtualColumns,
+  entity360Profile,
   panel,
 }: Props & { panel: WorkspaceRightPanelState }) {
   const isBelowMd = useIsBelowMd();
@@ -108,7 +132,8 @@ function WorkspaceRightPanelInner({
     panel.kind === "table-chat" ||
     panel.kind === "row" ||
     panel.kind === "table-data" ||
-    panel.kind === "row-detail"
+    panel.kind === "row-detail" ||
+    panel.kind === "entity-360"
       ? (allVirtualTables.find((t) => t.id === panel.tableId) ?? null)
       : null;
   const tableProjectId = table?.project_id ?? projectId;
@@ -136,7 +161,7 @@ function WorkspaceRightPanelInner({
     if (panel.kind === "project-chat") {
       return projectForPanel ? [projectForPanel.name] : [RUANG_KERJA_LABEL];
     }
-    if (panel.kind === "row" || panel.kind === "row-detail") {
+    if (panel.kind === "row" || panel.kind === "row-detail" || panel.kind === "entity-360") {
       return panel.pathSegments;
     }
     return tablePathSegments ?? ["Tabel"];
@@ -165,6 +190,13 @@ function WorkspaceRightPanelInner({
       ) : panel.kind === "row-detail" ? (
         <RightPanelHeader
           tabs={[{ id: "detail" as const, label: "Detail" }]}
+          activeTab="detail"
+          pathSegments={pathSegments}
+          onClose={closePanel}
+        />
+      ) : panel.kind === "entity-360" ? (
+        <RightPanelHeader
+          tabs={[{ id: "detail" as const, label: "Panel 360°" }]}
           activeTab="detail"
           pathSegments={pathSegments}
           onClose={closePanel}
@@ -255,6 +287,7 @@ function WorkspaceRightPanelInner({
               isBelowMd={isBelowMd}
               rowId={panel.rowId}
               tableId={panel.tableId}
+              projectId={projectId}
               pathSegments={panel.pathSegments}
               rowPayload={panel.rowPayload}
               relationLabels={panel.relationLabels}
@@ -263,6 +296,11 @@ function WorkspaceRightPanelInner({
               columns={
                 virtualColumns.filter((c) => c.table_id === panel.tableId)
               }
+              allVirtualColumns={virtualColumns}
+              allVirtualTables={allVirtualTables}
+              projectsForMention={projectsForMention}
+              organizationName={organizationName}
+              entity360Profile={entity360Profile}
             />
           ) : (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 pt-0">
@@ -307,8 +345,25 @@ function WorkspaceRightPanelInner({
               projectsForMention={projectsForMention}
               memberNameByUserId={memberNameByUserId}
               allVirtualTables={allVirtualTables}
+              virtualColumnsByTableId={buildVirtualColumnsByTableId(virtualColumns)}
               fillHeight
               embeddedInRightPanel
+              entity360Profile={entity360Profile}
+            />
+          </div>
+        ) : null}
+
+        {panel.kind === "entity-360" ? (
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            <VirtualTableEntity360Panel
+              anchorTableId={panel.tableId}
+              anchorRowId={panel.rowId}
+              anchorPayload={panel.rowPayload}
+              seedRelationLabels={panel.relationLabels}
+              allVirtualTables={allVirtualTables}
+              allVirtualColumns={virtualColumns}
+              memberNameByUserId={memberNameByUserId}
+              compact={!isBelowMd}
             />
           </div>
         ) : null}
@@ -318,12 +373,18 @@ function WorkspaceRightPanelInner({
             isBelowMd={isBelowMd}
             rowId={panel.rowId}
             tableId={panel.tableId}
+            projectId={projectId}
             pathSegments={panel.pathSegments}
             rowPayload={panel.rowPayload}
             relationLabels={panel.relationLabels}
             memberNameByUserId={memberNameByUserId}
             organizationId={organizationId}
             columns={virtualColumns.filter((c) => c.table_id === panel.tableId)}
+            allVirtualColumns={virtualColumns}
+            allVirtualTables={allVirtualTables}
+            projectsForMention={projectsForMention}
+            organizationName={organizationName}
+            entity360Profile={entity360Profile}
           />
         ) : null}
       </div>
@@ -418,22 +479,34 @@ function RowDetailSection({
   isBelowMd,
   rowId,
   tableId,
+  projectId,
   pathSegments,
   rowPayload,
   relationLabels = {},
   memberNameByUserId,
   organizationId,
   columns,
+  allVirtualColumns,
+  allVirtualTables,
+  projectsForMention,
+  organizationName = null,
+  entity360Profile,
 }: {
   isBelowMd: boolean;
   rowId: string;
   tableId: string;
+  projectId: string | null;
   pathSegments: string[];
   rowPayload?: Record<string, unknown>;
   relationLabels?: Record<string, string>;
   memberNameByUserId: Map<string, string>;
   organizationId: string | null;
   columns: VirtualColumnRow[];
+  allVirtualColumns: VirtualColumnRow[];
+  allVirtualTables: VirtualTableRow[];
+  projectsForMention: { id: string; name: string; key?: string }[];
+  organizationName?: string | null;
+  entity360Profile?: ProjectEntity360Profile;
 }) {
   if (isBelowMd) {
     return (
@@ -451,29 +524,127 @@ function RowDetailSection({
 
   return (
     <RowDetailPlaceholder
+      tableId={tableId}
+      projectId={projectId}
+      rowId={rowId}
       pathSegments={pathSegments}
       rowPayload={rowPayload}
       relationLabels={relationLabels}
       memberNameByUserId={memberNameByUserId}
       columns={columns}
+      allVirtualColumns={allVirtualColumns}
+      allVirtualTables={allVirtualTables}
+      projectsForMention={projectsForMention}
+      organizationName={organizationName}
+      entity360Profile={entity360Profile}
     />
   );
 }
 
 function RowDetailPlaceholder({
+  tableId,
+  projectId,
+  rowId,
   pathSegments,
   rowPayload,
   relationLabels = {},
   memberNameByUserId,
   columns,
+  allVirtualColumns,
+  allVirtualTables,
+  projectsForMention,
+  organizationName = null,
+  entity360Profile,
 }: {
+  tableId: string;
+  projectId: string | null;
+  rowId: string;
   pathSegments: string[];
   rowPayload?: Record<string, unknown>;
   relationLabels?: Record<string, string>;
   memberNameByUserId: Map<string, string>;
   columns: VirtualColumnRow[];
+  allVirtualColumns: VirtualColumnRow[];
+  allVirtualTables: VirtualTableRow[];
+  projectsForMention: { id: string; name: string; key?: string }[];
+  organizationName?: string | null;
+  entity360Profile?: ProjectEntity360Profile;
 }) {
   const isBelowMd = useIsBelowMd();
+  const spatialSync = useWorkspaceSpatialDataSync();
+  const findOnMapProfile = useMemo(
+    () =>
+      entity360Profile?.geometry_holder
+        ? {
+            sourceTableId: tableId,
+            geometryHolder: entity360Profile.geometry_holder,
+          }
+        : { sourceTableId: tableId },
+    [entity360Profile, tableId]
+  );
+  const columnsByTableId = useMemo(
+    () => buildVirtualColumnsByTableId(allVirtualColumns),
+    [allVirtualColumns]
+  );
+  const hasGeometry = tableHasGeometryColumn(columns);
+  const filterCol = pickSpatialFilterColumn(columns, rowPayload);
+  const filterVal =
+    filterCol && rowPayload
+      ? filterValueLabel(
+          filterCol,
+          rowPayload[filterCol.slug],
+          relationLabels,
+          memberNameByUserId
+        )
+      : "";
+
+  const handleFilterOnSpatial = () => {
+    if (!filterCol || !filterVal) return;
+    applySpatialFilterFromRowValue(tableId, filterCol.slug, filterVal);
+    if (projectId) saveSpatialFilterSyncEnabled(projectId, true);
+    spatialSync.setRowSelection(tableId, [rowId]);
+    spatialSync.openInSpatial({
+      tableId,
+      rowIds: [rowId],
+      zoomToSelection: true,
+    });
+  };
+
+  const showOnMapTarget = useMemo(() => {
+    if (!rowPayload) return null;
+    return resolveFindOnMapTarget({
+      sourceTableId: tableId,
+      sourceColumns: columns,
+      sourceRows: [{ id: rowId, payload: rowPayload }],
+      columnsByTableId,
+      findOnMapProfile,
+    });
+  }, [tableId, columns, rowId, rowPayload, columnsByTableId, findOnMapProfile]);
+
+  const handleShowOnMap = () => {
+    if (!showOnMapTarget) {
+      toast.error("Baris ini tidak punya poligon terkait.");
+      return;
+    }
+    spatialSync.openInSpatial({
+      tableId: showOnMapTarget.tableId,
+      rowIds: showOnMapTarget.rowIds,
+      zoomToSelection: true,
+    });
+  };
+
+  const showOnMapLabel = hasGeometry ? "Buka di Spasial" : "Tunjukkan di peta";
+  const findOnMapRelationPath = useMemo(
+    () => pickFindOnMapRelationPath(columns, columnsByTableId, findOnMapProfile),
+    [columns, columnsByTableId, findOnMapProfile]
+  );
+  const canShowOnMapButton = hasGeometry
+    ? Boolean(showOnMapTarget)
+    : findOnMapRelationPath != null;
+  const projectName =
+    projectId != null
+      ? (projectsForMention.find((p) => p.id === projectId)?.name ?? null)
+      : null;
   const visibleCols = [...columns]
     .filter((c) => c.data_type !== "geometry")
     .sort((a, b) => a.position - b.position);
@@ -529,6 +700,40 @@ function RowDetailPlaceholder({
           })}
         </dl>
       )}
+      {canShowOnMapButton ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-3 w-full gap-1.5"
+          onClick={handleShowOnMap}
+        >
+          <MapIcon className="size-3.5 shrink-0" />
+          {showOnMapLabel}
+        </Button>
+      ) : null}
+      {hasGeometry && filterCol && filterVal ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-3 w-full"
+          onClick={handleFilterOnSpatial}
+        >
+          Filter di Spasial ({filterCol.display_name} = {filterVal})
+        </Button>
+      ) : null}
+      <VirtualTableRelationExplorer
+        tableId={tableId}
+        rowId={rowId}
+        rowPayload={rowPayload}
+        columns={columns}
+        allVirtualColumns={allVirtualColumns}
+        relationLabels={relationLabels}
+        allVirtualTables={allVirtualTables}
+        projectName={projectName}
+        organizationName={organizationName}
+      />
       <p
         className={cn(
           "text-muted-foreground",

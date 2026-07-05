@@ -26,6 +26,7 @@ import {
   Paperclip,
   GitBranch,
   MapPin,
+  Map as MapIcon,
   Upload,
   MessageSquare,
   MoreHorizontal,
@@ -74,6 +75,7 @@ import {
   layoutMetaFor,
 } from "@/lib/virtual-table-layout-types";
 import { virtualRowDisplayLabel } from "@/lib/virtual-table-row-label";
+import { matchesVirtualRowFilter } from "@/lib/virtual-table-row-filters";
 import type { VirtualViewLayoutOptions } from "./virtual-table-types";
 import type {
   VirtualTableRow,
@@ -139,6 +141,7 @@ import {
   parseFeatureCollectionForVirtualImport,
   pickDefaultVirtualTableMatchColumn,
 } from "@/lib/virtual-table-geojson-import";
+import { buildInboundGeomRelationSpecs } from "@/lib/virtual-table-geom-inbound-link";
 import { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
 import { ImportDialogShell } from "./import-dialog-shell";
 import {
@@ -161,6 +164,13 @@ import {
   VirtualTableRoomChatUnreadBadge,
 } from "./virtual-table-chat-unread-context";
 import type { VirtualRowMapSelect } from "./workspace-map";
+import { useWorkspaceSpatialDataSync } from "./workspace-spatial-data-sync-context";
+import {
+  pickFindOnMapRelationPath,
+  resolveFindOnMapTarget,
+  tableHasGeometryColumn,
+} from "@/lib/virtual-table-find-on-map";
+import type { ProjectEntity360Profile } from "@/lib/project-entity-360-profile";
 import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
 import { ruangKerjaLc } from "@/lib/product-labels";
 import type { ChatAttachmentRef, ChatMentionOption } from "./chat-types";
@@ -186,6 +196,10 @@ type Props = {
   memberNameByUserId: Map<string, string>;
   /** All accessible virtual tables (org + project) — needed for relation column target picker. */
   allVirtualTables: VirtualTableRow[];
+  /** Kolom semua tabel virtual — untuk find-on-map lewat relasi (G-H2). */
+  virtualColumnsByTableId?: Map<string, VirtualColumnRow[]>;
+  /** Profil entitas 360° project (G-H4 / GQ-H5 find-on-map eksplisit). */
+  entity360Profile?: ProjectEntity360Profile;
   onTableDeleted?: () => void;
   /** Setelah layer baru dari file (pindah ke tabel yang dibuat). */
   onLayerCreated?: (result: LayerUploadCreated) => void;
@@ -342,43 +356,6 @@ function SelectPill({
 // ---------------------------------------------------------------------------
 // Client-side filter & sort
 // ---------------------------------------------------------------------------
-
-function matchesFilter(
-  row: VirtualDataRow,
-  filter: VirtualViewFilter,
-  resolveLabel?: (val: unknown) => string
-): boolean {
-  const val = row.payload[filter.column];
-  const strVal = resolveLabel
-    ? resolveLabel(val).toLowerCase()
-    : (val != null ? String(val).toLowerCase() : "");
-  const filterVal = filter.value.toLowerCase();
-
-  switch (filter.operator) {
-    case "eq":
-      return strVal === filterVal;
-    case "neq":
-      return strVal !== filterVal;
-    case "contains":
-      return strVal.includes(filterVal);
-    case "not_contains":
-      return !strVal.includes(filterVal);
-    case "gt":
-      return Number(val) > Number(filter.value);
-    case "gte":
-      return Number(val) >= Number(filter.value);
-    case "lt":
-      return Number(val) < Number(filter.value);
-    case "lte":
-      return Number(val) <= Number(filter.value);
-    case "is_empty":
-      return val == null || val === "";
-    case "is_not_empty":
-      return val != null && val !== "";
-    default:
-      return true;
-  }
-}
 
 function compareRows(
   a: VirtualDataRow,
@@ -551,10 +528,18 @@ type DataRowProps = {
   setGeometryEditor: (v: { rowId: string; colSlug: string; currentGeoJSON: string } | null) => void;
   setUserPicker: (v: { rowId: string; colSlug: string; currentUserId: string | null } | null) => void;
   onOpenRowChat: (rowId: string, rowTitle: string) => void;
+  onOpenRowDetail?: (rowId: string) => void;
+  onShowRowOnMap?: (rowId: string) => void;
   isRowChatOpen?: boolean;
+  isRowDetailOpen?: boolean;
   hasUnreadChat?: boolean;
+  /** Tampilkan tombol peta per baris (G-H2 / tabel ber-geometry). */
+  showRowMapAction?: boolean;
   /** Sembunyikan tombol chat baris (dipakai saat tabel ditanam di panel kanan). */
   hideRowChat?: boolean;
+  showSpatialSelection?: boolean;
+  isSpatialRowSelected?: boolean;
+  onToggleSpatialSelection?: () => void;
 };
 
 function MultiSelectCell({
@@ -666,9 +651,16 @@ function DataRow({
   setGeometryEditor,
   setUserPicker,
   onOpenRowChat,
+  onOpenRowDetail,
+  onShowRowOnMap,
   isRowChatOpen = false,
+  isRowDetailOpen = false,
   hasUnreadChat = false,
+  showRowMapAction = false,
   hideRowChat = false,
+  showSpatialSelection = false,
+  isSpatialRowSelected = false,
+  onToggleSpatialSelection,
 }: DataRowProps) {
   return (
     <tr
@@ -677,14 +669,40 @@ function DataRow({
         "group border-b border-border last:border-b-0 transition-colors",
         hasUnreadChat
           ? "bg-amber-50/80 hover:bg-amber-50 border-l-4 border-l-amber-500"
-          : "hover:bg-muted/30"
+          : "hover:bg-muted/30",
+        isSpatialRowSelected && "bg-orange-50/70 dark:bg-orange-950/20",
+        isRowDetailOpen && "bg-primary/5"
       )}
     >
+      {showSpatialSelection ? (
+        <td className="px-2 py-1.5 text-center">
+          <input
+            type="checkbox"
+            checked={isSpatialRowSelected}
+            onChange={() => onToggleSpatialSelection?.()}
+            className="h-4 w-4 rounded border-border"
+            aria-label="Seleksi untuk peta Spasial"
+          />
+        </td>
+      ) : null}
       <td
         className={bodyStickyClass(
           "rowNum",
-          "px-2 py-1.5 text-center text-xs text-muted-foreground tabular-nums"
+          cn(
+            "px-2 py-1.5 text-center text-xs text-muted-foreground tabular-nums",
+            onOpenRowDetail &&
+              "cursor-pointer hover:bg-muted/60 hover:text-foreground"
+          )
         )}
+        onClick={
+          onOpenRowDetail
+            ? (e) => {
+                e.stopPropagation();
+                onOpenRowDetail(row.id);
+              }
+            : undefined
+        }
+        title={onOpenRowDetail ? "Buka detail baris" : undefined}
       >
         {idx + 1}
       </td>
@@ -924,6 +942,19 @@ function DataRow({
       })}
       <td className="px-1 py-1 text-center">
         <div className="flex items-center justify-center gap-0.5">
+          {showRowMapAction && onShowRowOnMap ? (
+            <button
+              type="button"
+              className="inline-flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-md text-muted-foreground opacity-70 transition-colors group-hover:bg-muted/80 group-hover:text-primary group-hover:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowRowOnMap(row.id);
+              }}
+              title="Tunjukkan di peta"
+            >
+              <MapIcon className="size-4" />
+            </button>
+          ) : null}
           {!hideRowChat && (
             <button
               type="button"
@@ -986,6 +1017,8 @@ export function VirtualTableView({
   projectsForMention = [],
   memberNameByUserId,
   allVirtualTables,
+  virtualColumnsByTableId,
+  entity360Profile,
   onTableDeleted,
   onLayerCreated,
   layout = "embedded",
@@ -1011,6 +1044,25 @@ export function VirtualTableView({
     onActivityChange?.();
   }, [onActivityChange]);
   const { refreshEpoch } = useVirtualTableChatUnread();
+  const spatialSync = useWorkspaceSpatialDataSync();
+  const findOnMapProfile = useMemo(
+    () =>
+      entity360Profile?.geometry_holder
+        ? {
+            sourceTableId: table.id,
+            geometryHolder: entity360Profile.geometry_holder,
+          }
+        : { sourceTableId: table.id },
+    [entity360Profile, table.id]
+  );
+  const allVirtualColumnsForImport = useMemo(() => {
+    if (!virtualColumnsByTableId) return columns;
+    const out: VirtualColumnRow[] = [];
+    for (const cols of virtualColumnsByTableId.values()) {
+      out.push(...cols);
+    }
+    return out.length > 0 ? out : columns;
+  }, [virtualColumnsByTableId, columns]);
   const {
     panel,
     openTableChat,
@@ -1979,6 +2031,52 @@ export function VirtualTableView({
     ]
   );
 
+  const isRowDetailVisible = useCallback(
+    (rowId: string) => {
+      if (!panel) return false;
+      if (panel.kind === "row-detail" && panel.rowId === rowId) return true;
+      return (
+        panel.kind === "row" && panel.rowId === rowId && panel.tab === "detail"
+      );
+    },
+    [panel]
+  );
+
+  const handleShowRowOnMap = useCallback(
+    (rowId: string) => {
+      const row = rows.find((r) => r.id === rowId);
+      if (!row) return;
+
+      const target = resolveFindOnMapTarget({
+        sourceTableId: table.id,
+        sourceColumns: columns,
+        sourceRows: [row],
+        columnsByTableId:
+          virtualColumnsByTableId ?? new Map([[table.id, columns]]),
+        findOnMapProfile,
+      });
+
+      if (!target) {
+        toast.error("Baris ini tidak punya poligon terkait.");
+        return;
+      }
+
+      spatialSync.openInSpatial({
+        tableId: target.tableId,
+        rowIds: target.rowIds,
+        zoomToSelection: true,
+      });
+    },
+    [
+      rows,
+      table.id,
+      columns,
+      virtualColumnsByTableId,
+      findOnMapProfile,
+      spatialSync,
+    ]
+  );
+
   const handleKanbanStatusChange = useCallback(
     (rowId: string, newStatus: string | null) => {
       const slug = layoutOptions.statusColumn;
@@ -2005,6 +2103,9 @@ export function VirtualTableView({
   const handleMapVirtualRowSelect = useCallback(
     (select: VirtualRowMapSelect) => {
       if (select.tableId !== table.id) return;
+      if (spatialSync.selectionSyncEnabled) {
+        spatialSync.setRowSelection(table.id, [select.rowId]);
+      }
       const row = rows.find((r) => r.id === select.rowId);
       openGlobalRowDetail({
         tableId: table.id,
@@ -2016,7 +2117,7 @@ export function VirtualTableView({
         relationLabels: select.relationLabels ?? relationLabels,
       });
     },
-    [table.id, rows, openGlobalRowDetail, relationLabels]
+    [table.id, rows, openGlobalRowDetail, relationLabels, spatialSync]
   );
 
   const highlightVirtualRowId =
@@ -2028,7 +2129,10 @@ export function VirtualTableView({
     if (panel?.kind === "row-detail" && panel.tableId === table.id) {
       closePanel();
     }
-  }, [panel, table.id, closePanel]);
+    if (spatialSync.selectionSyncEnabled) {
+      spatialSync.clearRowSelection(table.id);
+    }
+  }, [panel, table.id, closePanel, spatialSync]);
 
   // --- Sorted columns ---
   const sortedColumns = useMemo(
@@ -2344,13 +2448,84 @@ export function VirtualTableView({
     let result = [...rows];
     for (const filter of filters) {
       const resolver = labelResolvers.get(filter.column);
-      result = result.filter((row) => matchesFilter(row, filter, resolver));
+      result = result.filter((row) =>
+        matchesVirtualRowFilter(row, filter, resolver)
+      );
     }
     if (sorts.length > 0) {
       result.sort((a, b) => compareRows(a, b, sorts));
     }
     return result;
   }, [rows, filters, sorts, labelResolvers]);
+
+  const hasGeometryColumn = useMemo(
+    () => tableHasGeometryColumn(columns),
+    [columns]
+  );
+  const findOnMapRelationPath = useMemo(() => {
+    if (!virtualColumnsByTableId || hasGeometryColumn) return null;
+    return pickFindOnMapRelationPath(
+      columns,
+      virtualColumnsByTableId,
+      findOnMapProfile
+    );
+  }, [columns, virtualColumnsByTableId, hasGeometryColumn, findOnMapProfile]);
+  const canOpenInSpatial =
+    hasGeometryColumn || findOnMapRelationPath != null;
+  const openInSpatialLabel = hasGeometryColumn
+    ? "Buka di Spasial"
+    : "Tunjukkan di peta";
+  const showSpatialSelection =
+    hasGeometryColumn && spatialSync.selectionSyncEnabled;
+  const selectedSpatialRowIds = spatialSync.getSelectedRowIds(table.id);
+  const highlightVirtualRowIds = useMemo(
+    () =>
+      showSpatialSelection && selectedSpatialRowIds.length > 0
+        ? new Set(selectedSpatialRowIds)
+        : undefined,
+    [showSpatialSelection, selectedSpatialRowIds]
+  );
+
+  const handleOpenInSpatialTab = useCallback(() => {
+    if (!virtualColumnsByTableId && !hasGeometryColumn) return;
+
+    const sourceRows =
+      selectedSpatialRowIds.length > 0
+        ? processedRows.filter((row) => selectedSpatialRowIds.includes(row.id))
+        : processedRows;
+
+    const target = resolveFindOnMapTarget({
+      sourceTableId: table.id,
+      sourceColumns: columns,
+      sourceRows,
+      columnsByTableId: virtualColumnsByTableId ?? new Map([[table.id, columns]]),
+      findOnMapProfile,
+    });
+
+    if (!target) {
+      toast.error(
+        findOnMapRelationPath
+          ? "Tidak ada baris dengan poligon terkait (relasi kosong)."
+          : "Tidak ada geometri untuk ditampilkan di peta."
+      );
+      return;
+    }
+
+    spatialSync.openInSpatial({
+      tableId: target.tableId,
+      rowIds: target.rowIds,
+      zoomToSelection: true,
+    });
+  }, [
+    columns,
+    findOnMapRelationPath,
+    hasGeometryColumn,
+    processedRows,
+    selectedSpatialRowIds,
+    spatialSync,
+    table.id,
+    virtualColumnsByTableId,
+  ]);
 
   useEffect(() => {
     scrolledUnreadLockRef.current = null;
@@ -2708,6 +2883,23 @@ export function VirtualTableView({
                 tableId={table.id}
                 className="!ml-0"
               />
+            </Button>
+          ) : null}
+          {canOpenInSpatial && !embeddedInRightPanel ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={handleOpenInSpatialTab}
+              title={
+                hasGeometryColumn
+                  ? "Buka lapisan tabel ini di tab Spasial"
+                  : `Ikuti relasi «${findOnMapRelationPath?.relationColumnLabel ?? "gambar"}» ke poligon di tab Spasial`
+              }
+            >
+              <MapIcon className="size-3.5 shrink-0" />
+              {openInSpatialLabel}
             </Button>
           ) : null}
           <Button
@@ -3221,6 +3413,7 @@ export function VirtualTableView({
             }
             onVirtualRowSelect={handleMapVirtualRowSelect}
             highlightVirtualRowId={highlightVirtualRowId}
+            highlightVirtualRowIds={highlightVirtualRowIds}
             onMapBackgroundClick={handleMapBackgroundClick}
             className="min-h-[min(70vh,calc(100dvh-14rem))] flex-1"
           />
@@ -3267,6 +3460,11 @@ export function VirtualTableView({
         <table className="w-full border-separate border-spacing-0 text-sm">
           <thead className="sticky top-0 z-30 bg-muted shadow-[0_1px_0_0_hsl(var(--border))]">
             <tr className="border-b border-border bg-muted">
+              {showSpatialSelection ? (
+                <th className="px-2 py-2 text-center text-xs font-medium text-muted-foreground">
+                  ◉
+                </th>
+              ) : null}
               <th
                 className={headStickyClass(
                   "rowNum",
@@ -3497,9 +3695,29 @@ export function VirtualTableView({
                       setGeometryEditor={setGeometryEditor}
                       setUserPicker={setUserPicker}
                       onOpenRowChat={openRowChat}
+                      onOpenRowDetail={
+                        embeddedInRightPanel ? undefined : openRowDetail
+                      }
+                      onShowRowOnMap={
+                        canOpenInSpatial && !embeddedInRightPanel
+                          ? handleShowRowOnMap
+                          : undefined
+                      }
+                      showRowMapAction={
+                        canOpenInSpatial && !embeddedInRightPanel
+                      }
                       isRowChatOpen={isRowPanelOpen(row.id)}
+                      isRowDetailOpen={isRowDetailVisible(row.id)}
                       hasUnreadChat={unreadChatRowIds.has(row.id)}
                       hideRowChat={embeddedInRightPanel}
+                      showSpatialSelection={showSpatialSelection}
+                      isSpatialRowSelected={spatialSync.isRowSelected(
+                        table.id,
+                        row.id
+                      )}
+                      onToggleSpatialSelection={() =>
+                        spatialSync.toggleRowSelection(table.id, row.id)
+                      }
                     />
                   ))}
                 </React.Fragment>
@@ -3524,9 +3742,27 @@ export function VirtualTableView({
                   setGeometryEditor={setGeometryEditor}
                   setUserPicker={setUserPicker}
                   onOpenRowChat={openRowChat}
+                  onOpenRowDetail={
+                    embeddedInRightPanel ? undefined : openRowDetail
+                  }
+                  onShowRowOnMap={
+                    canOpenInSpatial && !embeddedInRightPanel
+                      ? handleShowRowOnMap
+                      : undefined
+                  }
+                  showRowMapAction={canOpenInSpatial && !embeddedInRightPanel}
                   isRowChatOpen={isRowPanelOpen(row.id)}
+                  isRowDetailOpen={isRowDetailVisible(row.id)}
                   hasUnreadChat={unreadChatRowIds.has(row.id)}
                   hideRowChat={embeddedInRightPanel}
+                  showSpatialSelection={showSpatialSelection}
+                  isSpatialRowSelected={spatialSync.isRowSelected(
+                    table.id,
+                    row.id
+                  )}
+                  onToggleSpatialSelection={() =>
+                    spatialSync.toggleRowSelection(table.id, row.id)
+                  }
                 />
               ))
             )}
@@ -4323,6 +4559,7 @@ export function VirtualTableView({
         table={table}
         columns={sortedColumns}
         allVirtualTables={allVirtualTables}
+        allVirtualColumns={allVirtualColumnsForImport}
         onImported={() => {
           bumpActivity();
           void loadRows();
@@ -4718,6 +4955,7 @@ export function VirtualTableGeoJsonImportDialog({
   table,
   columns,
   allVirtualTables,
+  allVirtualColumns,
   onImported,
   mapPreviewEnabled = false,
   onPreviewChange,
@@ -4729,6 +4967,8 @@ export function VirtualTableGeoJsonImportDialog({
   table: VirtualTableRow;
   columns: VirtualColumnRow[];
   allVirtualTables: VirtualTableRow[];
+  /** Semua kolom project (untuk deteksi relasi hub G-H5). Default: `columns` saja. */
+  allVirtualColumns?: VirtualColumnRow[];
   onImported: () => void;
   /** Tampilkan poligon di tab Map sebelum impor (hanya dari workspace Map). */
   mapPreviewEnabled?: boolean;
@@ -4736,6 +4976,7 @@ export function VirtualTableGeoJsonImportDialog({
   embedded?: boolean;
   cancelLabel?: string;
 }) {
+  const resolvedAllColumns = allVirtualColumns ?? columns;
   const [geojsonText, setGeojsonText] = useState("");
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [importPending, startImportTransition] = useTransition();
@@ -4794,6 +5035,24 @@ export function VirtualTableGeoJsonImportDialog({
     const name = vt?.display_name?.trim();
     return name && name.length > 0 ? name : "tabel target";
   }, [relationTargetTableId, allVirtualTables]);
+
+  const inboundGeomLinkSpecs = useMemo(() => {
+    if (!table.project_id) return [];
+    const projectTables = allVirtualTables.filter(
+      (t) => t.project_id === table.project_id
+    );
+    const projectTableIds = new Set(projectTables.map((t) => t.id));
+    const tableNameById = new Map(projectTables.map((t) => [t.id, t.display_name]));
+    const cols = resolvedAllColumns.filter((c) =>
+      projectTableIds.has(c.table_id)
+    );
+    return buildInboundGeomRelationSpecs({
+      geomTableId: table.id,
+      projectTableIds,
+      tableNameById,
+      columns: cols,
+    });
+  }, [table.id, table.project_id, allVirtualTables, resolvedAllColumns]);
 
   const preview = useMemo(() => {
     if (!geojsonText.trim()) return null;
@@ -4948,8 +5207,12 @@ export function VirtualTableGeoJsonImportDialog({
         r.failed > 0
           ? ` Gagal ${r.failed}${r.failureSamples.length > 0 ? ` (${r.failureSamples.slice(0, 3).join("; ")})` : ""}.`
           : "";
+      const linkText =
+        (r.inboundLinked ?? 0) > 0
+          ? ` ${r.inboundLinked} relasi hub terisi.`
+          : "";
       setImportMsg(
-        `Berhasil: ${r.inserted} baru, ${r.updated} diperbarui.${skipText}${failText}`
+        `Berhasil: ${r.inserted} baru, ${r.updated} diperbarui.${linkText}${skipText}${failText}`
       );
       if (r.inserted > 0 || r.updated > 0) {
         onPreviewChange?.(null);
@@ -5066,6 +5329,20 @@ export function VirtualTableGeoJsonImportDialog({
               </select>
             </div>
           </div>
+
+          {inboundGeomLinkSpecs.length > 0 ? (
+            <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              Setelah impor, baris di{" "}
+              <strong className="font-medium text-foreground">
+                {inboundGeomLinkSpecs.map((s) => s.hubTableName).join(", ")}
+              </strong>{" "}
+              akan dihubungkan otomatis jika property GeoJSON memuat{" "}
+              <span className="font-mono text-foreground">
+                {inboundGeomLinkSpecs.map((s) => s.hubMatchSlug).join(" / ")}
+              </span>
+              .
+            </p>
+          ) : null}
 
           {relationColumns.length > 0 ? (
             <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">

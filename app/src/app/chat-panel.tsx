@@ -53,6 +53,7 @@ import { escapeHtml } from "@/lib/chat-mention";
 import { useIsBelowMd } from "@/lib/use-media-query";
 import { useVisualViewportLayout } from "@/lib/use-visual-viewport-layout";
 import { cn } from "@/lib/utils";
+import { useWorkspaceSpatialDataSyncOptional } from "./workspace-spatial-data-sync-context";
 import { WORKSPACE_MOBILE_TAB_BAR_COMPOSER_PADDING } from "./workspace-mobile-tabs";
 import {
   deleteChatMessageAction,
@@ -187,6 +188,7 @@ export function ChatPanel({
     initialCache?.lastReadAt ?? null
   );
   const [draft, setDraft] = useState("");
+  const spatialSync = useWorkspaceSpatialDataSyncOptional();
   const [selectedFileUrl, setSelectedFileUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(
@@ -212,6 +214,14 @@ export function ChatPanel({
     el.style.height = `${next}px`;
     el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
   }, [draft, mobileStickyComposer]);
+
+  useEffect(() => {
+    if (!conversationActive || !spatialSync?.pendingChatContext) return;
+    setDraft((prev) =>
+      prev.trim().length > 0 ? prev : spatialSync.pendingChatContext!
+    );
+    spatialSync.setPendingChatContext(null);
+  }, [conversationActive, spatialSync]);
 
   const dedupedMentionOptions = useMemo(() => {
     const seen = new Set<string>();

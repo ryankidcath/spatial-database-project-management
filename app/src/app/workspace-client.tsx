@@ -87,6 +87,7 @@ import {
   updateTaskLastNoteAction,
 } from "./core-task-actions";
 import { updateProjectPropertiesAction } from "./project-properties-actions";
+import { parseProjectEntity360Profile } from "@/lib/project-entity-360-profile";
 import {
   pilihRuangKerja,
   pilihRuangKerjaUntuk,
@@ -165,6 +166,7 @@ import { WorkspaceMobileCompactHeader } from "./workspace-mobile-compact-header"
 import { WorkspaceChatInbox } from "./workspace-chat-inbox";
 import { WorkspaceTableBrowser } from "./workspace-table-browser";
 import { WorkspaceSpatialView } from "./workspace-spatial-view";
+import { WorkspaceSpatialDataSyncProvider } from "./workspace-spatial-data-sync-context";
 import {
   type MobileScopePhase,
   clearMobileScopeSession,
@@ -325,6 +327,8 @@ export type ProjectRow = {
   description?: string | null;
   /** Objek JSON label per depth (0–3); dari kolom `hierarchy_labels`. */
   hierarchy_labels?: unknown;
+  /** Profil panel 360° / find-on-map (G-H4). */
+  entity_360_profile?: unknown;
 };
 
 export type StatusRow = {
@@ -2469,6 +2473,11 @@ export function WorkspaceClient({
     () => issues.find((i) => i.id === selectedTaskId) ?? null,
     [issues, selectedTaskId]
   );
+  const selectedEntity360Profile = useMemo(() => {
+    if (!selectedProjectId) return parseProjectEntity360Profile(null);
+    const p = projects.find((x) => x.id === selectedProjectId);
+    return parseProjectEntity360Profile(p?.entity_360_profile);
+  }, [selectedProjectId, projects]);
   useEffect(() => {
     if (!selectedProjectId) {
       setHierarchyLabels({});
@@ -3359,7 +3368,10 @@ export function WorkspaceClient({
     const api = workspaceRightPanelApiRef.current;
     const p = api?.panel;
     if (!p) return;
-    const isDataKind = p.kind === "table-data" || p.kind === "row-detail";
+    const isDataKind =
+      p.kind === "table-data" ||
+      p.kind === "row-detail" ||
+      p.kind === "entity-360";
     if (activeView === "Chat") {
       // Masuk tab Obrolan: tutup panel chat (data dibuka dari dalam tab).
       if (!isDataKind) api?.closePanel();
@@ -3915,6 +3927,10 @@ export function WorkspaceClient({
     <NotificationSoundListener userId={userId} />
     <PwaPushSubscription userId={userId} />
     <WorkspaceRightPanelProvider apiRef={workspaceRightPanelApiRef}>
+    <WorkspaceSpatialDataSyncProvider
+      projectId={selectedProjectId}
+      onNavigateToSpatial={() => handleActiveViewChange("Map")}
+    >
     <WorkspaceRightPanelCloser activeVirtualTableSlug={activeVirtualTableSlug} />
     <WorkspaceRightPanelTableSync activeTableId={activeVirtualTable?.id ?? null} />
     <WorkspaceRightPanelOrgSync organizationId={canonicalOrgId} />
@@ -5091,6 +5107,7 @@ export function WorkspaceClient({
                   selectedSlug={tabelSelectedSlug}
                   onSelectSlug={setTabelSelectedSlug}
                   onActivityChange={refreshActivityLogs}
+                  entity360Profile={selectedEntity360Profile}
                 />
               )}
               </TabPanelKeepAlive>
@@ -5228,6 +5245,7 @@ export function WorkspaceClient({
                     if (isBelowMd) setActiveVirtualTableSlug(slug);
                     else setTabelSelectedSlug(slug);
                   }}
+                  entity360Profile={selectedEntity360Profile}
                 />
               </TabPanelKeepAlive>
             </TabsContent>
@@ -5394,6 +5412,7 @@ export function WorkspaceClient({
           allVirtualTables={allAccessibleVtables}
           virtualColumns={virtualColumns}
           chatTabActive={activeView === "Chat"}
+          entity360Profile={selectedEntity360Profile}
         />
         </div>
         </Tabs>
@@ -5443,6 +5462,7 @@ export function WorkspaceClient({
       )}
       </div>
     </div>
+    </WorkspaceSpatialDataSyncProvider>
     </WorkspaceRightPanelProvider>
     </VirtualTableChatUnreadProvider>
   );

@@ -366,6 +366,7 @@ export function WorkspaceSpatialImportWizard({
                 table={selectedTable}
                 columns={selectedColumns}
                 allVirtualTables={allAccessibleVtables}
+                allVirtualColumns={virtualColumns}
                 mapPreviewEnabled={mapPreviewEnabled}
                 onPreviewChange={onPreviewChange}
                 onImported={() => {

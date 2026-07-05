@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -12,6 +18,43 @@ import {
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
 import { useIsBelowMd } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
+import {
+  getWorkspaceBasemap,
+  type WorkspaceBasemapId,
+} from "@/lib/workspace-map-basemaps";
+import type { MapExtentBookmark } from "@/lib/workspace-spatial-map-preferences";
+import {
+  dashArrayForStyle,
+  type SpatialLayerSymbolStyle,
+} from "@/lib/workspace-spatial-layer-style-preference";
+import {
+  computeFootprintsBounds,
+  type LatLngBoundsTuple,
+} from "@/lib/workspace-map-bounds";
+import {
+  WorkspaceMapNorthArrow,
+  WorkspaceMapStatusBar,
+  type MapStatusState,
+} from "./workspace-map-gis-chrome";
+import { WorkspaceMapToolController } from "./workspace-map-tool-controller";
+import { WorkspaceMapRelationTraceLayer } from "./workspace-map-relation-trace-layer";
+import type {
+  MapIdentifyHit,
+  MapMeasureResult,
+  WorkspaceMapToolMode,
+} from "@/lib/workspace-map-tool-types";
+import type { MeasureDraftState } from "./workspace-map-tool-controller";
+import type { CoordinateDisplayMode } from "@/lib/workspace-map-tool-types";
+import { createCachedBasemapLayer } from "@/lib/workspace-map-cached-tile-layer";
+import type { ResolvedExternalMapLayer } from "@/lib/workspace-spatial-external-layers";
+import {
+  createExternalLeafletLayer,
+  ensureExternalReferencePane,
+} from "@/lib/workspace-map-external-layers";
+import {
+  applyBasemapSwipeClips,
+  clearBasemapSwipeClips,
+} from "@/lib/workspace-map-basemap-swipe";
 
 export type MapFootprintLayerKind =
   | "demo"
@@ -52,6 +95,19 @@ export type VirtualRowMapSelect = {
   rowPayload?: Record<string, unknown>;
   relationLabels?: Record<string, string>;
 };
+
+export type WorkspaceMapHandle = {
+  fitAllFootprints: () => void;
+  fitFootprints: (footprints: MapFootprint[]) => void;
+  fitBounds: (bounds: L.LatLngBounds) => void;
+  getLeafletMap: () => L.Map | null;
+  getView: () => MapExtentBookmark | null;
+  setView: (view: MapExtentBookmark) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+};
+
+const FEATURE_LABEL_MIN_ZOOM = 14;
 
 const DEFAULT_CENTER: L.LatLngExpression = [-6.74, 108.55];
 const DEFAULT_ZOOM = 12;
@@ -618,12 +674,93 @@ function wireVirtualTableFeatureClick(
   });
 }
 
+function mapFeatureLabel(fp: MapFootprint): string {
+  if (fp.popupProperties && isRecord(fp.popupProperties)) {
+    const title = fp.popupProperties._popup_row_title;
+    if (typeof title === "string" && title.trim()) return title.trim();
+  }
+  const idx = fp.label.indexOf(": ");
+  return idx >= 0 ? fp.label.slice(idx + 2) : fp.label;
+}
+
+function resolveFootprintOpacity(
+  fp: MapFootprint,
+  layerOpacityByTableId: Record<string, number>,
+  importPreviewOpacity: number
+): number {
+  if (fp.layerKind === "import_preview") return importPreviewOpacity;
+  if (fp.layerKind === "virtual_table" && fp.virtualTableId) {
+    const v = layerOpacityByTableId[fp.virtualTableId];
+    return v == null ? 1 : Math.min(1, Math.max(0.1, v));
+  }
+  return 1;
+}
+
+function fitMapToBounds(map: L.Map, bounds: LatLngBoundsTuple): void {
+  map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
+}
+
+function bindFeatureLabel(
+  featureLayer: L.Layer,
+  fp: MapFootprint,
+  map: L.Map,
+  showLabels: boolean
+): void {
+  if (!showLabels || !("bindTooltip" in featureLayer)) return;
+  const text = mapFeatureLabel(fp);
+  if (!text) return;
+  featureLayer.bindTooltip(text, {
+    permanent: true,
+    direction: "center",
+    className: "workspace-map-feature-label",
+    opacity: 0.92,
+  });
+  const updateVisibility = () => {
+    const tip = featureLayer.getTooltip?.();
+    const el = tip?.getElement?.();
+    if (el) {
+      el.style.display =
+        map.getZoom() >= FEATURE_LABEL_MIN_ZOOM ? "" : "none";
+    }
+  };
+  updateVisibility();
+  map.on("zoomend", updateVisibility);
+  featureLayer.on("remove", () => {
+    map.off("zoomend", updateVisibility);
+  });
+}
+
 function polygonStyle(
   feature: GeoJSON.Feature | undefined,
   layerKind: MapFootprintLayerKind,
   isBerkasHighlight: boolean,
-  highlightVirtualRowId: string | null | undefined
+  highlightVirtualRowId: string | null | undefined,
+  highlightVirtualRowIds: ReadonlySet<string> | undefined,
+  layerOpacity: number,
+  isImportOverlap: boolean,
+  isAnalysisHighlight: boolean,
+  customSymbol?: SpatialLayerSymbolStyle
 ): L.PathOptions {
+  if (isImportOverlap) {
+    return {
+      color: "#dc2626",
+      fillColor: "#f87171",
+      fillOpacity: 0.35 * Math.min(1, Math.max(0.1, layerOpacity)),
+      opacity: layerOpacity,
+      weight: 3,
+      dashArray: "5 3",
+    };
+  }
+  if (isAnalysisHighlight) {
+    return {
+      color: "#7c3aed",
+      fillColor: "#a78bfa",
+      fillOpacity: 0.45 * Math.min(1, Math.max(0.1, layerOpacity)),
+      opacity: layerOpacity,
+      weight: 3,
+      dashArray: "4 2",
+    };
+  }
   const props = feature?.properties as Record<string, unknown> | undefined;
   const virtualRowId =
     typeof props?._virtual_row_id === "string"
@@ -631,9 +768,11 @@ function polygonStyle(
       : "";
   const isVirtualRowHighlight =
     layerKind === "virtual_table" &&
-    highlightVirtualRowId != null &&
-    highlightVirtualRowId !== "" &&
-    virtualRowId === highlightVirtualRowId;
+    virtualRowId !== "" &&
+    ((highlightVirtualRowIds != null && highlightVirtualRowIds.has(virtualRowId)) ||
+      (highlightVirtualRowId != null &&
+        highlightVirtualRowId !== "" &&
+        virtualRowId === highlightVirtualRowId));
 
   if (isBerkasHighlight || isVirtualRowHighlight) {
     return {
@@ -664,49 +803,208 @@ function polygonStyle(
             ? "#5eead4"
             : "#3b82f6";
   const stroke =
-    typeof props?.stroke === "string" ? props.stroke : defaultStroke;
+    customSymbol?.strokeColor ??
+    (typeof props?.stroke === "string" ? props.stroke : defaultStroke);
   let fillColor =
-    typeof props?.fill === "string" ? props.fill : defaultFill;
+    customSymbol?.fillColor ??
+    (typeof props?.fill === "string" ? props.fill : defaultFill);
   let fillOpacity = 0.35;
   if (/^#[0-9a-fA-F]{8}$/.test(fillColor)) {
     fillOpacity = parseInt(fillColor.slice(7, 9), 16) / 255;
     fillColor = fillColor.slice(0, 7);
   }
+  const opacity = Math.min(1, Math.max(0.1, layerOpacity));
+  fillOpacity = (layerKind === "import_preview" ? 0.28 : fillOpacity) * opacity;
+  const weight =
+    customSymbol?.strokeWidth ??
+    (layerKind === "import_preview" ? 2.5 : 2);
+  const dashArray =
+    dashArrayForStyle(customSymbol?.dash) ??
+    (layerKind === "import_preview" ? "6 4" : undefined);
   return {
     color: stroke,
     fillColor,
-    fillOpacity: layerKind === "import_preview" ? 0.28 : fillOpacity,
-    weight: layerKind === "import_preview" ? 2.5 : 2,
-    dashArray: layerKind === "import_preview" ? "6 4" : undefined,
+    fillOpacity,
+    opacity,
+    weight,
+    dashArray,
   };
 }
 
-export function WorkspaceMap({
-  footprints,
-  highlightBerkasId = null,
-  highlightVirtualRowId = null,
-  onVirtualRowSelect,
-  onMapBackgroundClick,
-}: {
+export type WorkspaceMapProps = {
   footprints: MapFootprint[];
-  /** Sorot poligon hasil ukur yang terikat `berkas_id` ini. */
+  /** Semua footprint (termasuk lapisan off) untuk zoom ke lapisan. */
+  allFootprints?: MapFootprint[];
   highlightBerkasId?: string | null;
-  /** Sorot poligon baris virtual terpilih (panel detail). */
   highlightVirtualRowId?: string | null;
-  /** Klik poligon vtable → panel detail (bukan popup). */
+  highlightVirtualRowIds?: ReadonlySet<string>;
   onVirtualRowSelect?: (select: VirtualRowMapSelect) => void;
-  /** Klik area kosong peta — tutup detail / hapus sorot. */
   onMapBackgroundClick?: () => void;
-}) {
+  basemapId?: WorkspaceBasemapId;
+  showFeatureLabels?: boolean;
+  layerOpacityByTableId?: Record<string, number>;
+  layerStyleByTableId?: Record<string, SpatialLayerSymbolStyle>;
+  importPreviewOpacity?: number;
+  enableGisChrome?: boolean;
+  toolMode?: WorkspaceMapToolMode;
+  importOverlapFootprintIds?: ReadonlySet<string>;
+  analysisHighlightFootprintIds?: ReadonlySet<string>;
+  identifyFootprints?: MapFootprint[];
+  onIdentifyResults?: (hits: MapIdentifyHit[], lat: number, lng: number) => void;
+  onMeasureDraftChange?: (draft: MeasureDraftState) => void;
+  onMeasureFinished?: (result: MapMeasureResult) => void;
+  finishMeasureSignal?: number;
+  clearMeasureSignal?: number;
+  coordinateDisplay?: CoordinateDisplayMode;
+  onCoordinateDisplayToggle?: () => void;
+  onMapReady?: (map: L.Map | null) => void;
+  swipeCompareEnabled?: boolean;
+  compareBasemapId?: WorkspaceBasemapId | null;
+  swipePercent?: number;
+  externalLayers?: ResolvedExternalMapLayer[];
+  offlineBasemapMode?: boolean;
+  externalStatusBar?: boolean;
+  onStatusStateChange?: (state: MapStatusState) => void;
+  relationTraceSegments?: import("@/lib/workspace-map-relation-trace").RelationTraceSegment[];
+  showRelationTrace?: boolean;
+};
+
+export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
+  function WorkspaceMap(
+    {
+      footprints,
+      allFootprints,
+      highlightBerkasId = null,
+      highlightVirtualRowId = null,
+      highlightVirtualRowIds,
+      onVirtualRowSelect,
+      onMapBackgroundClick,
+      basemapId = "osm",
+      showFeatureLabels = false,
+      layerOpacityByTableId = {},
+      layerStyleByTableId = {},
+      importPreviewOpacity = 1,
+      enableGisChrome = false,
+      toolMode = "navigate",
+      importOverlapFootprintIds,
+      analysisHighlightFootprintIds,
+      identifyFootprints,
+      onIdentifyResults,
+      onMeasureDraftChange,
+      onMeasureFinished,
+      finishMeasureSignal = 0,
+      clearMeasureSignal = 0,
+      coordinateDisplay = "latlng",
+      onCoordinateDisplayToggle,
+      onMapReady,
+      swipeCompareEnabled = false,
+      compareBasemapId = null,
+      swipePercent = 50,
+      externalLayers = [],
+      offlineBasemapMode = false,
+      externalStatusBar = false,
+      onStatusStateChange,
+      relationTraceSegments = [],
+      showRelationTrace = false,
+    },
+    ref
+  ) {
   const router = useRouter();
   const isBelowMd = useIsBelowMd();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
   const zoomControlRef = useRef<L.Control.Zoom | null>(null);
+  const basemapLayerRef = useRef<L.TileLayer | null>(null);
+  const compareBasemapLayerRef = useRef<L.TileLayer | null>(null);
+  const swipePercentRef = useRef(swipePercent);
+  const externalLayersGroupRef = useRef<L.LayerGroup | null>(null);
+  const lastBasemapStateRef = useRef({
+    id: basemapId,
+    offline: offlineBasemapMode,
+  });
+  const currentBasemapIdRef = useRef<WorkspaceBasemapId>(basemapId);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const allFootprintsRef = useRef<MapFootprint[]>([]);
   const reopenPopupForFootprintIdRef = useRef<string | null>(null);
   const lastAutoFitBoundsKeyRef = useRef<string | null>(null);
   const userAdjustedViewRef = useRef(false);
+  const [statusState, setStatusState] = useState<MapStatusState>({
+    lat: DEFAULT_CENTER[0],
+    lng: DEFAULT_CENTER[1],
+    zoom: DEFAULT_ZOOM,
+    hasPointer: false,
+  });
+
+  useEffect(() => {
+    onStatusStateChange?.(statusState);
+  }, [statusState, onStatusStateChange]);
+
+  useEffect(() => {
+    swipePercentRef.current = swipePercent;
+    const map = mapRef.current;
+    const primary = basemapLayerRef.current;
+    const compare = compareBasemapLayerRef.current;
+    if (!map || !primary || !compare) return;
+    applyBasemapSwipeClips(map, primary, compare, swipePercent);
+  }, [swipePercent]);
+
+  useEffect(() => {
+    allFootprintsRef.current = allFootprints ?? footprints;
+  }, [allFootprints, footprints]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      fitAllFootprints: () => {
+        const map = mapRef.current;
+        if (!map) return;
+        const bounds = computeFootprintsBounds(allFootprintsRef.current);
+        if (bounds) {
+          fitMapToBounds(map, bounds);
+          userAdjustedViewRef.current = true;
+        }
+      },
+      fitFootprints: (fps: MapFootprint[]) => {
+        const map = mapRef.current;
+        if (!map) return;
+        const bounds = computeFootprintsBounds(fps);
+        if (bounds) {
+          fitMapToBounds(map, bounds);
+          userAdjustedViewRef.current = true;
+        }
+      },
+      fitBounds: (bounds: L.LatLngBounds) => {
+        const map = mapRef.current;
+        if (!map || !bounds.isValid()) return;
+        fitMapToBounds(map, [
+          [bounds.getSouth(), bounds.getWest()],
+          [bounds.getNorth(), bounds.getEast()],
+        ]);
+        userAdjustedViewRef.current = true;
+      },
+      getView: () => {
+        const map = mapRef.current;
+        if (!map) return null;
+        const c = map.getCenter();
+        return { lat: c.lat, lng: c.lng, zoom: map.getZoom() };
+      },
+      setView: (view: MapExtentBookmark) => {
+        const map = mapRef.current;
+        if (!map) return;
+        map.setView([view.lat, view.lng], view.zoom, { animate: true });
+        userAdjustedViewRef.current = true;
+      },
+      zoomIn: () => {
+        mapRef.current?.zoomIn();
+      },
+      zoomOut: () => {
+        mapRef.current?.zoomOut();
+      },
+      getLeafletMap: () => mapRef.current,
+    }),
+    []
+  );
 
   useEffect(() => {
     const el = containerRef.current;
@@ -725,33 +1023,181 @@ export function WorkspaceMap({
 
     map.attributionControl.setPosition(isBelowMd ? "bottomleft" : "bottomright");
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
+    const basemap = getWorkspaceBasemap(basemapId);
+    const tile = createCachedBasemapLayer(basemap.url, {
+      maxZoom: basemap.maxZoom,
+      attribution: basemap.attribution,
+      cacheBasemapId: basemap.id,
+      offlineMode: offlineBasemapMode,
+    });
+    tile.addTo(map);
+    tile.setZIndex(1);
+    basemapLayerRef.current = tile;
+    currentBasemapIdRef.current = basemap.id;
+    lastBasemapStateRef.current = {
+      id: basemap.id,
+      offline: offlineBasemapMode,
+    };
 
+    // Skala grafis Leaflet dihilangkan — angka skala ada di status bar GIS.
     const markUserAdjusted = () => {
       userAdjustedViewRef.current = true;
     };
+    const syncStatusZoom = () => {
+      setStatusState((prev) => ({
+        ...prev,
+        zoom: map.getZoom(),
+      }));
+    };
     map.on("zoomend", markUserAdjusted);
     map.on("moveend", markUserAdjusted);
+    map.on("zoomend", syncStatusZoom);
+    map.on("mousemove", (e: L.LeafletMouseEvent) => {
+      setStatusState({
+        lat: e.latlng.lat,
+        lng: e.latlng.lng,
+        zoom: map.getZoom(),
+        hasPointer: true,
+      });
+    });
+    map.on("mouseout", () => {
+      setStatusState((prev) => ({ ...prev, hasPointer: false }));
+    });
 
     const group = L.layerGroup().addTo(map);
     mapRef.current = map;
+    setMapInstance(map);
     layerGroupRef.current = group;
+    onMapReady?.(map);
 
     return () => {
+      onMapReady?.(null);
       map.off("zoomend", markUserAdjusted);
       map.off("moveend", markUserAdjusted);
+      map.off("zoomend", syncStatusZoom);
       map.remove();
       mapRef.current = null;
+      setMapInstance(null);
       layerGroupRef.current = null;
+      basemapLayerRef.current = null;
+      compareBasemapLayerRef.current = null;
       lastAutoFitBoundsKeyRef.current = null;
       userAdjustedViewRef.current = false;
       zoomControlRef.current = null;
     };
-  }, [isBelowMd]);
+  }, [isBelowMd, enableGisChrome]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const prev = lastBasemapStateRef.current;
+    if (prev.id === basemapId && prev.offline === offlineBasemapMode) return;
+
+    const basemap = getWorkspaceBasemap(basemapId);
+    const existing = basemapLayerRef.current;
+    if (existing) map.removeLayer(existing);
+    const next = createCachedBasemapLayer(basemap.url, {
+      maxZoom: basemap.maxZoom,
+      attribution: basemap.attribution,
+      cacheBasemapId: basemap.id,
+      offlineMode: offlineBasemapMode,
+    });
+    next.addTo(map);
+    next.setZIndex(1);
+    basemapLayerRef.current = next;
+    currentBasemapIdRef.current = basemap.id;
+    lastBasemapStateRef.current = {
+      id: basemap.id,
+      offline: offlineBasemapMode,
+    };
+    compareBasemapLayerRef.current?.setZIndex(2);
+  }, [basemapId, offlineBasemapMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    ensureExternalReferencePane(map);
+
+    if (!externalLayersGroupRef.current) {
+      externalLayersGroupRef.current = L.layerGroup().addTo(map);
+    }
+    const group = externalLayersGroupRef.current;
+    group.clearLayers();
+    for (const layer of externalLayers) {
+      const leafletLayer = createExternalLeafletLayer(layer);
+      if (leafletLayer) group.addLayer(leafletLayer);
+    }
+  }, [externalLayers]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const removeCompare = () => {
+      const primary = basemapLayerRef.current;
+      const layer = compareBasemapLayerRef.current;
+      if (layer) {
+        map.removeLayer(layer);
+        compareBasemapLayerRef.current = null;
+      }
+      clearBasemapSwipeClips(primary, layer);
+    };
+
+    if (
+      !swipeCompareEnabled ||
+      !compareBasemapId ||
+      compareBasemapId === basemapId
+    ) {
+      removeCompare();
+      return;
+    }
+
+    const primary = basemapLayerRef.current;
+    if (!primary) return;
+
+    const compareDef = getWorkspaceBasemap(compareBasemapId);
+    removeCompare();
+    const compareLayer = L.tileLayer(compareDef.url, {
+      maxZoom: compareDef.maxZoom,
+      attribution: compareDef.attribution,
+      crossOrigin: true,
+    });
+    compareLayer.addTo(map);
+    compareLayer.setZIndex(2);
+    primary.setZIndex(1);
+    compareBasemapLayerRef.current = compareLayer;
+
+    const syncClip = () => {
+      const p = basemapLayerRef.current;
+      const c = compareBasemapLayerRef.current;
+      if (!p || !c) return;
+      applyBasemapSwipeClips(map, p, c, swipePercentRef.current);
+    };
+
+    compareLayer.on("load", syncClip);
+    compareLayer.on("add", syncClip);
+    map.on("move", syncClip);
+    map.on("zoom", syncClip);
+    map.on("zoomend", syncClip);
+    map.on("moveend", syncClip);
+    map.on("resize", syncClip);
+    requestAnimationFrame(syncClip);
+
+    return () => {
+      compareLayer.off("load", syncClip);
+      compareLayer.off("add", syncClip);
+      map.off("move", syncClip);
+      map.off("zoom", syncClip);
+      map.off("zoomend", syncClip);
+      map.off("moveend", syncClip);
+      map.off("resize", syncClip);
+      removeCompare();
+    };
+  }, [
+    swipeCompareEnabled,
+    compareBasemapId,
+    basemapId,
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -804,7 +1250,22 @@ export function WorkspaceMap({
         highlightBerkasId !== "" &&
         fp.berkasId === highlightBerkasId;
       const useVirtualRowClick =
-        layerKind === "virtual_table" && onVirtualRowSelect != null;
+        layerKind === "virtual_table" &&
+        onVirtualRowSelect != null &&
+        toolMode === "navigate";
+      const fpOpacity = resolveFootprintOpacity(
+        fp,
+        layerOpacityByTableId,
+        importPreviewOpacity
+      );
+      const isImportOverlap =
+        importOverlapFootprintIds?.has(fp.id) ?? false;
+      const isAnalysisHighlight =
+        analysisHighlightFootprintIds?.has(fp.id) ?? false;
+      const customSymbol =
+        fp.virtualTableId && layerStyleByTableId[fp.virtualTableId]
+          ? layerStyleByTableId[fp.virtualTableId]
+          : undefined;
       try {
         const geojsonObject = fp.geojson as
           | { type?: string }
@@ -820,12 +1281,18 @@ export function WorkspaceMap({
               feat as GeoJSON.Feature | undefined,
               layerKind,
               isBerkasHighlight,
-              highlightVirtualRowId
+              highlightVirtualRowId,
+              highlightVirtualRowIds,
+              fpOpacity,
+              isImportOverlap,
+              isAnalysisHighlight,
+              customSymbol
             ),
           onEachFeature: (feature, featureLayer) => {
             if (layerKind === "virtual_table") {
               ensureVirtualTableFeatureProperties(feature, fp);
             }
+            bindFeatureLabel(featureLayer, fp, map, showFeatureLabels);
             if (useVirtualRowClick) {
               wireVirtualTableFeatureClick(
                 featureLayer,
@@ -905,29 +1372,74 @@ export function WorkspaceMap({
     footprints,
     highlightBerkasId,
     highlightVirtualRowId,
+    highlightVirtualRowIds,
     onVirtualRowSelect,
     router,
+    layerOpacityByTableId,
+    layerStyleByTableId,
+    importPreviewOpacity,
+    showFeatureLabels,
+    toolMode,
+    importOverlapFootprintIds,
+    analysisHighlightFootprintIds,
   ]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !onMapBackgroundClick) return;
+    if (toolMode !== "navigate") return;
     const handler = () => onMapBackgroundClick();
     map.on("click", handler);
     return () => {
       map.off("click", handler);
     };
-  }, [onMapBackgroundClick]);
+  }, [onMapBackgroundClick, toolMode]);
+
+  const northClass = isBelowMd ? "right-12 top-2" : "right-2 top-2";
 
   return (
-    <div
-      ref={containerRef}
-      className={cn(
-        "workspace-map-root h-full min-h-0 w-full min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-100",
-        isBelowMd && "touch-manipulation"
-      )}
-      role="presentation"
-      aria-label="Spasial Portal"
-    />
+    <div className="relative h-full min-h-0 w-full min-w-0 flex-1">
+      <div
+        ref={containerRef}
+        className={cn(
+          "workspace-map-root h-full min-h-0 w-full min-w-0 rounded-md border border-slate-200 bg-slate-100",
+          enableGisChrome && "workspace-map-root--gis",
+          isBelowMd && "touch-manipulation"
+        )}
+        role="presentation"
+        aria-label="Spasial Portal"
+      />
+      {enableGisChrome ? (
+        <>
+          <WorkspaceMapNorthArrow className={northClass} />
+          {!externalStatusBar ? (
+            <WorkspaceMapStatusBar
+              state={statusState}
+              coordinateDisplay={coordinateDisplay}
+              onCoordinateDisplayToggle={onCoordinateDisplayToggle}
+            />
+          ) : null}
+        </>
+      ) : null}
+      {mapInstance && enableGisChrome ? (
+        <WorkspaceMapToolController
+          map={mapInstance}
+          toolMode={toolMode}
+          identifyFootprints={identifyFootprints ?? footprints}
+          onIdentifyResults={onIdentifyResults ?? (() => {})}
+          onMeasureDraftChange={onMeasureDraftChange ?? (() => {})}
+          onMeasureFinished={onMeasureFinished ?? (() => {})}
+          finishMeasureSignal={finishMeasureSignal}
+          clearMeasureSignal={clearMeasureSignal}
+        />
+      ) : null}
+      {mapInstance && enableGisChrome ? (
+        <WorkspaceMapRelationTraceLayer
+          map={mapInstance}
+          segments={relationTraceSegments}
+          enabled={showRelationTrace}
+        />
+      ) : null}
+    </div>
   );
-}
+});

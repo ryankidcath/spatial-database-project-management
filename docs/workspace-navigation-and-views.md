@@ -12,6 +12,7 @@
 | `docs/virtual-tables-migration-plan.md` | Meta schema virtual tables; saved views (filter/sort) |
 | `docs/mobile-workspace-guide.md` | Bottom bar mobile, wizard scope |
 | `docs/workspace-spatial-tab-ux.md` | Tab Spasial: UX target, legacy vs vtable, beda dengan view Peta |
+| `docs/workspace-spatial-gis-roadmap.md` | Backlog fitur GIS, biaya basemap/API |
 | `docs/notifikasi-event-matrix.md` | Lonceng vs tab Obrolan vs aktivitas |
 
 **Kode terkait (anchor):**

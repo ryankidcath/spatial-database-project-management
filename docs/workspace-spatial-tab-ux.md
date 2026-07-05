@@ -10,6 +10,7 @@
 | `docs/workspace-navigation-and-views.md` | Tab workspace vs view switcher per tabel |
 | `docs/spatial-import-roadmap.md` | Impor GeoJSON/DXF, CRS, batas ukuran (legacy + vtable) |
 | `docs/virtual-tables-migration-plan.md` | Model tabel virtual menggantikan issue geometry |
+| `docs/workspace-spatial-gis-roadmap.md` | Backlog fitur GIS tab Spasial, biaya basemap/API |
 
 **Kode terkait (anchor):**
 
@@ -330,6 +331,7 @@ WorkspaceRightPanel — RowDetailSection
 | **S5** | Klik geometri → panel kanan | Hapus popup vtable; `openRowDetail` | ✅ 2026-07 |
 | **S6** | Dialog impor terpadu | Wizard target tabel + format + pratinjau | ✅ 2026-07 |
 | **S7** | Hapus legacy | Setelah proyek `main` migrasi | Geom issue + `SpatialAttributesPanel` |
+| **G-A…G-G** | Fitur GIS lanjutan | Lihat `docs/workspace-spatial-gis-roadmap.md` | G-A ✅ G-B ✅; G-C… freeze $0 dulu |
 
 ---
 
@@ -356,6 +358,9 @@ Tidak ada pertanyaan terbuka yang menghalangi fase **S1–S5**. Fase **S6–S7**
 
 | Tanggal | Perubahan |
 |---------|-----------|
+| 2026-07-05 | G-B GIS surveyor (ukur, identify, go to XY, diff impor, export PNG) |
+| 2026-07-05 | **§11** pola data A/B/C & fase **G-H** — lihat `workspace-spatial-gis-roadmap.md` |
+| 2026-07-05 | Tautan ke `workspace-spatial-gis-roadmap.md`; fase G-A…G-G di §7 |
 | 2026-07-05 | S6 ✅ wizard impor terpadu; satu tombol Impor; embedded dialog forms |
 | 2026-07-05 | S5 ✅ klik poligon vtable → panel `row-detail`; sorot + tanpa popup Leaflet |
 | 2026-07-05 | S4 ✅ rail lapisan utama; toggle Eye; pratinjau impor; popover fallback saat rail tutup |

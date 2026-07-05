@@ -50,7 +50,7 @@ export async function fetchWorkspaceShell(
     supabase
       .schema("core_pm")
       .from("projects")
-      .select("id, name, key, organization_id, description, hierarchy_labels")
+      .select("id, name, key, organization_id, description, hierarchy_labels, entity_360_profile")
       .is("deleted_at", null)
       .eq("is_archived", false)
       .order("name");

@@ -30,6 +30,26 @@ import {
   type CompositeKecamatanTitleIndex,
   type RelationLookupIndex,
 } from "@/lib/virtual-table-relation-import";
+import { relationIdsFromPayload } from "@/lib/virtual-table-find-on-map";
+import {
+  buildVirtualColumnsByTableId,
+  pickFindOnMapRelationPath,
+} from "@/lib/virtual-table-find-on-map";
+import {
+  applyInboundGeomRelationLinks,
+  buildInboundGeomRelationSpecs,
+  type InboundGeomRelationSpec,
+} from "@/lib/virtual-table-geom-inbound-link";
+import type {
+  Entity360Section,
+  Entity360SectionRow,
+} from "@/lib/virtual-table-entity-360";
+import { applyEntity360PanelProfile } from "@/lib/virtual-table-entity-360";
+import type {
+  RelationTraceEndpoint,
+  RelationTraceTarget,
+} from "@/lib/workspace-map-relation-trace";
+import { parseProjectEntity360Profile } from "@/lib/project-entity-360-profile";
 import {
   extractClosedPolygonRingsFromDxfLayer,
   parseDxfDocument,
@@ -1875,6 +1895,9 @@ export type ImportVirtualRowsGeoJsonResult = {
   failed: number;
   skippedExisting: number;
   failureSamples: string[];
+  /** G-H5: relasi hub nominatif terisi otomatis setelah impor geom. */
+  inboundLinked?: number;
+  inboundLinkFailed?: number;
 };
 
 export async function importVirtualRowsGeoJsonBatchAction(
@@ -1886,6 +1909,8 @@ export async function importVirtualRowsGeoJsonBatchAction(
     failed: 0,
     skippedExisting: 0,
     failureSamples: [] as string[],
+    inboundLinked: 0,
+    inboundLinkFailed: 0,
   };
 
   const supabase = await createServerSupabaseClient();
@@ -1919,6 +1944,8 @@ export async function importVirtualRowsGeoJsonBatchAction(
     String(formData.get("target_kecamatan_slug") ?? "kecamatan").trim() || "kecamatan";
   const targetTitleSlug =
     String(formData.get("target_title_slug") ?? "title").trim() || "title";
+  const linkInboundRelations =
+    String(formData.get("link_inbound_relations") ?? "true").trim() !== "false";
 
   if (!tableId) return { error: "table_id kosong", ...empty };
   if (!geojsonRaw.trim()) return { error: "geojson_json kosong", ...empty };
@@ -1959,6 +1986,45 @@ export async function importVirtualRowsGeoJsonBatchAction(
     .order("position");
 
   if (colErr) return { error: colErr.message, ...empty };
+
+  const projectIdForLink = (tableRow as { project_id: string | null }).project_id;
+  let inboundSpecs: InboundGeomRelationSpec[] = [];
+  if (linkInboundRelations && projectIdForLink) {
+    const { data: projTablesRaw } = await supabase
+      .schema("core_pm")
+      .from("virtual_tables")
+      .select("id, display_name")
+      .eq("project_id", projectIdForLink)
+      .is("deleted_at", null);
+    const projTables = (projTablesRaw ?? []) as {
+      id: string;
+      display_name: string;
+    }[];
+    const projectTableIds = new Set(projTables.map((t) => t.id));
+    const tableNameById = new Map(projTables.map((t) => [t.id, t.display_name]));
+
+    if (projectTableIds.size > 0) {
+      const { data: projColsRaw } = await supabase
+        .schema("core_pm")
+        .from("virtual_columns")
+        .select("table_id, slug, display_name, data_type, position, config")
+        .in("table_id", [...projectTableIds]);
+
+      inboundSpecs = buildInboundGeomRelationSpecs({
+        geomTableId: tableId,
+        projectTableIds,
+        tableNameById,
+        columns: (projColsRaw ?? []) as {
+          table_id: string;
+          slug: string;
+          display_name: string;
+          data_type: string;
+          position: number;
+          config: Record<string, unknown> | null;
+        }[],
+      });
+    }
+  }
 
   const columns = (columnsRaw ?? []) as VirtualColumnForImport[];
   const geomCol = columns.find((c) => c.slug === geometryColumnSlug);
@@ -2187,6 +2253,25 @@ export async function importVirtualRowsGeoJsonBatchAction(
   }[] = [];
   const updates: { id: string; payload: Record<string, unknown> }[] = [];
   const pendingInsertIndexByKey = new Map<string, number>();
+  const geomLinkByUpsertKey = new Map<
+    string,
+    { featureIndex: number; props: Record<string, unknown>; geomRowId?: string }
+  >();
+
+  const queueGeomLink = (
+    rowUpsertKey: string,
+    featureIndex: number,
+    props: Record<string, unknown>,
+    geomRowId?: string
+  ) => {
+    if (inboundSpecs.length === 0) return;
+    const prev = geomLinkByUpsertKey.get(rowUpsertKey);
+    geomLinkByUpsertKey.set(rowUpsertKey, {
+      featureIndex,
+      props,
+      geomRowId: geomRowId ?? prev?.geomRowId,
+    });
+  };
 
   const pushFailure = (label: string, message: string) => {
     failed++;
@@ -2312,6 +2397,7 @@ export async function importVirtualRowsGeoJsonBatchAction(
       const merged = { ...existing.payload, ...patch };
       updates.push({ id: existing.id, payload: merged });
       existingByUpsertKey.set(rowUpsertKey, { id: existing.id, payload: merged });
+      queueGeomLink(rowUpsertKey, featureIndex, props, existing.id);
       continue;
     }
 
@@ -2331,6 +2417,7 @@ export async function importVirtualRowsGeoJsonBatchAction(
       sort_order: nextSort++,
       created_by: user.id,
     });
+    queueGeomLink(rowUpsertKey, featureIndex, props);
   }
 
   inserted = inserts.length;
@@ -2339,10 +2426,11 @@ export async function importVirtualRowsGeoJsonBatchAction(
   const CHUNK = 50;
   for (let i = 0; i < inserts.length; i += CHUNK) {
     const chunk = inserts.slice(i, i + CHUNK);
-    const { error: insertErr } = await supabase
+    const { data: insertedRows, error: insertErr } = await supabase
       .schema("core_pm")
       .from("virtual_rows")
-      .insert(chunk);
+      .insert(chunk)
+      .select("id, payload");
     if (insertErr) {
       return {
         error: insertErr.message,
@@ -2354,7 +2442,29 @@ export async function importVirtualRowsGeoJsonBatchAction(
           ...failureSamples,
           `Insert batch gagal: ${insertErr.message}`,
         ].slice(0, 12),
+        inboundLinked: 0,
+        inboundLinkFailed: 0,
       };
+    }
+
+    for (const row of insertedRows ?? []) {
+      const r = row as { id: string; payload: Record<string, unknown> | null };
+      const payload = r.payload ?? {};
+      const matchK = normalizeVirtualTableMatchKey(payload[matchColumnSlug]);
+      if (!matchK) continue;
+      const desaId = desaRelationColumnSlug
+        ? (payload[desaRelationColumnSlug] as string | undefined)
+        : null;
+      const storageKey = bidangUpsertStorageKey(
+        desaRelationColumnSlug || null,
+        desaId,
+        matchK
+      );
+      const link = geomLinkByUpsertKey.get(storageKey);
+      if (link && !link.geomRowId) {
+        link.geomRowId = r.id;
+        geomLinkByUpsertKey.set(storageKey, link);
+      }
     }
   }
 
@@ -2369,6 +2479,28 @@ export async function importVirtualRowsGeoJsonBatchAction(
       .eq("id", u.id);
     if (updErr) {
       pushFailure(`Update ${u.id.slice(0, 8)}`, updErr.message);
+    }
+  }
+
+  let inboundLinked = 0;
+  let inboundLinkFailed = 0;
+  if (inboundSpecs.length > 0 && geomLinkByUpsertKey.size > 0) {
+    const linkFeatures = [...geomLinkByUpsertKey.values()]
+      .filter((l): l is typeof l & { geomRowId: string } => Boolean(l.geomRowId))
+      .map((l) => ({
+        geomRowId: l.geomRowId,
+        props: l.props,
+        featureIndex: l.featureIndex,
+      }));
+    const linkResult = await applyInboundGeomRelationLinks(
+      supabase,
+      inboundSpecs,
+      linkFeatures
+    );
+    inboundLinked = linkResult.linked;
+    inboundLinkFailed = linkResult.failed;
+    for (const sample of linkResult.samples) {
+      pushFailure("Relasi hub", sample);
     }
   }
 
@@ -2392,6 +2524,7 @@ export async function importVirtualRowsGeoJsonBatchAction(
         match_column: matchColumnSlug,
         desa_source_mode: desaSourceMode,
         geo_desa_lookup: geoDesaLookup,
+        inbound_linked: inboundLinked,
       },
     });
   }
@@ -2441,6 +2574,8 @@ export async function importVirtualRowsGeoJsonBatchAction(
     failed,
     skippedExisting,
     failureSamples,
+    inboundLinked,
+    inboundLinkFailed,
   };
 }
 
@@ -2460,6 +2595,7 @@ const VIRTUAL_IMPORT_FORM_FIELD_KEYS = [
   "geo_nama_desa_prop",
   "target_kecamatan_slug",
   "target_title_slug",
+  "link_inbound_relations",
 ] as const;
 
 function copyVirtualImportFormFields(source: FormData, target: FormData): void {
@@ -3742,4 +3878,779 @@ export async function fetchOrgMembersAction(
   result.sort((a, b) => a.label.localeCompare(b.label));
 
   return { members: result, error: null };
+}
+
+// ---------------------------------------------------------------------------
+// G-H1 — Relation explorer (inbound + row fetch for navigation)
+// ---------------------------------------------------------------------------
+
+const INBOUND_RELATION_ROW_LIMIT = 50;
+
+function labelFromPayloadSlugs(
+  payload: Record<string, unknown>,
+  labelSlugs: string[]
+): string {
+  const parts = labelSlugs
+    .map((slug) => payload[slug])
+    .filter((v) => v != null && v !== "" && v !== false)
+    .map(String);
+  return parts.length > 0 ? parts.join(" — ") : "";
+}
+
+async function labelSlugsForTable(
+  supabase: NonNullable<Awaited<ReturnType<typeof createServerSupabaseClient>>>,
+  tableId: string
+): Promise<string[]> {
+  const { data: cols } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, data_type, position")
+    .eq("table_id", tableId)
+    .order("position")
+    .limit(2);
+
+  return (
+    (cols as { slug: string; data_type: string }[] | null)?.map((c) => c.slug) ?? [
+      "title",
+    ]
+  );
+}
+
+export type RelationExplorerGroupResult = {
+  tableId: string;
+  tableName: string;
+  columnSlug: string;
+  columnDisplayName: string;
+  direction: "outbound" | "inbound";
+  links: { rowId: string; label: string }[];
+};
+
+export async function fetchInboundRelationsForRowAction(
+  tableId: string,
+  rowId: string
+): Promise<{
+  groups: RelationExplorerGroupResult[];
+  error: string | null;
+}> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { groups: [], error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { groups: [], error: "Belum masuk" };
+
+  if (!tableId.trim() || !rowId.trim()) {
+    return { groups: [], error: "table_id / row_id kosong" };
+  }
+
+  const { data: sourceTable, error: tblErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("id, project_id, organization_id, display_name")
+    .eq("id", tableId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (tblErr) return { groups: [], error: tblErr.message };
+  if (!sourceTable) return { groups: [], error: "Tabel tidak ditemukan" };
+
+  const { data: inboundColsRaw, error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("id, table_id, slug, display_name, config")
+    .eq("data_type", "relation");
+
+  if (colErr) return { groups: [], error: colErr.message };
+
+  const inboundCols = (inboundColsRaw ?? []).filter((col) => {
+    const c = col as {
+      config: Record<string, unknown> | null;
+    };
+    return c.config?.target_table_id === tableId;
+  }) as {
+    table_id: string;
+    slug: string;
+    display_name: string;
+  }[];
+
+  if (inboundCols.length === 0) return { groups: [], error: null };
+
+  const sourceTableIds = [...new Set(inboundCols.map((c) => c.table_id))];
+
+  const { data: sourceTables, error: srcTblErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("id, project_id, organization_id, display_name")
+    .in("id", sourceTableIds)
+    .is("deleted_at", null);
+
+  if (srcTblErr) return { groups: [], error: srcTblErr.message };
+
+  const typedSourceTable = sourceTable as {
+    project_id: string | null;
+    organization_id: string | null;
+  };
+
+  const scopedSourceTables = (sourceTables ?? []).filter((t) => {
+    const row = t as {
+      id: string;
+      project_id: string | null;
+      organization_id: string | null;
+    };
+    if (typedSourceTable.project_id) {
+      return row.project_id === typedSourceTable.project_id;
+    }
+    return row.organization_id === typedSourceTable.organization_id;
+  }) as { id: string; display_name: string }[];
+
+  const scopedSourceTableIds = new Set(scopedSourceTables.map((t) => t.id));
+  const tableNameById = new Map(
+    scopedSourceTables.map((t) => [t.id, t.display_name])
+  );
+
+  const groups: RelationExplorerGroupResult[] = [];
+
+  for (const col of inboundCols) {
+    if (!scopedSourceTableIds.has(col.table_id)) continue;
+
+    const labelSlugs = await labelSlugsForTable(supabase, col.table_id);
+
+    const { data: rows, error: rowErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .select("id, payload")
+      .eq("table_id", col.table_id)
+      .is("deleted_at", null)
+      .order("sort_order")
+      .order("created_at", { ascending: true })
+      .limit(500);
+
+    if (rowErr) return { groups: [], error: rowErr.message };
+
+    const links: { rowId: string; label: string }[] = [];
+    for (const r of rows ?? []) {
+      const typed = r as { id: string; payload: Record<string, unknown> | null };
+      const payload = typed.payload ?? {};
+      const ids = relationIdsFromPayload(payload, col.slug);
+      if (!ids.includes(rowId)) continue;
+      links.push({
+        rowId: typed.id,
+        label:
+          labelFromPayloadSlugs(payload, labelSlugs) ||
+          typed.id.slice(0, 8),
+      });
+      if (links.length >= INBOUND_RELATION_ROW_LIMIT) break;
+    }
+
+    if (links.length === 0) continue;
+
+    groups.push({
+      tableId: col.table_id,
+      tableName: tableNameById.get(col.table_id) ?? col.table_id.slice(0, 8),
+      columnSlug: col.slug,
+      columnDisplayName: col.display_name,
+      direction: "inbound",
+      links,
+    });
+  }
+
+  return { groups, error: null };
+}
+
+export async function fetchVirtualRowByIdAction(rowId: string): Promise<{
+  row: {
+    id: string;
+    table_id: string;
+    payload: Record<string, unknown>;
+  } | null;
+  error: string | null;
+}> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { row: null, error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { row: null, error: "Belum masuk" };
+
+  const { data, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, table_id, payload")
+    .eq("id", rowId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) return { row: null, error: error.message };
+  if (!data) return { row: null, error: null };
+
+  const typed = data as {
+    id: string;
+    table_id: string;
+    payload: Record<string, unknown> | null;
+  };
+
+  return {
+    row: {
+      id: typed.id,
+      table_id: typed.table_id,
+      payload: typed.payload ?? {},
+    },
+    error: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// G-H3 — Panel 360° (anchor + relasi 1 hop)
+// ---------------------------------------------------------------------------
+
+const ENTITY_360_RELATED_ROW_LIMIT = 50;
+
+async function fetchVirtualRowsByIds(
+  supabase: NonNullable<Awaited<ReturnType<typeof createServerSupabaseClient>>>,
+  ids: string[]
+): Promise<
+  { id: string; table_id: string; payload: Record<string, unknown> }[]
+> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) return [];
+
+  const { data, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, table_id, payload")
+    .in("id", unique)
+    .is("deleted_at", null);
+
+  if (error) throw new Error(error.message);
+
+  return (data ?? []).map((r) => {
+    const row = r as {
+      id: string;
+      table_id: string;
+      payload: Record<string, unknown> | null;
+    };
+    return {
+      id: row.id,
+      table_id: row.table_id,
+      payload: row.payload ?? {},
+    };
+  });
+}
+
+function rowsToSectionEntries(
+  rows: { id: string; payload: Record<string, unknown> }[],
+  labelSlugs: string[]
+): Entity360SectionRow[] {
+  return rows.map((row) => ({
+    id: row.id,
+    label: labelFromPayloadSlugs(row.payload, labelSlugs) || row.id.slice(0, 8),
+    payload: row.payload,
+  }));
+}
+
+function collectRelationIds(
+  payloads: Record<string, unknown>[],
+  columns: { slug: string; data_type: string }[]
+): string[] {
+  const ids = new Set<string>();
+  for (const payload of payloads) {
+    for (const col of columns) {
+      if (col.data_type !== "relation") continue;
+      for (const id of relationIdsFromPayload(payload, col.slug)) {
+        ids.add(id);
+      }
+    }
+  }
+  return [...ids];
+}
+
+export async function fetchEntity360PanelAction(
+  tableId: string,
+  rowId: string,
+  anchorPayload?: Record<string, unknown> | null
+): Promise<{
+  sections: Entity360Section[];
+  relationLabels: Record<string, string>;
+  error: string | null;
+}> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { sections: [], relationLabels: {}, error: "Supabase tidak dikonfigurasi" };
+  }
+  const db = supabase;
+
+  const {
+    data: { user },
+  } = await db.auth.getUser();
+  if (!user) {
+    return { sections: [], relationLabels: {}, error: "Belum masuk" };
+  }
+
+  if (!tableId.trim() || !rowId.trim()) {
+    return { sections: [], relationLabels: {}, error: "table_id / row_id kosong" };
+  }
+
+  try {
+    const { data: anchorTable, error: tblErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_tables")
+      .select("id, project_id, organization_id, display_name")
+      .eq("id", tableId)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (tblErr) return { sections: [], relationLabels: {}, error: tblErr.message };
+    if (!anchorTable) {
+      return { sections: [], relationLabels: {}, error: "Tabel tidak ditemukan" };
+    }
+
+    const projectId = (anchorTable as { project_id: string }).project_id;
+    let entity360Profile = parseProjectEntity360Profile(null);
+    if (projectId) {
+      const { data: projectRow } = await supabase
+        .schema("core_pm")
+        .from("projects")
+        .select("entity_360_profile")
+        .eq("id", projectId)
+        .is("deleted_at", null)
+        .maybeSingle();
+      entity360Profile = parseProjectEntity360Profile(
+        (projectRow as { entity_360_profile?: unknown } | null)
+          ?.entity_360_profile
+      );
+    }
+
+    let anchorRowPayload = anchorPayload ?? null;
+    if (!anchorRowPayload) {
+      const fetched = await fetchVirtualRowByIdAction(rowId);
+      if (fetched.error) {
+        return { sections: [], relationLabels: {}, error: fetched.error };
+      }
+      if (!fetched.row) {
+        return { sections: [], relationLabels: {}, error: "Baris tidak ditemukan" };
+      }
+      anchorRowPayload = fetched.row.payload;
+    }
+
+    const { data: anchorColsRaw, error: anchorColErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_columns")
+      .select("slug, display_name, data_type, position, config")
+      .eq("table_id", tableId)
+      .order("position");
+
+    if (anchorColErr) {
+      return { sections: [], relationLabels: {}, error: anchorColErr.message };
+    }
+
+    const anchorCols = (anchorColsRaw ?? []) as {
+      slug: string;
+      display_name: string;
+      data_type: string;
+      config: Record<string, unknown> | null;
+    }[];
+
+    const anchorLabelSlugs = await labelSlugsForTable(supabase, tableId);
+    const sections: Entity360Section[] = [
+      {
+        tableId,
+        tableName: (anchorTable as { display_name: string }).display_name,
+        direction: "anchor",
+        rows: rowsToSectionEntries(
+          [{ id: rowId, payload: anchorRowPayload }],
+          anchorLabelSlugs
+        ),
+      },
+    ];
+
+    const tableNameCache = new Map<string, string>([
+      [tableId, (anchorTable as { display_name: string }).display_name],
+    ]);
+
+    async function tableNameFor(id: string): Promise<string> {
+      const cached = tableNameCache.get(id);
+      if (cached) return cached;
+      const { data } = await db
+        .schema("core_pm")
+        .from("virtual_tables")
+        .select("display_name")
+        .eq("id", id)
+        .maybeSingle();
+      const name =
+        (data as { display_name?: string } | null)?.display_name ??
+        id.slice(0, 8);
+      tableNameCache.set(id, name);
+      return name;
+    }
+
+    for (const col of anchorCols.filter((c) => c.data_type === "relation")) {
+      const targetTableId = col.config?.target_table_id as string | undefined;
+      if (!targetTableId) continue;
+
+      const targetIds = relationIdsFromPayload(anchorRowPayload!, col.slug);
+      if (targetIds.length === 0) continue;
+
+      const targetRows = await fetchVirtualRowsByIds(
+        supabase,
+        targetIds.slice(0, ENTITY_360_RELATED_ROW_LIMIT)
+      );
+      if (targetRows.length === 0) continue;
+
+      const labelSlugs = await labelSlugsForTable(supabase, targetTableId);
+      sections.push({
+        tableId: targetTableId,
+        tableName: await tableNameFor(targetTableId),
+        direction: "outbound",
+        relationColumnSlug: col.slug,
+        relationColumnDisplayName: col.display_name,
+        rows: rowsToSectionEntries(targetRows, labelSlugs),
+      });
+    }
+
+    const inboundResult = await fetchInboundRelationsForRowAction(tableId, rowId);
+    if (inboundResult.error) {
+      return { sections: [], relationLabels: {}, error: inboundResult.error };
+    }
+
+    for (const group of inboundResult.groups) {
+      const ids = group.links.map((l) => l.rowId);
+      const inboundRows = await fetchVirtualRowsByIds(supabase, ids);
+      if (inboundRows.length === 0) continue;
+
+      const labelSlugs = await labelSlugsForTable(supabase, group.tableId);
+      sections.push({
+        tableId: group.tableId,
+        tableName: group.tableName,
+        direction: "inbound",
+        relationColumnSlug: group.columnSlug,
+        relationColumnDisplayName: group.columnDisplayName,
+        rows: rowsToSectionEntries(inboundRows, labelSlugs),
+      });
+    }
+
+    const tableIds = [...new Set(sections.map((s) => s.tableId))];
+    const { data: allColsRaw } = await supabase
+      .schema("core_pm")
+      .from("virtual_columns")
+      .select("table_id, slug, data_type")
+      .in("table_id", tableIds);
+
+    const colsByTable = new Map<string, { slug: string; data_type: string }[]>();
+    for (const col of allColsRaw ?? []) {
+      const c = col as { table_id: string; slug: string; data_type: string };
+      const list = colsByTable.get(c.table_id) ?? [];
+      list.push(c);
+      colsByTable.set(c.table_id, list);
+    }
+
+    const relationIds = new Set<string>();
+    for (const section of sections) {
+      const cols = colsByTable.get(section.tableId) ?? [];
+      for (const id of collectRelationIds(
+        section.rows.map((r) => r.payload),
+        cols
+      )) {
+        relationIds.add(id);
+      }
+    }
+
+    let relationLabels: Record<string, string> = {};
+    if (relationIds.size > 0) {
+      const resolved = await resolveRelationLabelsAction([...relationIds]);
+      if (resolved.error) {
+        return { sections: [], relationLabels: {}, error: resolved.error };
+      }
+      relationLabels = resolved.labels;
+    }
+
+    const orderedSections = applyEntity360PanelProfile(
+      sections,
+      entity360Profile
+    );
+
+    return { sections: orderedSections, relationLabels, error: null };
+  } catch (e) {
+    return {
+      sections: [],
+      relationLabels: {},
+      error: e instanceof Error ? e.message : "Gagal memuat panel 360°",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// G-D5 — Trace relasi (garis centroid di peta, 1 hop)
+// ---------------------------------------------------------------------------
+
+const RELATION_TRACE_ROW_LIMIT = 50;
+
+export async function fetchRelationTraceTargetsAction(
+  tableId: string,
+  rowId: string,
+  anchorPayload?: Record<string, unknown> | null
+): Promise<{
+  anchorEndpoints: RelationTraceEndpoint[];
+  targets: RelationTraceTarget[];
+  error: string | null;
+}> {
+  const empty = {
+    anchorEndpoints: [] as RelationTraceEndpoint[],
+    targets: [] as RelationTraceTarget[],
+    error: null as string | null,
+  };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { ...empty, error: "Supabase tidak dikonfigurasi" };
+  const db = supabase;
+
+  const {
+    data: { user },
+  } = await db.auth.getUser();
+  if (!user) return { ...empty, error: "Belum masuk" };
+
+  if (!tableId.trim() || !rowId.trim()) {
+    return { ...empty, error: "table_id / row_id kosong" };
+  }
+
+  try {
+    const { data: anchorTable, error: tblErr } = await db
+      .schema("core_pm")
+      .from("virtual_tables")
+      .select("id, project_id, organization_id, display_name")
+      .eq("id", tableId)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (tblErr) return { ...empty, error: tblErr.message };
+    if (!anchorTable) return { ...empty, error: "Tabel tidak ditemukan" };
+
+    const projectId = (anchorTable as { project_id: string | null }).project_id;
+    const orgId = (anchorTable as { organization_id: string | null })
+      .organization_id;
+
+    let entity360Profile = parseProjectEntity360Profile(null);
+    if (projectId) {
+      const { data: projectRow } = await db
+        .schema("core_pm")
+        .from("projects")
+        .select("entity_360_profile")
+        .eq("id", projectId)
+        .is("deleted_at", null)
+        .maybeSingle();
+      entity360Profile = parseProjectEntity360Profile(
+        (projectRow as { entity_360_profile?: unknown } | null)
+          ?.entity_360_profile
+      );
+    }
+
+    let anchorRowPayload = anchorPayload ?? null;
+    if (!anchorRowPayload) {
+      const fetched = await fetchVirtualRowByIdAction(rowId);
+      if (fetched.error) return { ...empty, error: fetched.error };
+      if (!fetched.row) return { ...empty, error: "Baris tidak ditemukan" };
+      anchorRowPayload = fetched.row.payload;
+    }
+
+    if (!projectId && !orgId) return empty;
+
+    const scopeFilter = projectId
+      ? { col: "project_id" as const, val: projectId }
+      : { col: "organization_id" as const, val: orgId };
+
+    const { data: projectTablesRaw, error: ptErr } = await db
+      .schema("core_pm")
+      .from("virtual_tables")
+      .select("id")
+      .eq(scopeFilter.col, scopeFilter.val)
+      .is("deleted_at", null);
+
+    if (ptErr) return { ...empty, error: ptErr.message };
+
+    const projectTableIds = (projectTablesRaw ?? []).map(
+      (t) => (t as { id: string }).id
+    );
+    if (projectTableIds.length === 0) return empty;
+
+    const { data: allColsRaw, error: allColErr } = await db
+      .schema("core_pm")
+      .from("virtual_columns")
+      .select("table_id, slug, display_name, data_type, position, config")
+      .in("table_id", projectTableIds)
+      .order("position");
+
+    if (allColErr) return { ...empty, error: allColErr.message };
+
+    const columnsByTableId = buildVirtualColumnsByTableId(
+      (allColsRaw ?? []).map((c) => {
+        const col = c as {
+          table_id: string;
+          slug: string;
+          display_name: string;
+          data_type: string;
+          position: number;
+          config: Record<string, unknown> | null;
+        };
+        return {
+          id: `${col.table_id}:${col.slug}`,
+          table_id: col.table_id,
+          slug: col.slug,
+          display_name: col.display_name,
+          data_type: col.data_type as import("./virtual-table-types").VirtualColumnDataType,
+          position: col.position,
+          is_required: false,
+          config: col.config ?? {},
+        };
+      })
+    );
+
+    const anchorCols = columnsByTableId.get(tableId) ?? [];
+
+    async function endpointsForRow(
+      sourceTableId: string,
+      sourceRowId: string,
+      payload: Record<string, unknown>,
+      viaLabel?: string
+    ): Promise<RelationTraceTarget[]> {
+      const cols = columnsByTableId.get(sourceTableId) ?? [];
+      const geoCol = cols.find((c) => c.data_type === "geometry");
+      const labelSlugs = await labelSlugsForTable(db, sourceTableId);
+      const rowLabel =
+        labelFromPayloadSlugs(payload, labelSlugs) || sourceRowId.slice(0, 8);
+
+      if (geoCol) {
+        const geo = payload[geoCol.slug];
+        if (geo != null && geo !== "") {
+          return [
+            {
+              tableId: sourceTableId,
+              rowId: sourceRowId,
+              label: rowLabel,
+              viaLabel,
+            },
+          ];
+        }
+        return [];
+      }
+
+      const path = pickFindOnMapRelationPath(cols, columnsByTableId, {
+        sourceTableId,
+        geometryHolder: entity360Profile.geometry_holder,
+      });
+      if (!path) return [];
+
+      const geomRowIds = relationIdsFromPayload(
+        payload,
+        path.relationColumnSlug
+      );
+      if (geomRowIds.length === 0) return [];
+
+      const geomRows = await fetchVirtualRowsByIds(
+        db,
+        geomRowIds.slice(0, RELATION_TRACE_ROW_LIMIT)
+      );
+      const geomLabelSlugs = await labelSlugsForTable(
+        db,
+        path.targetTableId
+      );
+
+      return geomRows.map((gr) => ({
+        tableId: path.targetTableId,
+        rowId: gr.id,
+        label:
+          labelFromPayloadSlugs(gr.payload, geomLabelSlugs) ||
+          gr.id.slice(0, 8),
+        viaLabel: viaLabel ?? path.relationColumnLabel,
+      }));
+    }
+
+    const anchorExpanded = await endpointsForRow(
+      tableId,
+      rowId,
+      anchorRowPayload
+    );
+    const anchorEndpoints: RelationTraceEndpoint[] = anchorExpanded.map(
+      ({ tableId: tId, rowId: rId, label }) => ({
+        tableId: tId,
+        rowId: rId,
+        label,
+      })
+    );
+
+    const anchorKeys = new Set(
+      anchorEndpoints.map((ep) => `${ep.tableId}:${ep.rowId}`)
+    );
+    anchorKeys.add(`${tableId}:${rowId}`);
+
+    const targets: RelationTraceTarget[] = [];
+    const seenTarget = new Set<string>();
+
+    function addTargets(rows: RelationTraceTarget[]) {
+      for (const row of rows) {
+        const key = `${row.tableId}:${row.rowId}`;
+        if (anchorKeys.has(key) || seenTarget.has(key)) continue;
+        seenTarget.add(key);
+        targets.push(row);
+        if (targets.length >= RELATION_TRACE_ROW_LIMIT) return;
+      }
+    }
+
+    for (const col of anchorCols.filter((c) => c.data_type === "relation")) {
+      const targetTableId = col.config?.target_table_id as string | undefined;
+      if (!targetTableId) continue;
+
+      const targetIds = relationIdsFromPayload(anchorRowPayload!, col.slug);
+      if (targetIds.length === 0) continue;
+
+      const targetRows = await fetchVirtualRowsByIds(
+        db,
+        targetIds.slice(0, RELATION_TRACE_ROW_LIMIT)
+      );
+      for (const tr of targetRows) {
+        const eps = await endpointsForRow(
+          tr.table_id,
+          tr.id,
+          tr.payload,
+          col.display_name
+        );
+        addTargets(eps);
+        if (targets.length >= RELATION_TRACE_ROW_LIMIT) break;
+      }
+      if (targets.length >= RELATION_TRACE_ROW_LIMIT) break;
+    }
+
+    if (targets.length < RELATION_TRACE_ROW_LIMIT) {
+      const inboundResult = await fetchInboundRelationsForRowAction(
+        tableId,
+        rowId
+      );
+      if (inboundResult.error) {
+        return { ...empty, error: inboundResult.error };
+      }
+
+      for (const group of inboundResult.groups) {
+        const ids = group.links.map((l) => l.rowId);
+        const inboundRows = await fetchVirtualRowsByIds(db, ids);
+        for (const ir of inboundRows) {
+          const eps = await endpointsForRow(
+            ir.table_id,
+            ir.id,
+            ir.payload,
+            group.columnDisplayName
+          );
+          addTargets(eps);
+          if (targets.length >= RELATION_TRACE_ROW_LIMIT) break;
+        }
+        if (targets.length >= RELATION_TRACE_ROW_LIMIT) break;
+      }
+    }
+
+    return { anchorEndpoints, targets, error: null };
+  } catch (e) {
+    return {
+      ...empty,
+      error: e instanceof Error ? e.message : "Gagal memuat trace relasi",
+    };
+  }
 }

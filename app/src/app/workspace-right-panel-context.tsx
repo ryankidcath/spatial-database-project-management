@@ -56,6 +56,14 @@ export type WorkspaceRightPanelState =
       pathSegments: string[];
       rowPayload?: Record<string, unknown>;
       relationLabels?: Record<string, string>;
+    }
+  | {
+      kind: "entity-360";
+      tableId: string;
+      rowId: string;
+      pathSegments: string[];
+      rowPayload?: Record<string, unknown>;
+      relationLabels?: Record<string, string>;
     };
 
 export type OpenOrganizationChatInput = {
@@ -97,6 +105,8 @@ export type OpenRowDetailInput = {
   relationLabels?: Record<string, string>;
 };
 
+export type OpenEntity360Input = OpenRowDetailInput;
+
 export type PatchRowPanelInput = {
   rowPayload?: Record<string, unknown>;
   relationLabels?: Record<string, string>;
@@ -110,6 +120,7 @@ export type WorkspaceRightPanelApi = {
   openRowPanel: (input: OpenRowPanelInput) => void;
   openTableData: (input: OpenTableDataInput) => void;
   openRowDetail: (input: OpenRowDetailInput) => void;
+  openEntity360: (input: OpenEntity360Input) => void;
   patchRowPanel: (patch: PatchRowPanelInput) => void;
   closePanel: () => void;
   setRowTab: (tab: WorkspaceRightPanelRowTab) => void;
@@ -119,6 +130,7 @@ export type WorkspaceRightPanelApi = {
   isRowPanelOpen: (rowId: string) => boolean;
   isTableDataOpen: (tableId: string) => boolean;
   isRowDetailOpen: (rowId: string) => boolean;
+  isEntity360Open: (rowId: string) => boolean;
 };
 
 const WorkspaceRightPanelContext = createContext<WorkspaceRightPanelApi | null>(null);
@@ -205,6 +217,22 @@ export function WorkspaceRightPanelProvider({
     });
   }, []);
 
+  const openEntity360 = useCallback((input: OpenEntity360Input) => {
+    setPanel((prev) => {
+      if (prev?.kind === "entity-360" && prev.rowId === input.rowId) {
+        return null;
+      }
+      return {
+        kind: "entity-360",
+        tableId: input.tableId,
+        rowId: input.rowId,
+        pathSegments: input.pathSegments,
+        rowPayload: input.rowPayload,
+        relationLabels: input.relationLabels,
+      };
+    });
+  }, []);
+
   const closePanel = useCallback(() => setPanel(null), []);
 
   const patchRowPanel = useCallback((patch: PatchRowPanelInput) => {
@@ -252,6 +280,11 @@ export function WorkspaceRightPanelProvider({
     [panel]
   );
 
+  const isEntity360Open = useCallback(
+    (rowId: string) => panel?.kind === "entity-360" && panel.rowId === rowId,
+    [panel]
+  );
+
   const value = useMemo(
     () => ({
       panel,
@@ -261,6 +294,7 @@ export function WorkspaceRightPanelProvider({
       openRowPanel,
       openTableData,
       openRowDetail,
+      openEntity360,
       patchRowPanel,
       closePanel,
       setRowTab,
@@ -270,6 +304,7 @@ export function WorkspaceRightPanelProvider({
       isRowPanelOpen,
       isTableDataOpen,
       isRowDetailOpen,
+      isEntity360Open,
     }),
     [
       panel,
@@ -279,6 +314,7 @@ export function WorkspaceRightPanelProvider({
       openRowPanel,
       openTableData,
       openRowDetail,
+      openEntity360,
       patchRowPanel,
       closePanel,
       setRowTab,
@@ -288,6 +324,7 @@ export function WorkspaceRightPanelProvider({
       isRowPanelOpen,
       isTableDataOpen,
       isRowDetailOpen,
+      isEntity360Open,
     ]
   );
 
