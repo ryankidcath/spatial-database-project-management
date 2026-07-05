@@ -14,13 +14,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { RelationTargetPickerDialog } from "@/components/relation-target-picker-dialog";
 import { cn } from "@/lib/utils";
@@ -54,6 +47,7 @@ import type {
   VirtualTableRow,
 } from "./virtual-table-types";
 import { importVirtualRowsDxfBatchAction } from "./virtual-table-actions";
+import { ImportDialogShell } from "./import-dialog-shell";
 
 const DxfMappingPreviewMap = dynamic(
   () =>
@@ -80,6 +74,8 @@ export function VirtualTableDxfImportDialog({
   allVirtualTables,
   rows,
   onImported,
+  embedded = false,
+  cancelLabel = "Tutup",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -88,6 +84,8 @@ export function VirtualTableDxfImportDialog({
   allVirtualTables: VirtualTableRow[];
   rows: VirtualDataRow[];
   onImported: () => void;
+  embedded?: boolean;
+  cancelLabel?: string;
 }) {
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [importPending, startImportTransition] = useTransition();
@@ -413,24 +411,25 @@ export function VirtualTableDxfImportDialog({
     dxfMatchKeys.every((k) => k.trim());
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Impor DXF ke {table.display_name}</DialogTitle>
-          <DialogDescription>
-            Satu poligon tertutup di layer DXF → satu baris. Kunci upsert memakai
-            kolom <span className="font-mono">{matchSlug || "…"}</span>
-            {desaRelationSlug ? (
-              <>
-                {" "}
-                + relasi <span className="font-mono">{desaRelationSlug}</span>
-              </>
-            ) : null}
-            . Koordinat ditransform ke WGS84 sebelum disimpan.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3 text-sm">
+    <ImportDialogShell
+      embedded={embedded}
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Impor DXF ke ${table.display_name}`}
+      description={
+        <>
+          Satu poligon tertutup di layer DXF → satu baris. Kunci upsert memakai
+          kolom <span className="font-mono">{matchSlug || "…"}</span>
+          {desaRelationSlug ? (
+            <>
+              {" "}
+              + relasi <span className="font-mono">{desaRelationSlug}</span>
+            </>
+          ) : null}
+          . Koordinat ditransform ke WGS84 sebelum disimpan.
+        </>
+      }
+    >
           <div>
             <Label htmlFor="dxf-vt-file">File DXF</Label>
             <Input
@@ -834,7 +833,7 @@ export function VirtualTableDxfImportDialog({
               onClick={() => onOpenChange(false)}
               disabled={importPending}
             >
-              Tutup
+              {cancelLabel}
             </Button>
             <Button type="button" disabled={!canImport} onClick={runImport}>
               {importPending ? (
@@ -847,7 +846,6 @@ export function VirtualTableDxfImportDialog({
               )}
             </Button>
           </div>
-        </div>
 
         {relationTargetTableId ? (
           <RelationTargetPickerDialog
@@ -867,7 +865,6 @@ export function VirtualTableDxfImportDialog({
             }}
           />
         ) : null}
-      </DialogContent>
-    </Dialog>
+    </ImportDialogShell>
   );
 }

@@ -14,13 +14,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
@@ -53,6 +46,7 @@ import {
 } from "@/lib/virtual-table-map-preview";
 import type { MapFootprint } from "./workspace-map";
 import { bootstrapVirtualTableLayerFromSpatialAction } from "./virtual-table-actions";
+import { ImportDialogShell } from "./import-dialog-shell";
 
 const DxfMappingPreviewMap = dynamic(
   () =>
@@ -74,6 +68,8 @@ export function VirtualTableLayerUploadDialog({
   onCreated,
   mapPreviewEnabled = false,
   onPreviewChange,
+  embedded = false,
+  cancelLabel = "Batal",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -81,6 +77,9 @@ export function VirtualTableLayerUploadDialog({
   onCreated: (result: LayerUploadCreated) => void;
   mapPreviewEnabled?: boolean;
   onPreviewChange?: (footprints: MapFootprint[] | null) => void;
+  /** Tanpa dialog sendiri — dipakai wizard impor Spasial. */
+  embedded?: boolean;
+  cancelLabel?: string;
 }) {
   const [sourceFormat, setSourceFormat] = useState<"geojson" | "dxf">("geojson");
   const [displayName, setDisplayName] = useState("");
@@ -370,20 +369,21 @@ export function VirtualTableLayerUploadDialog({
   ]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Layer baru dari file</DialogTitle>
-          <DialogDescription>
-            Untuk surveyor: unggah geometri dulu — sistem membuat tabel baru
-            dengan kolom <span className="font-mono">no_bidang</span>,{" "}
-            <span className="font-mono">geom</span>, dan{" "}
-            <span className="font-mono">title</span>. Admin dapat menambah kolom
-            atau impor CSV nanti.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3 text-sm">
+    <ImportDialogShell
+      embedded={embedded}
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Layer baru dari file"
+      description={
+        <>
+          Untuk surveyor: unggah geometri dulu — sistem membuat tabel baru
+          dengan kolom <span className="font-mono">no_bidang</span>,{" "}
+          <span className="font-mono">geom</span>, dan{" "}
+          <span className="font-mono">title</span>. Admin dapat menambah kolom
+          atau impor CSV nanti.
+        </>
+      }
+    >
           {mapPreviewEnabled && sourceFormat === "geojson" ? (
             <p className="rounded-md border border-teal-500/30 bg-teal-500/10 px-3 py-2 text-xs">
               GeoJSON valid ditampilkan di peta utama (garis teal) sebelum
@@ -640,7 +640,7 @@ export function VirtualTableLayerUploadDialog({
               onClick={() => onOpenChange(false)}
               disabled={pending}
             >
-              Batal
+              {cancelLabel}
             </Button>
             <Button type="button" disabled={!canSubmit} onClick={runCreate}>
               {pending ? (
@@ -653,8 +653,6 @@ export function VirtualTableLayerUploadDialog({
               )}
             </Button>
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+    </ImportDialogShell>
   );
 }

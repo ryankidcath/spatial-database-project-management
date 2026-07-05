@@ -38,6 +38,19 @@ export type MapFootprint = {
   };
   /** Hanya `virtual_table` — untuk chat baris dari popup. */
   virtualTableId?: string;
+  /** Hanya `virtual_table` — metadata klik → panel detail. */
+  virtualRowId?: string;
+  rowPayload?: Record<string, unknown>;
+  relationLabels?: Record<string, string>;
+  chatPathSegments?: string[];
+};
+
+export type VirtualRowMapSelect = {
+  rowId: string;
+  tableId: string;
+  pathSegments: string[];
+  rowPayload?: Record<string, unknown>;
+  relationLabels?: Record<string, string>;
 };
 
 const DEFAULT_CENTER: L.LatLngExpression = [-6.74, 108.55];
@@ -510,12 +523,119 @@ function openLayerPopup(layer: L.Layer): boolean {
   return false;
 }
 
+function buildVirtualRowSelect(
+  fp: MapFootprint,
+  feature?: GeoJSON.Feature
+): VirtualRowMapSelect | null {
+  const props = mergedPopupProperties(
+    feature,
+    fp.popupProperties,
+    "virtual_table"
+  );
+  const rowId = (
+    fp.virtualRowId ??
+    (typeof props._virtual_row_id === "string" ? props._virtual_row_id : "")
+  ).trim();
+  const tableId = (
+    fp.virtualTableId ??
+    (typeof props._virtual_table_id === "string" ? props._virtual_table_id : "")
+  ).trim();
+  if (!rowId || !tableId) return null;
+
+  let pathSegments = fp.chatPathSegments ?? [];
+  if (pathSegments.length === 0) {
+    const pathRaw =
+      typeof props._chat_path_segments === "string"
+        ? props._chat_path_segments.trim()
+        : "";
+    if (pathRaw) {
+      try {
+        const parsed = JSON.parse(pathRaw) as unknown;
+        if (Array.isArray(parsed)) {
+          pathSegments = parsed
+            .map((x) => (typeof x === "string" ? x.trim() : ""))
+            .filter(Boolean);
+        }
+      } catch {
+        pathSegments = [];
+      }
+    }
+  }
+  if (pathSegments.length === 0) {
+    const rowTitle =
+      typeof props._popup_row_title === "string"
+        ? props._popup_row_title.trim()
+        : rowId.slice(0, 8);
+    const table =
+      typeof props.Tabel === "string" ? props.Tabel.trim() : fp.label;
+    const project =
+      typeof props._popup_project_name === "string"
+        ? props._popup_project_name.trim()
+        : "";
+    pathSegments = buildChatRowPathSegments({
+      projectName: project || null,
+      tableDisplayName: table,
+      rowLabel: rowTitle,
+    });
+  }
+
+  return {
+    rowId,
+    tableId,
+    pathSegments,
+    rowPayload: fp.rowPayload,
+    relationLabels: fp.relationLabels,
+  };
+}
+
+function ensureVirtualTableFeatureProperties(
+  feature: GeoJSON.Feature,
+  fp: MapFootprint
+): void {
+  if (!feature.properties) {
+    feature.properties = {};
+  }
+  const props = feature.properties as Record<string, unknown>;
+  if (fp.virtualRowId) props._virtual_row_id = fp.virtualRowId;
+  if (fp.virtualTableId) props._virtual_table_id = fp.virtualTableId;
+  if (fp.popupProperties && typeof fp.popupProperties === "object") {
+    Object.assign(props, fp.popupProperties);
+  }
+}
+
+function wireVirtualTableFeatureClick(
+  layer: L.Layer,
+  fp: MapFootprint,
+  feature: GeoJSON.Feature,
+  onSelect?: (select: VirtualRowMapSelect) => void
+): void {
+  if (!onSelect || (fp.layerKind ?? "demo") !== "virtual_table") return;
+  const select = buildVirtualRowSelect(fp, feature);
+  if (!select) return;
+  layer.on("click", (e: L.LeafletMouseEvent) => {
+    L.DomEvent.stopPropagation(e);
+    onSelect(select);
+  });
+}
+
 function polygonStyle(
   feature: GeoJSON.Feature | undefined,
   layerKind: MapFootprintLayerKind,
-  isHighlight: boolean
+  isBerkasHighlight: boolean,
+  highlightVirtualRowId: string | null | undefined
 ): L.PathOptions {
-  if (isHighlight) {
+  const props = feature?.properties as Record<string, unknown> | undefined;
+  const virtualRowId =
+    typeof props?._virtual_row_id === "string"
+      ? props._virtual_row_id.trim()
+      : "";
+  const isVirtualRowHighlight =
+    layerKind === "virtual_table" &&
+    highlightVirtualRowId != null &&
+    highlightVirtualRowId !== "" &&
+    virtualRowId === highlightVirtualRowId;
+
+  if (isBerkasHighlight || isVirtualRowHighlight) {
     return {
       color: "#c2410c",
       fillColor: "#ea580c",
@@ -523,7 +643,6 @@ function polygonStyle(
       weight: 4,
     };
   }
-  const props = feature?.properties as Record<string, unknown> | undefined;
   const defaultStroke =
     layerKind === "bidang_hasil_ukur"
       ? "#047857"
@@ -565,17 +684,19 @@ function polygonStyle(
 export function WorkspaceMap({
   footprints,
   highlightBerkasId = null,
-  onVirtualRowChat,
+  highlightVirtualRowId = null,
+  onVirtualRowSelect,
+  onMapBackgroundClick,
 }: {
   footprints: MapFootprint[];
   /** Sorot poligon hasil ukur yang terikat `berkas_id` ini. */
   highlightBerkasId?: string | null;
-  /** Buka chat virtual row dari popup peta. */
-  onVirtualRowChat?: (
-    rowId: string,
-    pathSegments: string[],
-    tableId: string
-  ) => void;
+  /** Sorot poligon baris virtual terpilih (panel detail). */
+  highlightVirtualRowId?: string | null;
+  /** Klik poligon vtable → panel detail (bukan popup). */
+  onVirtualRowSelect?: (select: VirtualRowMapSelect) => void;
+  /** Klik area kosong peta — tutup detail / hapus sorot. */
+  onMapBackgroundClick?: () => void;
 }) {
   const router = useRouter();
   const isBelowMd = useIsBelowMd();
@@ -677,11 +798,13 @@ export function WorkspaceMap({
     for (const fp of footprints) {
       if (!fp.geojson || typeof fp.geojson !== "object") continue;
       const layerKind = fp.layerKind ?? "demo";
-      const isHighlight =
+      const isBerkasHighlight =
         layerKind === "bidang_hasil_ukur" &&
         highlightBerkasId != null &&
         highlightBerkasId !== "" &&
         fp.berkasId === highlightBerkasId;
+      const useVirtualRowClick =
+        layerKind === "virtual_table" && onVirtualRowSelect != null;
       try {
         const geojsonObject = fp.geojson as
           | { type?: string }
@@ -696,13 +819,26 @@ export function WorkspaceMap({
             polygonStyle(
               feat as GeoJSON.Feature | undefined,
               layerKind,
-              isHighlight
+              isBerkasHighlight,
+              highlightVirtualRowId
             ),
           onEachFeature: (feature, featureLayer) => {
-            featureLayer.bindPopup(
-              popupHtmlWithGeoJson(fp, feature),
-              POPUP_OPTIONS
-            );
+            if (layerKind === "virtual_table") {
+              ensureVirtualTableFeatureProperties(feature, fp);
+            }
+            if (useVirtualRowClick) {
+              wireVirtualTableFeatureClick(
+                featureLayer,
+                fp,
+                feature,
+                onVirtualRowSelect
+              );
+            } else {
+              featureLayer.bindPopup(
+                popupHtmlWithGeoJson(fp, feature),
+                POPUP_OPTIONS
+              );
+            }
             if (layerKind === "issue_geometry" && fp.issueGeometryEdit) {
               wireIssueGeometryPopupEditing(
                 featureLayer,
@@ -717,7 +853,17 @@ export function WorkspaceMap({
         });
         // Fallback jika source bukan Feature/FeatureCollection.
         if (!isFeatureSource) {
-          layer.bindPopup(popupHtmlWithGeoJson(fp, fp.geojson), POPUP_OPTIONS);
+          if (!useVirtualRowClick) {
+            layer.bindPopup(popupHtmlWithGeoJson(fp, fp.geojson), POPUP_OPTIONS);
+          } else {
+            const select = buildVirtualRowSelect(fp);
+            if (select) {
+              layer.on("click", (e: L.LeafletMouseEvent) => {
+                L.DomEvent.stopPropagation(e);
+                onVirtualRowSelect?.(select);
+              });
+            }
+          }
           if (layerKind === "issue_geometry" && fp.issueGeometryEdit) {
             wireIssueGeometryPopupEditing(layer, fp.issueGeometryEdit, () => {
               reopenPopupForFootprintIdRef.current = fp.id;
@@ -755,53 +901,23 @@ export function WorkspaceMap({
     if (layerToReopen) {
       openLayerPopup(layerToReopen);
     }
-  }, [footprints, highlightBerkasId, router]);
+  }, [
+    footprints,
+    highlightBerkasId,
+    highlightVirtualRowId,
+    onVirtualRowSelect,
+    router,
+  ]);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el || !onVirtualRowChat) return;
-    const onClick = (e: MouseEvent) => {
-      const btn = (e.target as HTMLElement | null)?.closest?.(
-        "[data-vt-chat-row-id]"
-      );
-      if (!btn) return;
-      e.preventDefault();
-      const rowId = btn.getAttribute("data-vt-chat-row-id")?.trim();
-      if (!rowId) return;
-      const pathRaw = btn.getAttribute("data-vt-chat-path")?.trim();
-      let pathSegments: string[] | null = null;
-      if (pathRaw) {
-        try {
-          const parsed = JSON.parse(pathRaw) as unknown;
-          if (Array.isArray(parsed)) {
-            pathSegments = parsed
-              .map((x) => (typeof x === "string" ? x.trim() : ""))
-              .filter(Boolean);
-          }
-        } catch {
-          pathSegments = null;
-        }
-      }
-      if (!pathSegments?.length) {
-        const rowTitle =
-          btn.getAttribute("data-vt-chat-row-title")?.trim() ??
-          rowId.slice(0, 8);
-        const table =
-          btn.getAttribute("data-vt-chat-table")?.trim() ?? "Tabel";
-        const project = btn.getAttribute("data-vt-chat-project")?.trim();
-        pathSegments = buildChatRowPathSegments({
-          projectName: project || null,
-          tableDisplayName: table,
-          rowLabel: rowTitle,
-        });
-      }
-      const tableId = btn.getAttribute("data-vt-chat-table-id")?.trim() ?? "";
-      mapRef.current?.closePopup();
-      onVirtualRowChat(rowId, pathSegments, tableId);
+    const map = mapRef.current;
+    if (!map || !onMapBackgroundClick) return;
+    const handler = () => onMapBackgroundClick();
+    map.on("click", handler);
+    return () => {
+      map.off("click", handler);
     };
-    el.addEventListener("click", onClick);
-    return () => el.removeEventListener("click", onClick);
-  }, [onVirtualRowChat]);
+  }, [onMapBackgroundClick]);
 
   return (
     <div
@@ -811,7 +927,7 @@ export function WorkspaceMap({
         isBelowMd && "touch-manipulation"
       )}
       role="presentation"
-      aria-label="Peta Portal"
+      aria-label="Spasial Portal"
     />
   );
 }

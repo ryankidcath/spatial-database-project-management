@@ -4,13 +4,14 @@ import { X } from "lucide-react";
 import { RowChatContextPath } from "@/components/row-chat-context-path";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import { RUANG_KERJA_LABEL, ruangKerjaLc } from "@/lib/product-labels";
+import { RUANG_KERJA_LABEL } from "@/lib/product-labels";
 import { useIsBelowMd } from "@/lib/use-media-query";
 import { buildChatTablePathSegments } from "@/lib/chat-row-context";
 import { rowLabelFromPath } from "@/lib/chat-row-context";
 import { formatVirtualTableValueForMapPopup } from "@/lib/virtual-table-map-popup";
 import { WorkspaceMobileRowDetailForm } from "./workspace-mobile-row-detail-form";
 import { ChatPanel } from "./chat-panel";
+import { VirtualTableView } from "./virtual-table-view";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import {
   useWorkspaceRightPanel,
@@ -30,6 +31,12 @@ type Props = {
   memberNameByUserId: Map<string, string>;
   allVirtualTables: VirtualTableRow[];
   virtualColumns: VirtualColumnRow[];
+  /**
+   * True saat tab Obrolan aktif (desktop). Panel kanan lalu hanya menampilkan
+   * kind data ("Buka berdampingan"); kind chat disembunyikan agar tidak dobel
+   * dengan percakapan utama di tab Obrolan.
+   */
+  chatTabActive?: boolean;
 };
 
 export function WorkspaceRightPanel(props: Props) {
@@ -62,9 +69,17 @@ export function WorkspaceRightPanel(props: Props) {
 
   if (!panel) return null;
 
+  const isDataKind = panel.kind === "table-data" || panel.kind === "row-detail";
+  // Tab Obrolan (desktop): sembunyikan kind chat, hanya izinkan kind data.
+  if (props.chatTabActive && !isDataKind) return null;
+
   return (
     <aside
-      className="relative z-30 flex w-96 shrink-0 flex-col border-l border-border bg-card"
+      className={cn(
+        "relative z-30 flex shrink-0 flex-col border-l border-border bg-card",
+        // Grid tabel butuh ruang lebih; detail baris + chat cukup w-96.
+        panel.kind === "table-data" ? "w-[32rem] max-w-[46vw]" : "w-96"
+      )}
       aria-label="Panel sisi kanan"
     >
       <WorkspaceRightPanelInner {...props} panel={panel} />
@@ -90,7 +105,10 @@ function WorkspaceRightPanelInner({
   const { refresh: refreshTableChatBadges } = useVirtualTableChatUnread();
 
   const table =
-    panel.kind === "table-chat" || panel.kind === "row"
+    panel.kind === "table-chat" ||
+    panel.kind === "row" ||
+    panel.kind === "table-data" ||
+    panel.kind === "row-detail"
       ? (allVirtualTables.find((t) => t.id === panel.tableId) ?? null)
       : null;
   const tableProjectId = table?.project_id ?? projectId;
@@ -118,7 +136,9 @@ function WorkspaceRightPanelInner({
     if (panel.kind === "project-chat") {
       return projectForPanel ? [projectForPanel.name] : [RUANG_KERJA_LABEL];
     }
-    if (panel.kind === "row") return panel.pathSegments;
+    if (panel.kind === "row" || panel.kind === "row-detail") {
+      return panel.pathSegments;
+    }
     return tablePathSegments ?? ["Tabel"];
   })();
 
@@ -132,6 +152,20 @@ function WorkspaceRightPanelInner({
           ]}
           activeTab={panel.tab}
           onTabChange={setRowTab}
+          pathSegments={pathSegments}
+          onClose={closePanel}
+        />
+      ) : panel.kind === "table-data" ? (
+        <RightPanelHeader
+          tabs={[{ id: "detail" as const, label: "Data" }]}
+          activeTab="detail"
+          pathSegments={pathSegments}
+          onClose={closePanel}
+        />
+      ) : panel.kind === "row-detail" ? (
+        <RightPanelHeader
+          tabs={[{ id: "detail" as const, label: "Detail" }]}
+          activeTab="detail"
           pathSegments={pathSegments}
           onClose={closePanel}
         />
@@ -252,6 +286,46 @@ function WorkspaceRightPanelInner({
             </div>
           )
         ) : null}
+
+        {panel.kind === "table-data" && !table ? (
+          <div className="p-3 text-sm text-muted-foreground">
+            Tabel tidak ditemukan di scope ini.
+          </div>
+        ) : null}
+
+        {panel.kind === "table-data" && table ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 pb-3">
+            <VirtualTableView
+              key={table.id}
+              table={table}
+              columns={virtualColumns.filter((c) => c.table_id === table.id)}
+              projectId={tableProjectId}
+              organizationId={organizationId}
+              organizationName={organizationName}
+              userId={userId}
+              isOrgAdmin={isOrgAdmin}
+              projectsForMention={projectsForMention}
+              memberNameByUserId={memberNameByUserId}
+              allVirtualTables={allVirtualTables}
+              fillHeight
+              embeddedInRightPanel
+            />
+          </div>
+        ) : null}
+
+        {panel.kind === "row-detail" ? (
+          <RowDetailSection
+            isBelowMd={isBelowMd}
+            rowId={panel.rowId}
+            tableId={panel.tableId}
+            pathSegments={panel.pathSegments}
+            rowPayload={panel.rowPayload}
+            relationLabels={panel.relationLabels}
+            memberNameByUserId={memberNameByUserId}
+            organizationId={organizationId}
+            columns={virtualColumns.filter((c) => c.table_id === panel.tableId)}
+          />
+        ) : null}
       </div>
     </>
   );
@@ -272,47 +346,40 @@ function RightPanelHeader({
   pathSegments: string[];
   onClose: () => void;
 }) {
-  const singleChatTab = tabs.length === 1 && tabs[0]?.id === "chat";
-
   const panelTitle =
     tabs.find((t) => t.id === activeTab)?.label ?? tabs[0]?.label ?? "Panel";
 
+  // Header satu baris setinggi header daftar tab (3.75rem), tanpa garis bawah —
+  // selaras tinggi header pane lain (rail daftar, detail obrolan, dsb).
   return (
-    <div className="shrink-0 border-b border-border">
-      <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <div className="flex min-w-0 flex-1 gap-1">
-          <h2
-            id="workspace-right-panel-title"
-            className="sr-only"
-          >
-            {panelTitle}
-          </h2>
+    <div className="flex min-h-[3.75rem] shrink-0 items-center gap-2 px-3">
+      <h2 id="workspace-right-panel-title" className="sr-only">
+        {panelTitle}
+      </h2>
+      <div className="min-w-0 flex-1">
+        <RowChatContextPath segments={pathSegments} />
+      </div>
+      {tabs.length > 1 ? (
+        <div className="flex shrink-0 items-center gap-1">
           {tabs.map((tab) => (
             <PanelTabButton
               key={tab.id}
               active={activeTab === tab.id}
               label={tab.label}
-              onClick={
-                onTabChange && !singleChatTab
-                  ? () => onTabChange(tab.id)
-                  : undefined
-              }
+              onClick={onTabChange ? () => onTabChange(tab.id) : undefined}
             />
           ))}
         </div>
-        <button
-          type="button"
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={onClose}
-          aria-label="Tutup panel"
-        >
-          <X className="size-4" aria-hidden />
-          <span className="sr-only">Tutup</span>
-        </button>
-      </div>
-      <div className="border-t border-border px-3 py-2.5">
-        <RowChatContextPath segments={pathSegments} />
-      </div>
+      ) : null}
+      <button
+        type="button"
+        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+        onClick={onClose}
+        aria-label="Tutup panel"
+      >
+        <X className="size-4" aria-hidden />
+        <span className="sr-only">Tutup</span>
+      </button>
     </div>
   );
 }

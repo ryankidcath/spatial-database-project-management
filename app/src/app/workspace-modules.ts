@@ -1,10 +1,13 @@
 import { VIEWS, type ViewId } from "./workspace-views";
 
 /**
- * Tab yang disembunyikan sementara dari navigasi (URL lama dialihkan ke Dashboard).
- * Kode Kanban/Kalender/Gantt tetap di repo untuk diaktifkan lagi nanti.
+ * View yang tidak tampil di tab bar workspace.
+ * - Kanban/Kalender/Gantt: nanti view switcher per tabel (lihat docs/workspace-navigation-and-views.md).
+ * - Aktivitas: riwayat audit via sheet/sidebar/menu, bukan tab utama (Fase 1).
+ * URL `?view=aktivitas` dialihkan ke tab default.
  */
 export const HIDDEN_WORKSPACE_VIEWS: ReadonlySet<ViewId> = new Set([
+  "Aktivitas",
   "Kanban",
   "Kalender",
   "Gantt",

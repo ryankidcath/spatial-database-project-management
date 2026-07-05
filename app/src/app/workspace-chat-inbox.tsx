@@ -8,8 +8,19 @@ import {
   useRef,
   useState,
 } from "react";
-import { Building2, FolderKanban, Rows3, Search, Table2, type LucideIcon } from "lucide-react";
+import {
+  Building2,
+  FolderKanban,
+  PanelRight,
+  PanelRightClose,
+  Rows3,
+  Search,
+  Table2,
+  type LucideIcon,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { RowChatContextPath } from "@/components/row-chat-context-path";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
@@ -29,6 +40,11 @@ import {
 } from "./chat-actions";
 import { ChatPanel } from "./chat-panel";
 import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
+import {
+  useWorkspaceCollapsibleRail,
+  WorkspaceCollapsibleRailShell,
+  WorkspaceRailToggleButton,
+} from "./workspace-collapsible-rail";
 import type { ChatInboxEntry, ChatInboxEntryKind } from "./workspace-chat-inbox-types";
 import type { ChatMentionOption } from "./chat-types";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
@@ -46,6 +62,7 @@ import { getBrowserSupabaseClient } from "@/lib/supabase/client";
 import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 import { CHAT_RUANG_KERJA_LABEL, pilihRuangKerja, RUANG_KERJA_LABEL } from "@/lib/product-labels";
 import { useVirtualTableChatUnread } from "./virtual-table-chat-unread-context";
+import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 type Props = {
@@ -150,12 +167,21 @@ export function WorkspaceChatInbox({
   onMobileChatKeyboardOpenChange,
   onMobileConversationOpenChange,
 }: Props) {
+  const rail = useWorkspaceCollapsibleRail("Chat");
   const {
     tableRoomUnreadByTableId,
     organizationRoomUnread,
     projectRoomUnread,
     refreshEpoch,
   } = useVirtualTableChatUnread();
+  const {
+    panel: rightPanel,
+    openTableData,
+    openRowDetail,
+    closePanel: closeRightPanel,
+    isTableDataOpen,
+    isRowDetailOpen,
+  } = useWorkspaceRightPanel();
   const vvLayout = useVisualViewportLayout();
   const [rowEntries, setRowEntries] = useState<ChatInboxEntry[]>([]);
   const [rowTotalCount, setRowTotalCount] = useState(0);
@@ -656,6 +682,58 @@ export function WorkspaceChatInbox({
     setMobileConversationOpen(false);
   }, []);
 
+  // "Buka berdampingan": hanya untuk room tabel & baris (punya data konkret).
+  const roomSupportsSideBySide = (entry: ChatInboxEntry) =>
+    entry.kind === "virtual_table" || entry.kind === "virtual_row";
+
+  const sideBySideActiveFor = (entry: ChatInboxEntry): boolean => {
+    if (entry.kind === "virtual_table" && entry.virtualTableId) {
+      return isTableDataOpen(entry.virtualTableId);
+    }
+    if (entry.kind === "virtual_row" && entry.virtualRowId) {
+      return isRowDetailOpen(entry.virtualRowId);
+    }
+    return false;
+  };
+
+  const handleToggleSideBySide = useCallback(
+    (entry: ChatInboxEntry) => {
+      if (entry.kind === "virtual_table" && entry.virtualTableId) {
+        openTableData({ tableId: entry.virtualTableId });
+        return;
+      }
+      if (
+        entry.kind === "virtual_row" &&
+        entry.virtualRowId &&
+        entry.tableIdForRow
+      ) {
+        openRowDetail({
+          tableId: entry.tableIdForRow,
+          rowId: entry.virtualRowId,
+          pathSegments:
+            entry.pathSegments ?? rowPanelExtras?.pathSegments ?? [entry.title],
+          rowPayload: entry.rowPayload ?? rowPanelExtras?.rowPayload,
+        });
+      }
+    },
+    [openTableData, openRowDetail, rowPanelExtras]
+  );
+
+  // Pindah room → tutup data berdampingan milik room sebelumnya (desktop).
+  const prevSelectedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (isBelowMd) return;
+    const prev = prevSelectedKeyRef.current;
+    prevSelectedKeyRef.current = selectedKey;
+    if (prev === null || prev === selectedKey) return;
+    if (
+      rightPanel?.kind === "table-data" ||
+      rightPanel?.kind === "row-detail"
+    ) {
+      closeRightPanel();
+    }
+  }, [selectedKey, isBelowMd, rightPanel, closeRightPanel]);
+
   const mentionForEntry = useCallback(
     (entry: ChatInboxEntry): ChatMentionOption[] => {
       const extra: ChatMentionOption[] = [];
@@ -745,11 +823,116 @@ export function WorkspaceChatInbox({
     );
   }
 
+  const roomListItems = (
+    <>
+      {filteredEntries.map((entry) => {
+        const active = entry.key === selectedKey;
+        const hasUnreadMention = mentionKeys.has(entry.key);
+        const previewText =
+          formatInboxPreview(entry.lastMessagePreview) ?? "Belum ada pesan";
+        const previewLine = inboxPreviewLine(entry.lastMessagePreview);
+        const EntryIcon = inboxIconForKind(entry.kind);
+        return (
+          <li key={entry.key} className="min-w-0">
+            <button
+              type="button"
+              data-testid="chat-inbox-room"
+              onClick={() => selectEntry(entry)}
+              className={cn(
+                "flex w-full min-h-[3.25rem] min-w-0 max-w-full items-start gap-3 overflow-hidden rounded-lg px-3 py-2.5 text-left transition-colors",
+                active ? "bg-primary/10" : "hover:bg-muted/60"
+              )}
+            >
+              <EntryIcon
+                className={cn(
+                  "mt-0.5 size-4 shrink-0",
+                  entry.unreadCount > 0
+                    ? "text-amber-600"
+                    : "text-muted-foreground"
+                )}
+                aria-hidden
+              />
+              <span className="min-w-0 flex-1 basis-0 overflow-hidden">
+                <span className="flex min-w-0 items-baseline justify-between gap-2 overflow-hidden">
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {entry.title}
+                    </span>
+                    {hasUnreadMention ? (
+                      <span
+                        className="shrink-0 text-xs font-bold text-sky-600 dark:text-sky-400"
+                        aria-label="Anda disebut, belum dibaca"
+                        title="Anda disebut"
+                      >
+                        @
+                      </span>
+                    ) : null}
+                  </span>
+                  {entry.subtitle ? (
+                    <span className="max-w-[42%] shrink-0 truncate text-[11px] text-muted-foreground">
+                      {entry.subtitle}
+                    </span>
+                  ) : null}
+                </span>
+                <p
+                  className="mt-0.5 min-w-0 max-w-full truncate break-all text-xs text-muted-foreground"
+                  title={previewText}
+                >
+                  {previewLine}
+                </p>
+              </span>
+              {entry.unreadCount > 0 ? (
+                <span className="shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white tabular-nums">
+                  {entry.unreadCount > 99 ? "99+" : entry.unreadCount}
+                </span>
+              ) : null}
+            </button>
+          </li>
+        );
+      })}
+      {rowLoading && rowEntries.length === 0 ? (
+        <WorkspaceMobileListSkeleton count={5} variant="inbox" />
+      ) : null}
+      {!rowLoading && filteredEntries.length === 0 ? (
+        <li className="px-2 py-6 text-center text-sm text-muted-foreground">
+          {entries.length === 0
+            ? "Belum ada room obrolan di scope ini."
+            : "Tidak ada room yang cocok dengan pencarian."}
+        </li>
+      ) : null}
+      {hasMoreRowEntries && !roomSearchQuery.trim() ? (
+        <li className="px-2 py-2">
+          <button
+            type="button"
+            data-testid="chat-inbox-load-more"
+            onClick={loadMoreRowEntries}
+            disabled={rowLoadingMore}
+            className={cn(
+              "flex w-full items-center justify-center rounded-lg border border-border px-3 py-2.5 text-sm font-medium transition-colors",
+              rowLoadingMore
+                ? "cursor-wait text-muted-foreground"
+                : "text-foreground hover:bg-muted/60"
+            )}
+          >
+            {rowLoadingMore ? (
+              <>
+                <Spinner className="mr-2 size-4" />
+                Memuat…
+              </>
+            ) : (
+              `Muat lebih (${rowEntries.length} / ${rowTotalCount})`
+            )}
+          </button>
+        </li>
+      ) : null}
+    </>
+  );
+
   const list = (
     <div
       className={cn(
         "flex min-h-0 min-w-0 flex-col overflow-hidden",
-        isBelowMd ? "w-full min-w-0 flex-1" : "w-full max-w-[22rem] shrink-0 border-r border-border"
+        isBelowMd && "w-full min-w-0 flex-1"
       )}
     >
       <div className={WORKSPACE_TAB_LIST_HEADER_CLASS}>
@@ -769,115 +952,79 @@ export function WorkspaceChatInbox({
           />
         </div>
       </div>
-      <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
-        {filteredEntries.map((entry) => {
-            const active = entry.key === selectedKey;
-            const hasUnreadMention = mentionKeys.has(entry.key);
-            const previewText =
-              formatInboxPreview(entry.lastMessagePreview) ?? "Belum ada pesan";
-            const previewLine = inboxPreviewLine(entry.lastMessagePreview);
-            const EntryIcon = inboxIconForKind(entry.kind);
-            return (
-              <li key={entry.key} className="min-w-0">
-                <button
-                  type="button"
-                  data-testid="chat-inbox-room"
-                  onClick={() => selectEntry(entry)}
-                  className={cn(
-                    "flex w-full min-h-[3.25rem] min-w-0 max-w-full items-start gap-3 overflow-hidden rounded-lg px-3 py-2.5 text-left transition-colors",
-                    active ? "bg-primary/10" : "hover:bg-muted/60"
-                  )}
-                >
-                  <EntryIcon
-                    className={cn(
-                      "mt-0.5 size-4 shrink-0",
-                      entry.unreadCount > 0
-                        ? "text-amber-600"
-                        : "text-muted-foreground"
-                    )}
-                    aria-hidden
-                  />
-                  <span className="min-w-0 flex-1 basis-0 overflow-hidden">
-                    <span className="flex min-w-0 items-baseline justify-between gap-2 overflow-hidden">
-                      <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                        <span className="truncate text-sm font-medium text-foreground">
-                          {entry.title}
-                        </span>
-                        {hasUnreadMention ? (
-                          <span
-                            className="shrink-0 text-xs font-bold text-sky-600 dark:text-sky-400"
-                            aria-label="Anda disebut, belum dibaca"
-                            title="Anda disebut"
-                          >
-                            @
-                          </span>
-                        ) : null}
-                      </span>
-                      {entry.subtitle ? (
-                        <span className="max-w-[42%] shrink-0 truncate text-[11px] text-muted-foreground">
-                          {entry.subtitle}
-                        </span>
-                      ) : null}
-                    </span>
-                    <p
-                      className="mt-0.5 min-w-0 max-w-full truncate break-all text-xs text-muted-foreground"
-                      title={previewText}
-                    >
-                      {previewLine}
-                    </p>
-                  </span>
-                  {entry.unreadCount > 0 ? (
-                    <span className="shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white tabular-nums">
-                      {entry.unreadCount > 99 ? "99+" : entry.unreadCount}
-                    </span>
-                  ) : null}
-                </button>
-              </li>
-            );
-          })}
-        {rowLoading && rowEntries.length === 0 ? (
-          <WorkspaceMobileListSkeleton count={5} variant="inbox" />
-        ) : null}
-        {!rowLoading && filteredEntries.length === 0 ? (
-          <li className="px-2 py-6 text-center text-sm text-muted-foreground">
-            {entries.length === 0
-              ? "Belum ada room obrolan di scope ini."
-              : "Tidak ada room yang cocok dengan pencarian."}
-          </li>
-        ) : null}
-        {hasMoreRowEntries && !roomSearchQuery.trim() ? (
-          <li className="px-2 py-2">
-            <button
-              type="button"
-              data-testid="chat-inbox-load-more"
-              onClick={loadMoreRowEntries}
-              disabled={rowLoadingMore}
-              className={cn(
-                "flex w-full items-center justify-center rounded-lg border border-border px-3 py-2.5 text-sm font-medium transition-colors",
-                rowLoadingMore
-                  ? "cursor-wait text-muted-foreground"
-                  : "text-foreground hover:bg-muted/60"
-              )}
-            >
-              {rowLoadingMore ? (
-                <>
-                  <Spinner className="mr-2 size-4" />
-                  Memuat…
-                </>
-              ) : (
-                `Muat lebih (${rowEntries.length} / ${rowTotalCount})`
-              )}
-            </button>
-          </li>
-        ) : null}
-      </ul>
+      {isBelowMd ? (
+        <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
+          {roomListItems}
+        </ul>
+      ) : (
+        <ScrollArea className="min-h-0 min-w-0 flex-1" type="scroll">
+          <ul className="min-w-0 p-2">{roomListItems}</ul>
+        </ScrollArea>
+      )}
     </div>
   );
 
   const detail = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       {selected ? (
-        chatPanelForEntry(selected)
+        <>
+          {/* Header detail setinggi header daftar (3.75rem), tanpa garis bawah. */}
+          <div className="flex min-h-[3.75rem] shrink-0 items-center gap-2 px-4">
+            {rail.railEnabled ? (
+              <WorkspaceRailToggleButton
+                isOpen={rail.isOpen}
+                onToggle={rail.toggle}
+              />
+            ) : null}
+            <div className="min-w-0 flex-1">
+              {selected.pathSegments && selected.pathSegments.length > 0 ? (
+                <RowChatContextPath segments={selected.pathSegments} />
+              ) : (
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-foreground">
+                    {selected.title}
+                  </p>
+                  {selected.subtitle ? (
+                    <p className="truncate text-xs text-muted-foreground">
+                      {selected.subtitle}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+            {roomSupportsSideBySide(selected) ? (
+              <button
+                type="button"
+                data-testid="chat-open-side-by-side"
+                onClick={() => handleToggleSideBySide(selected)}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                  sideBySideActiveFor(selected)
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+                title={
+                  sideBySideActiveFor(selected)
+                    ? "Tutup data berdampingan"
+                    : "Tampilkan data terkait di panel kanan"
+                }
+              >
+                {sideBySideActiveFor(selected) ? (
+                  <>
+                    <PanelRightClose className="size-3.5" aria-hidden />
+                    Tutup data
+                  </>
+                ) : (
+                  <>
+                    <PanelRight className="size-3.5" aria-hidden />
+                    Buka berdampingan
+                  </>
+                )}
+              </button>
+            ) : null}
+          </div>
+          {chatPanelForEntry(selected)}
+        </>
       ) : (
         <p className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
           Pilih room obrolan
@@ -954,8 +1101,8 @@ export function WorkspaceChatInbox({
   }
 
   return (
-    <div className="flex h-[min(70vh,720px)] w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-      {list}
+    <div className="flex h-full min-h-0 w-full overflow-hidden bg-background">
+      <WorkspaceCollapsibleRailShell isOpen={rail.isOpen}>{list}</WorkspaceCollapsibleRailShell>
       {detail}
     </div>
   );

@@ -18,27 +18,26 @@ import { cn } from "@/lib/utils";
 import type { ViewId } from "./workspace-views";
 import { ChatInboxScopeUnreadBadge } from "./virtual-table-chat-unread-context";
 
-/** Urutan tab di bottom bar mobile (tanpa menu «Lainnya»). */
+/** Urutan tab di bottom bar mobile — permukaan kerja saja (Aktivitas di menu «Lainnya»). */
 const MOBILE_BAR_VIEWS: ViewId[] = [
   "Dashboard",
   "Tabel",
   "Chat",
   "Map",
-  "Aktivitas",
 ];
 
-const VIEW_META: Record<
+export const VIEW_META: Record<
   ViewId,
   { label: string; shortLabel: string; icon: LucideIcon }
 > = {
   Dashboard: { label: "Dashboard", shortLabel: "Home", icon: LayoutDashboard },
   Aktivitas: { label: "Aktivitas", shortLabel: "Aktivitas", icon: History },
-  Tabel: { label: "Tabel", shortLabel: "Tabel", icon: Table2 },
+  Tabel: { label: "Data", shortLabel: "Data", icon: Table2 },
   Chat: { label: "Obrolan", shortLabel: "Obrolan", icon: MessageSquare },
   Berkas: { label: "Berkas", shortLabel: "Berkas", icon: FolderOpen },
   Laporan: { label: "Laporan", shortLabel: "Laporan", icon: BarChart3 },
   Keuangan: { label: "Keuangan", shortLabel: "Keuangan", icon: Wallet },
-  Map: { label: "Peta", shortLabel: "Peta", icon: Map },
+  Map: { label: "Spasial", shortLabel: "Spasial", icon: Map },
   Kanban: { label: "Kanban", shortLabel: "Kanban", icon: Columns3 },
   Kalender: { label: "Kalender", shortLabel: "Kalender", icon: Calendar },
   Gantt: { label: "Gantt", shortLabel: "Gantt", icon: GanttChart },

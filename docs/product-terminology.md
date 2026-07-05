@@ -15,6 +15,8 @@
 | Organisasi | **Organisasi** | `core_pm.organizations` | Tetap |
 | Daftar pekerjaan/kontrak bisnis (tabel virtual) | *(bebas, buatan user)* | `virtual_tables` + `virtual_rows` | **Tidak** dipreskripsikan nama; user boleh “Proyek”, “Pekerjaan”, “Kontrak”, dll. |
 | Master klien, invoice, dll. | Nama tabel virtual user | `virtual_tables` org-level | Lihat `0046_virtual_tables_org_level.sql` |
+| Tab data & tabel custom | **Data** | `ViewId` `Tabel`, URL `?view=tabel` | Bukan nama tabel virtual user |
+| Tab peta workspace (layer, impor) | **Spasial** | `ViewId` `Map`, URL `?view=map` | Beda dari view **Peta** di switcher per tabel |
 
 ---
 
@@ -95,5 +97,6 @@ App **tidak** memaksa “satu klien = satu Ruang Kerja”. Relasi bisnis lewat k
 
 | Tanggal | Perubahan |
 |---------|-----------|
+| 2026-07-05 | Tab UI: **Data** (ex-Tabel), **Spasial** (ex-Map/Peta) |
 | 2026-07-03 | T1: sweep copy UI ke **Portal** / **Ruang Kerja** (`app/src/lib/product-labels.ts`, workspace shell, panel, e2e) |
 | 2026-07-03 | Keputusan: **Portal** (ganti workspace UI), **Ruang Kerja** (ganti project UI); nama tabel daftar pekerjaan bisnis tidak dipreskripsikan |

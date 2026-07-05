@@ -19,10 +19,9 @@ import {
 } from "react";
 import {
   ChevronRight,
-  MapPin,
+  History,
   PanelLeft,
   Trash2,
-  Upload,
 } from "lucide-react";
 import {
   addOrganizationStaffByEmailAction,
@@ -32,7 +31,7 @@ import {
   signOut,
 } from "@/app/auth/actions";
 import { toast } from "sonner";
-import { WorkspaceActivityTab } from "./workspace-activity-tab";
+import { WorkspaceActivitySheet } from "./workspace-activity-sheet";
 import { fetchActivityLogsAction } from "./fetch-activity-logs-action";
 import { useWorkspaceDeferredPayload } from "./use-workspace-deferred-payload";
 import { viewNeedsDeferredPayload } from "./workspace-deferred-payload";
@@ -97,59 +96,6 @@ import {
   ruangKerjaLc,
 } from "@/lib/product-labels";
 import { heartbeatUserPresenceAction } from "./user-presence-actions";
-import {
-  deleteAllIssueGeometryFeaturesForIssueAction,
-  deleteIssueGeometryFeatureByIdAction,
-  upsertIssueGeometryFeatureAction,
-  upsertIssueGeometryFeatureBatchAction,
-  upsertIssueGeometryFeaturesFromDxfAction,
-} from "./issue-geometry-feature-actions";
-import type { IDxf } from "dxf-parser";
-import {
-  extractClosedPolygonRingsFromDxfLayer,
-  featureKeysForDxfPolygons,
-  listDxfLayerNames,
-  parseDxfDocument,
-  type LinearRing,
-} from "@/lib/dxf-import-utils";
-import {
-  dxfRingsToWgs84PreviewFeatureCollection,
-  isPreviewSourceSridSupported,
-} from "@/lib/crs-reproject";
-import {
-  MAX_SHAPEFILE_ZIP_BYTES,
-  MAX_SPATIAL_GEOMETRY_TEXT_CHARS,
-  MAX_SPATIAL_GEOMETRY_TEXT_MB,
-  dxfKeyMappingTemplateCsv,
-  shapefileZipTooLargeMessage,
-  spatialGeometryTextTooLargeMessage,
-} from "@/lib/spatial-import-limits";
-import {
-  applyGeoJsonBatchKeyLabelMapping,
-  defaultGeoJsonBatchFeatureKey,
-  defaultGeoJsonBatchLabel,
-  listGeoJsonBatchPolygonRows,
-  type GeoJsonFeatureCollectionForBatch,
-} from "@/lib/geojson-batch-mapping-utils";
-import {
-  parseShapefileZipToPolygonLayers,
-  type ShapefilePolygonLayer,
-} from "@/lib/shapefile-import-utils";
-
-const DxfMappingPreviewMap = dynamic(
-  () => import("./dxf-mapping-preview-map").then((m) => m.DxfMappingPreviewMap),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex h-52 min-h-[13rem] w-full items-center justify-center rounded-md border border-dashed border-border bg-muted/30 text-xs text-muted-foreground">
-        <div className="inline-flex items-center gap-2">
-          <Spinner className="size-4" />
-          <span>Harap tunggu, memuat pratinjau peta…</span>
-        </div>
-      </div>
-    ),
-  }
-);
 import type {
   FinanceInvoiceItemRow,
   FinanceInvoiceRow,
@@ -182,39 +128,19 @@ import {
   type OrganizationModuleRow,
 } from "./workspace-modules";
 import { parseViewParam, viewToParam } from "./workspace-url";
-import { overlapDisplayLabelForIssueGeometryRow } from "./issue-geometry-overlap-label";
 import type {
   IssueGeometryFeatureMapRow,
-  SpatialAttributeTableRow,
+  IssueFeatureAttributeRow,
 } from "./spatial-attribute-types";
-import type { MapFootprint } from "./workspace-map";
 import { type ViewId } from "./workspace-views";
 import type {
   VirtualTableRow,
   VirtualColumnRow,
-  VirtualDataRow,
 } from "./virtual-table-types";
 import {
   VirtualTableCreateDialog,
-  VirtualTableDxfImportDialog,
-  VirtualTableGeoJsonImportDialog,
-  VirtualTableLayerUploadDialog,
-  type LayerUploadCreated,
 } from "./virtual-table-view";
-import {
-  fetchVirtualRowsAction,
-  resolveRelationLabelsAction,
-} from "./virtual-table-actions";
 import { VirtualDashboardView } from "./virtual-dashboard-view";
-
-const EMPTY_VIRTUAL_COLUMNS: VirtualColumnRow[] = [];
-import {
-  buildVirtualTableMapPopupProperties,
-  collectRelationIdsFromVirtualPayloads,
-  pickMapRowTitle,
-  type VirtualColumnForMapPopup,
-} from "@/lib/virtual-table-map-popup";
-import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
 import { fileAttachmentOptionsFromRowPayload } from "@/lib/chat-row-panel";
 import { resolveVirtualRowChatContextAction } from "./chat-actions";
@@ -230,12 +156,15 @@ import { WorkspaceRightPanel } from "./workspace-right-panel";
 import {
   WorkspaceMobileTabBar,
   WORKSPACE_MOBILE_TAB_BAR_PADDING,
+  VIEW_META,
 } from "./workspace-mobile-tabs";
 import { WorkspaceMobileOrgPicker } from "./workspace-mobile-org-picker";
 import { WorkspaceMobileProjectPicker } from "./workspace-mobile-project-picker";
 import { WorkspaceMobileVirtualTableOverlay } from "./workspace-mobile-virtual-table-overlay";
 import { WorkspaceMobileCompactHeader } from "./workspace-mobile-compact-header";
 import { WorkspaceChatInbox } from "./workspace-chat-inbox";
+import { WorkspaceTableBrowser } from "./workspace-table-browser";
+import { WorkspaceSpatialView } from "./workspace-spatial-view";
 import {
   type MobileScopePhase,
   clearMobileScopeSession,
@@ -258,6 +187,7 @@ import {
   VirtualTableChatUnreadBadge,
   VirtualTableChatUnreadProvider,
   ChatTabLabel,
+  ChatInboxScopeUnreadBadge,
 } from "./virtual-table-chat-unread-context";
 import { NotificationSoundListener } from "@/components/notification-sound-listener";
 import { PwaPushSubscription } from "@/components/pwa-push-subscription";
@@ -271,13 +201,6 @@ function TabViewLoading({ label }: { label: string }) {
     </div>
   );
 }
-
-const VirtualTableView = dynamic(
-  () => import("./virtual-table-view").then((m) => m.VirtualTableView),
-  {
-    loading: () => <TabViewLoading label="Memuat tabel…" />,
-  }
-);
 
 const KanbanBoard = dynamic(
   () => import("./kanban-board").then((m) => m.KanbanBoard),
@@ -370,21 +293,6 @@ function workspaceUrlParamsBaseline(
   return p;
 }
 
-const WorkspaceMap = dynamic(
-  () => import("./workspace-map").then((m) => m.WorkspaceMap),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex min-h-[12rem] w-full flex-1 items-center justify-center rounded-md border border-border bg-muted/40 text-sm text-muted-foreground">
-        <div className="inline-flex items-center gap-2">
-          <Spinner className="size-4" />
-          <span>Harap tunggu, memuat peta…</span>
-        </div>
-      </div>
-    ),
-  }
-);
-
 export type DemoFootprintRow = {
   id: string;
   project_id: string;
@@ -401,15 +309,7 @@ export type BidangHasilUkurMapRow = {
   geojson: unknown;
 };
 
-export type { IssueGeometryFeatureMapRow } from "./spatial-attribute-types";
-
-export type IssueFeatureAttributeRow = {
-  id: string;
-  project_id: string;
-  issue_id: string;
-  feature_key: string;
-  payload: unknown;
-};
+export type { IssueGeometryFeatureMapRow, IssueFeatureAttributeRow } from "./spatial-attribute-types";
 
 export type OrganizationRow = {
   id: string;
@@ -581,7 +481,6 @@ type MonitoringAddChildContextState = {
 };
 
 type ProjectDeleteConfirmState = { projectId: string; name: string };
-type MapGeometryInputMode = "single" | "manage";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   done:
@@ -591,15 +490,6 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   todo:
     "border border-border bg-muted text-muted-foreground",
 };
-const SOURCE_SRID_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "4326", label: "EPSG:4326 - WGS84 (Lat/Lon)" },
-  { value: "32748", label: "EPSG:32748 - UTM Zone 48S" },
-  { value: "32749", label: "EPSG:32749 - UTM Zone 49S" },
-  { value: "23833", label: "EPSG:23833 - TM-3 48.1" },
-  { value: "23834", label: "EPSG:23834 - TM-3 48.2" },
-  { value: "23835", label: "EPSG:23835 - TM-3 49.1" },
-  { value: "23836", label: "EPSG:23836 - TM-3 49.2" },
-];
 
 function statusBadgeClass(category: string | null | undefined): string {
   if (!category) return STATUS_BADGE_CLASS.todo;
@@ -950,10 +840,6 @@ function compareIssueByStandardTaskOrder(a: IssueRow, b: IssueRow): number {
   const titleCmp = a.title.localeCompare(b.title, "id", { sensitivity: "base" });
   if (titleCmp !== 0) return titleCmp;
   return a.id.localeCompare(b.id);
-}
-
-function compareFeatureKeyNatural(a: string, b: string): number {
-  return a.localeCompare(b, "id", { numeric: true, sensitivity: "base" });
 }
 
 function initialsFromName(name: string): string {
@@ -1699,27 +1585,6 @@ function MonitoringMatrixCard({
 }
 
 /** Baris mapping: apakah `feature_key` (setelah trim, banding huruf kecil) sudah punya geometri untuk unit kerja ini. */
-function geometryKeyStatusCell(
-  rawKey: string,
-  existingGeometryKeysLower: Set<string>
-): ReactNode {
-  const t = rawKey.trim().toLowerCase();
-  if (t.length === 0) {
-    return <span className="text-muted-foreground">—</span>;
-  }
-  if (existingGeometryKeysLower.has(t)) {
-    return (
-      <Badge
-        variant="outline"
-        className="shrink-0 px-1.5 py-0 font-normal text-[10px] leading-tight"
-      >
-        Sudah ada
-      </Badge>
-    );
-  }
-  return <span className="text-muted-foreground">Belum</span>;
-}
-
 export function WorkspaceClient({
   organizations,
   projects,
@@ -1785,205 +1650,16 @@ export function WorkspaceClient({
   const [memberDialogOpen, setMemberDialogOpen] = useState(false);
   const [orgStaffDialogOpen, setOrgStaffDialogOpen] = useState(false);
   const [orgStaffMsg, setOrgStaffMsg] = useState<string | null>(null);
-  const [mapGeomDialogOpen, setMapGeomDialogOpen] = useState(false);
-  const [mapGeomInputMode, setMapGeomInputMode] =
-    useState<MapGeometryInputMode>("single");
-  const [mapGeomFileMode, setMapGeomFileMode] = useState<"geojson" | "dxf">("geojson");
-  const [mapGeomSourceSrid, setMapGeomSourceSrid] = useState("4326");
-  const [mapDxfRawText, setMapDxfRawText] = useState("");
-  const [mapDxfLayers, setMapDxfLayers] = useState<string[]>([]);
-  const [mapDxfLayer, setMapDxfLayer] = useState("");
-  const [mapDxfKeyPrefix, setMapDxfKeyPrefix] = useState("");
-  const [mapDxfPolygonCount, setMapDxfPolygonCount] = useState(0);
-  const [mapDxfFeatureKeys, setMapDxfFeatureKeys] = useState<string[]>([]);
-  const [mapDxfFeatureLabels, setMapDxfFeatureLabels] = useState<string[]>([]);
-  const [mapDxfBulkKeyText, setMapDxfBulkKeyText] = useState("");
-  const [mapDxfBulkKeyHint, setMapDxfBulkKeyHint] = useState<string | null>(null);
-  const [mapDxfPreviewRings, setMapDxfPreviewRings] = useState<LinearRing[]>([]);
-  const [mapDxfHighlightRow, setMapDxfHighlightRow] = useState<number | null>(null);
-  const [mapDxfError, setMapDxfError] = useState<string | null>(null);
-  const mapDxfParsedRef = useRef<IDxf | null>(null);
-  const [mapGeomMsg, setMapGeomMsg] = useState<string | null>(null);
-  const [mapGeomBatchText, setMapGeomBatchText] = useState("");
-  const [mapShpLayers, setMapShpLayers] = useState<ShapefilePolygonLayer[] | null>(
-    null
-  );
-  const [mapShpSelectedFileName, setMapShpSelectedFileName] = useState("");
-  const [mapShpLoadHint, setMapShpLoadHint] = useState<string | null>(null);
-  const [mapGeomGeojsonBatchPrefix, setMapGeomGeojsonBatchPrefix] = useState("");
-  const [mapGeojsonBatchKeys, setMapGeojsonBatchKeys] = useState<string[]>([]);
-  const [mapGeojsonBatchLabels, setMapGeojsonBatchLabels] = useState<string[]>([]);
-  const [mapGeomDeleteMsg, setMapGeomDeleteMsg] = useState<string | null>(null);
-  const [mapGeomFormNonce, setMapGeomFormNonce] = useState(0);
-  const [mapGeomPending, startMapGeomTransition] = useTransition();
-
+  const [spatialGeomPending, setSpatialGeomPending] = useState(false);
   // --- Virtual tables ---
+  // `activeVirtualTableSlug`: penampil tabel layar penuh di MOBILE.
+  // `tabelSelectedSlug`: tabel yang dipilih di tab Tabel master–detail (DESKTOP).
   const [activeVirtualTableSlug, setActiveVirtualTableSlug] = useState<string | null>(null);
+  const [tabelSelectedSlug, setTabelSelectedSlug] = useState<string | null>(null);
   const workspaceRightPanelApiRef = useRef<WorkspaceRightPanelApi | null>(null);
   const [vtableCreateDialogOpen, setVtableCreateDialogOpen] = useState(false);
+  const [activitySheetOpen, setActivitySheetOpen] = useState(false);
   const [vtableCreateScope, setVtableCreateScope] = useState<"project" | "organization">("project");
-  const mapGeomDetectedKind = useMemo<
-    "none" | "single" | "batch" | "invalid" | "unsupported"
-  >(() => {
-    const text = mapGeomBatchText.trim();
-    if (!text) return "none";
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (!parsed || typeof parsed !== "object") return "invalid";
-      const kind = String((parsed as { type?: unknown }).type ?? "");
-      if (kind === "FeatureCollection") return "batch";
-      if (kind === "Feature" || kind === "Polygon" || kind === "MultiPolygon") {
-        return "single";
-      }
-      return "unsupported";
-    } catch {
-      return "invalid";
-    }
-  }, [mapGeomBatchText]);
-
-  const mapGeomGeojsonPolygonRowCount = useMemo(() => {
-    if (mapGeomDetectedKind !== "batch") return 0;
-    const text = mapGeomBatchText.trim();
-    if (!text) return 0;
-    try {
-      const p = JSON.parse(text) as unknown;
-      if (
-        !p ||
-        typeof p !== "object" ||
-        String((p as { type?: unknown }).type) !== "FeatureCollection"
-      ) {
-        return 0;
-      }
-      return listGeoJsonBatchPolygonRows(p as GeoJsonFeatureCollectionForBatch).length;
-    } catch {
-      return 0;
-    }
-  }, [mapGeomBatchText, mapGeomDetectedKind]);
-
-  useEffect(() => {
-    if (mapGeomDetectedKind !== "batch") {
-      setMapGeojsonBatchKeys([]);
-      setMapGeojsonBatchLabels([]);
-      return;
-    }
-    const text = mapGeomBatchText.trim();
-    if (!text) {
-      setMapGeojsonBatchKeys([]);
-      setMapGeojsonBatchLabels([]);
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      setMapGeojsonBatchKeys([]);
-      setMapGeojsonBatchLabels([]);
-      return;
-    }
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      String((parsed as { type?: unknown }).type) !== "FeatureCollection"
-    ) {
-      setMapGeojsonBatchKeys([]);
-      setMapGeojsonBatchLabels([]);
-      return;
-    }
-    const rows = listGeoJsonBatchPolygonRows(parsed as GeoJsonFeatureCollectionForBatch);
-    const keys = rows.map((row) =>
-      defaultGeoJsonBatchFeatureKey(
-        row.featureIndex,
-        row.props,
-        mapGeomGeojsonBatchPrefix
-      )
-    );
-    const labels = rows.map((row) => defaultGeoJsonBatchLabel(row.props));
-    setMapGeojsonBatchKeys(keys);
-    setMapGeojsonBatchLabels(labels);
-  }, [mapGeomBatchText, mapGeomDetectedKind, mapGeomGeojsonBatchPrefix]);
-
-  const applyShapefileLayerToBatch = useCallback(
-    (layers: ShapefilePolygonLayer[], fileName: string) => {
-      const layer = layers.find((l) => l.fileName === fileName);
-      if (!layer) {
-        setMapGeomMsg("Layer shapefile tidak ditemukan.");
-        setMapGeomBatchText("");
-        return false;
-      }
-      const text = JSON.stringify(layer.featureCollection, null, 2);
-      if (text.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
-        setMapGeomMsg(spatialGeometryTextTooLargeMessage("Batch GeoJSON"));
-        setMapGeomBatchText("");
-        return false;
-      }
-      setMapGeomBatchText(text);
-      setMapGeomMsg(null);
-      setMapShpLoadHint(
-        `Memuat ${layer.polygonFeatureCount} poligon dari layer “${layer.fileName}”. Atur prefix key (opsional) dan SRID, lalu simpan.`
-      );
-      return true;
-    },
-    []
-  );
-
-  useEffect(() => {
-    if (mapDxfPolygonCount === 0 || !mapDxfLayer.trim()) {
-      setMapDxfFeatureKeys([]);
-      setMapDxfFeatureLabels([]);
-      return;
-    }
-    setMapDxfFeatureKeys(
-      featureKeysForDxfPolygons(
-        mapDxfKeyPrefix.trim(),
-        mapDxfLayer,
-        mapDxfPolygonCount
-      )
-    );
-    setMapDxfFeatureLabels(Array.from({ length: mapDxfPolygonCount }, () => ""));
-    setMapDxfBulkKeyHint(null);
-  }, [mapDxfPolygonCount, mapDxfLayer, mapDxfKeyPrefix]);
-
-  const resetMapDxfState = useCallback(() => {
-    setMapGeomFileMode("geojson");
-    setMapGeomSourceSrid("4326");
-    setMapGeomGeojsonBatchPrefix("");
-    setMapGeojsonBatchKeys([]);
-    setMapGeojsonBatchLabels([]);
-    setMapShpLayers(null);
-    setMapShpSelectedFileName("");
-    setMapShpLoadHint(null);
-    setMapDxfRawText("");
-    setMapDxfLayers([]);
-    setMapDxfLayer("");
-    setMapDxfKeyPrefix("");
-    setMapDxfPolygonCount(0);
-    setMapDxfFeatureKeys([]);
-    setMapDxfFeatureLabels([]);
-    setMapDxfBulkKeyText("");
-    setMapDxfBulkKeyHint(null);
-    setMapDxfPreviewRings([]);
-    setMapDxfHighlightRow(null);
-    setMapDxfError(null);
-    mapDxfParsedRef.current = null;
-  }, []);
-  const openMapGeomDialog = useCallback(() => {
-    setMapGeomInputMode("single");
-    setMapGeomMsg(null);
-    setMapGeomDeleteMsg(null);
-    setMapGeomBatchText("");
-    resetMapDxfState();
-    setMapGeomFormNonce((n) => n + 1);
-    setMapGeomDialogOpen(true);
-  }, [resetMapDxfState]);
-  const openMapGeomManageDialog = useCallback(() => {
-    setMapGeomInputMode("manage");
-    setMapGeomMsg(null);
-    setMapGeomDeleteMsg(null);
-    setMapGeomBatchText("");
-    resetMapDxfState();
-    setMapGeomFormNonce((n) => n + 1);
-    setMapGeomDialogOpen(true);
-  }, [resetMapDxfState]);
   const [memberPending, startMemberTransition] = useTransition();
   const [, startScopeNavTransition] = useTransition();
   const [scopeRoutePending, setScopeRoutePending] = useState(false);
@@ -1994,7 +1670,7 @@ export function WorkspaceClient({
 
   const workspaceActionPending =
     taskPending ||
-    mapGeomPending ||
+    spatialGeomPending ||
     memberPending ||
     projectPropertiesPending;
   const [taskDeleteConfirm, setTaskDeleteConfirm] =
@@ -2444,7 +2120,6 @@ export function WorkspaceClient({
     );
   }, [berkasPermohonan, selectedBerkasId, selectedProjectId]);
 
-  const [mapShowIssueGeometry, setMapShowIssueGeometry] = useState(true);
   const berkasIdsWithBidangInProject = useMemo(() => {
     const s = new Set<string>();
     if (!selectedProjectId) return s;
@@ -2470,7 +2145,7 @@ export function WorkspaceClient({
   }, [canonicalOrgId, projectsInOrg, activityLogsCacheKey]);
 
   useEffect(() => {
-    if (activeView !== "Aktivitas") {
+    if (!activitySheetOpen) {
       setActivityLogsLoading(false);
       return;
     }
@@ -2497,7 +2172,7 @@ export function WorkspaceClient({
       clearInterval(timer);
       setActivityLogsLoading(false);
     };
-  }, [activeView, refreshActivityLogs, activityLogsCacheKey, activityLogs.length, liveActivityLogs.length]);
+  }, [activitySheetOpen, refreshActivityLogs, activityLogsCacheKey, activityLogs.length, liveActivityLogs.length]);
 
   /** Sinkron dari URL hanya saat navigasi eksternal (back/forward, notifikasi, RSC). */
   useEffect(() => {
@@ -2988,298 +2663,6 @@ export function WorkspaceClient({
     );
   }, [bidangHasilUkurMap, selectedProjectId]);
 
-  const issueGeometryForSelectedProject = useMemo(() => {
-    if (!selectedProjectId) return [];
-    return issueGeometryFeatureMap.filter(
-      (g) => g.project_id === selectedProjectId
-    );
-  }, [issueGeometryFeatureMap, selectedProjectId]);
-  const geometrySummary = useMemo(() => {
-    const geometryCount = issueGeometryForSelectedProject.length;
-    const uniqueIssueIds = [
-      ...new Set(issueGeometryForSelectedProject.map((g) => g.issue_id)),
-    ];
-    const issueCountWithGeometry = uniqueIssueIds.length;
-    const depthFrequency = new Map<number, number>();
-    for (const issueId of uniqueIssueIds) {
-      const depth = projectIssueDepthById.get(issueId);
-      if (depth == null) continue;
-      depthFrequency.set(depth, (depthFrequency.get(depth) ?? 0) + 1);
-    }
-    let dominantDepth: number | null = null;
-    let dominantCount = -1;
-    for (const [depth, count] of depthFrequency.entries()) {
-      if (count > dominantCount) {
-        dominantDepth = depth;
-        dominantCount = count;
-      }
-    }
-    const attachedLevelLabel =
-      dominantDepth != null ? labelForDepth(dominantDepth).toLowerCase() : "unit";
-    return { geometryCount, issueCountWithGeometry, attachedLevelLabel };
-  }, [issueGeometryForSelectedProject, labelForDepth, projectIssueDepthById]);
-
-  const issueIdsInSelectedTaskSubtree = useMemo(() => {
-    if (!selectedProjectId || !selectedTaskId) return null;
-    const childByParent = new Map<string, string[]>();
-    for (const issue of issues) {
-      if (issue.project_id !== selectedProjectId || !issue.parent_id) continue;
-      const arr = childByParent.get(issue.parent_id) ?? [];
-      arr.push(issue.id);
-      childByParent.set(issue.parent_id, arr);
-    }
-    const out = new Set<string>();
-    const stack = [selectedTaskId];
-    while (stack.length > 0) {
-      const id = stack.pop() as string;
-      if (out.has(id)) continue;
-      out.add(id);
-      const children = childByParent.get(id) ?? [];
-      for (const c of children) stack.push(c);
-    }
-    return out;
-  }, [issues, selectedProjectId, selectedTaskId]);
-
-  const issueGeometriesForManageTask = useMemo(() => {
-    if (!selectedProjectId || !selectedTaskId) return [];
-    return issueGeometryFeatureMap
-      .filter(
-        (g) =>
-          g.project_id === selectedProjectId && g.issue_id === selectedTaskId
-      )
-      .sort((a, b) => a.feature_key.localeCompare(b.feature_key));
-  }, [issueGeometryFeatureMap, selectedProjectId, selectedTaskId]);
-
-  /** `feature_key` geometri yang sudah tersimpan untuk unit kerja aktif (perbandingan case-insensitive). */
-  const geometryKeysLowerForSelectedTask = useMemo(() => {
-    if (!selectedProjectId || !selectedTaskId) return new Set<string>();
-    return new Set(
-      issueGeometryFeatureMap
-        .filter(
-          (g) =>
-            g.project_id === selectedProjectId && g.issue_id === selectedTaskId
-        )
-        .map((g) => g.feature_key.trim().toLowerCase())
-        .filter((k) => k.length > 0)
-    );
-  }, [issueGeometryFeatureMap, selectedProjectId, selectedTaskId]);
-
-  /** `feature_key` dari atribut unit kerja ini yang belum punya geometri — saran impor DXF. */
-  const mapDxfAttributeKeysWithoutGeometry = useMemo(() => {
-    if (!selectedTaskId || !selectedProjectId) return [];
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const a of issueFeatureAttributes) {
-      if (a.issue_id !== selectedTaskId || a.project_id !== selectedProjectId) {
-        continue;
-      }
-      const low = a.feature_key.toLowerCase();
-      if (geometryKeysLowerForSelectedTask.has(low)) continue;
-      if (seen.has(low)) continue;
-      seen.add(low);
-      out.push(a.feature_key);
-    }
-    out.sort((x, y) => x.localeCompare(y));
-    return out;
-  }, [
-    geometryKeysLowerForSelectedTask,
-    issueFeatureAttributes,
-    selectedProjectId,
-    selectedTaskId,
-  ]);
-
-  const mapDxfPreviewFeatureCollection = useMemo(() => {
-    if (mapDxfPreviewRings.length === 0) {
-      return { fc: null as GeoJSON.FeatureCollection | null, err: null as string | null };
-    }
-    const srid = Number.parseInt(mapGeomSourceSrid.trim(), 10);
-    if (!Number.isFinite(srid) || !isPreviewSourceSridSupported(srid)) {
-      return {
-        fc: null,
-        err: "SRID sumber tidak didukung untuk pratinjau peta.",
-      };
-    }
-    try {
-      const fc = dxfRingsToWgs84PreviewFeatureCollection(mapDxfPreviewRings, srid);
-      return { fc, err: null };
-    } catch (e) {
-      return {
-        fc: null,
-        err:
-          e instanceof Error
-            ? e.message
-            : "Gagal memproyeksikan koordinat untuk pratinjau.",
-      };
-    }
-  }, [mapDxfPreviewRings, mapGeomSourceSrid]);
-
-  const dxfMappingRowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
-
-  const handleDxfPreviewPolygonClick = useCallback((idx: number) => {
-    setMapDxfHighlightRow(idx);
-  }, []);
-
-  useEffect(() => {
-    setMapDxfHighlightRow(null);
-  }, [mapDxfPolygonCount, mapDxfLayer]);
-
-  useEffect(() => {
-    if (mapDxfHighlightRow == null) return;
-    const el = dxfMappingRowRefs.current[mapDxfHighlightRow];
-    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [mapDxfHighlightRow]);
-
-  const issueGeometryVisibleForMap = useMemo(() => {
-    if (!issueIdsInSelectedTaskSubtree) return issueGeometryForSelectedProject;
-    return issueGeometryForSelectedProject.filter((g) =>
-      issueIdsInSelectedTaskSubtree.has(g.issue_id)
-    );
-  }, [issueGeometryForSelectedProject, issueIdsInSelectedTaskSubtree]);
-
-  const issueTitleById = useMemo(() => {
-    const m = new Map<string, string>();
-    if (!selectedProjectId) return m;
-    for (const issue of issues) {
-      if (issue.project_id !== selectedProjectId) continue;
-      m.set(issue.id, issue.title);
-    }
-    return m;
-  }, [issues, selectedProjectId]);
-
-  const issueGeometryRowsForTableView = useMemo(
-    () => {
-      const geoRows = issueGeometryForSelectedProject
-        .filter((g) =>
-          issueIdsInSelectedTaskSubtree
-            ? issueIdsInSelectedTaskSubtree.has(g.issue_id)
-            : true
-        )
-        .map(
-          (g): SpatialAttributeTableRow => ({
-            id: `geom:${g.id}`,
-            issue_id: g.issue_id,
-            feature_key: g.feature_key,
-            properties: g.properties,
-            geometryFeatureId: g.id,
-          })
-        );
-
-      const existingKey = new Set(
-        geoRows.map((r) => `${r.issue_id}::${r.feature_key.toLowerCase()}`)
-      );
-      const attrRows = issueFeatureAttributes
-        .filter((a) => a.project_id === selectedProjectId)
-        .filter((a) =>
-          issueIdsInSelectedTaskSubtree
-            ? issueIdsInSelectedTaskSubtree.has(a.issue_id)
-            : true
-        )
-        .filter((a) => {
-          const k = `${a.issue_id}::${a.feature_key.toLowerCase()}`;
-          return !existingKey.has(k);
-        })
-        .map(
-          (a): SpatialAttributeTableRow => ({
-            id: `attr:${a.id}`,
-            issue_id: a.issue_id,
-            feature_key: a.feature_key,
-            properties: a.payload,
-            geometryFeatureId: null,
-          })
-        );
-
-      return [...geoRows, ...attrRows]
-        .sort((a, b) => {
-          const at = issueTitleById.get(a.issue_id) ?? "";
-          const bt = issueTitleById.get(b.issue_id) ?? "";
-          return (
-            at.localeCompare(bt) ||
-            compareFeatureKeyNatural(a.feature_key, b.feature_key) ||
-            a.id.localeCompare(b.id)
-          );
-        });
-    },
-    [
-      issueGeometryForSelectedProject,
-      issueFeatureAttributes,
-      issueIdsInSelectedTaskSubtree,
-      selectedProjectId,
-      issueTitleById,
-    ]
-  );
-
-  // --- Virtual table geometry for map ---
-  const [mapShowVirtualTableGeometry, setMapShowVirtualTableGeometry] = useState(true);
-  const [vtableGeometryLayers, setVtableGeometryLayers] = useState<MapFootprint[]>([]);
-  const [mapTabEpoch, setMapTabEpoch] = useState(0);
-  const [mapImportTableId, setMapImportTableId] = useState<string>("");
-  const [mapGeoImportOpen, setMapGeoImportOpen] = useState(false);
-  const [mapDxfImportOpen, setMapDxfImportOpen] = useState(false);
-  const [mapLayerUploadOpen, setMapLayerUploadOpen] = useState(false);
-  const [mapImportTableRows, setMapImportTableRows] = useState<VirtualDataRow[]>(
-    []
-  );
-  const [mapImportPreviewLayers, setMapImportPreviewLayers] = useState<
-    MapFootprint[]
-  >([]);
-
-  useEffect(() => {
-    if (activeView !== "Map") {
-      setMapImportPreviewLayers([]);
-      setMapGeoImportOpen(false);
-      setMapDxfImportOpen(false);
-      setMapLayerUploadOpen(false);
-    }
-  }, [activeView]);
-
-  /** Muat ulang geometri virtual table di peta saat ganti project (bukan tiap buka tab Map). */
-  useEffect(() => {
-    setMapTabEpoch((n) => n + 1);
-  }, [selectedProjectId]);
-
-  const mapLayersForSelectedProject = useMemo((): MapFootprint[] => {
-    const issueGeom: MapFootprint[] = issueGeometryVisibleForMap.map(
-      (g) => ({
-        id: `issuegeom:${g.id}`,
-        label: overlapDisplayLabelForIssueGeometryRow(g),
-        geojson: g.geojson,
-        popupProperties: {
-          ...(typeof g.properties === "object" && g.properties !== null
-            ? (g.properties as Record<string, unknown>)
-            : {}),
-          feature_key: g.feature_key,
-          _row_id: g.id,
-        },
-        layerKind: "issue_geometry",
-        issueGeometryEdit: {
-          projectId: g.project_id,
-          issueId: g.issue_id,
-          featureId: g.id,
-        },
-      })
-    );
-    return [...issueGeom, ...vtableGeometryLayers];
-  }, [
-    issueGeometryVisibleForMap,
-    vtableGeometryLayers,
-  ]);
-
-  const visibleMapLayers = useMemo(() => {
-    const combined = [...mapImportPreviewLayers, ...mapLayersForSelectedProject];
-    return combined.filter((layer) => {
-      const k = layer.layerKind ?? "demo";
-      if (k === "import_preview") return true;
-      if (k === "issue_geometry") return mapShowIssueGeometry;
-      if (k === "virtual_table") return mapShowVirtualTableGeometry;
-      return true;
-    });
-  }, [
-    mapImportPreviewLayers,
-    mapLayersForSelectedProject,
-    mapShowIssueGeometry,
-    mapShowVirtualTableGeometry,
-  ]);
-
   const berkasForSelectedProject = useMemo(() => {
     if (!selectedProjectId) return [];
     return berkasPermohonan.filter((b) => b.project_id === selectedProjectId);
@@ -3496,231 +2879,6 @@ export function WorkspaceClient({
   );
 
   // Identify virtual tables with geometry columns (org + project)
-  const vtablesWithGeometry = useMemo(() => {
-    const geoCols = virtualColumns.filter((c) => c.data_type === "geometry");
-    if (geoCols.length === 0) return [];
-    const tableIdsWithGeo = new Set(geoCols.map((c) => c.table_id));
-    return allAccessibleVtables.filter((vt) => tableIdsWithGeo.has(vt.id));
-  }, [virtualColumns, allAccessibleVtables]);
-
-  const vtablesWithGeometrySig = useMemo(
-    () => vtablesWithGeometry.map((vt) => vt.id).join(","),
-    [vtablesWithGeometry]
-  );
-
-  const virtualColumnsGeomSig = useMemo(
-    () =>
-      virtualColumns
-        .filter((c) => c.data_type === "geometry")
-        .map((c) => `${c.id}:${c.table_id}:${c.slug}`)
-        .join("|"),
-    [virtualColumns]
-  );
-
-  useEffect(() => {
-    if (vtablesWithGeometry.length === 0) {
-      setMapImportTableId("");
-      return;
-    }
-    setMapImportTableId((prev) => {
-      if (prev && vtablesWithGeometry.some((vt) => vt.id === prev)) return prev;
-      const preferred =
-        vtablesWithGeometry.find((vt) => {
-          const name = `${vt.display_name} ${vt.slug}`.toLowerCase();
-          return (
-            name.includes("daftar bidang") ||
-            name.includes("bidang tanah") ||
-            name.includes("bidang")
-          );
-        }) ?? vtablesWithGeometry[0];
-      return preferred?.id ?? "";
-    });
-  }, [vtablesWithGeometry]);
-
-  const mapImportTable = useMemo(
-    () =>
-      mapImportTableId
-        ? allAccessibleVtables.find((vt) => vt.id === mapImportTableId) ?? null
-        : null,
-    [mapImportTableId, allAccessibleVtables]
-  );
-
-  const mapImportTableColumns = useMemo(
-    () =>
-      mapImportTableId
-        ? virtualColumns.filter((c) => c.table_id === mapImportTableId)
-        : [],
-    [mapImportTableId, virtualColumns]
-  );
-
-  const handleMapImportPreviewChange = useCallback(
-    (layers: MapFootprint[] | null) => {
-      setMapImportPreviewLayers((prev) => {
-        const nextSig = mapPreviewLayersSignature(layers);
-        const prevSig = mapPreviewLayersSignature(prev);
-        if (nextSig === prevSig) return prev;
-        return layers ?? [];
-      });
-    },
-    []
-  );
-
-  const handleMapGeoImportOpenChange = useCallback((open: boolean) => {
-    setMapGeoImportOpen(open);
-    if (!open) setMapImportPreviewLayers([]);
-  }, []);
-
-  const handleMapGeoImported = useCallback(() => {
-    setMapImportPreviewLayers([]);
-    setMapGeoImportOpen(false);
-    setMapTabEpoch((n) => n + 1);
-    router.refresh();
-  }, [router]);
-
-  const handleMapDxfImportOpenChange = useCallback((open: boolean) => {
-    setMapDxfImportOpen(open);
-  }, []);
-
-  const handleMapDxfImported = useCallback(() => {
-    setMapDxfImportOpen(false);
-    setMapTabEpoch((n) => n + 1);
-    router.refresh();
-  }, [router]);
-
-  const handleMapLayerUploadOpenChange = useCallback((open: boolean) => {
-    setMapLayerUploadOpen(open);
-    if (!open) setMapImportPreviewLayers([]);
-  }, []);
-
-  const handleMapLayerCreated = useCallback(
-    (result: LayerUploadCreated) => {
-      setMapImportPreviewLayers([]);
-      setMapLayerUploadOpen(false);
-      setMapImportTableId(result.tableId);
-      setActiveVirtualTableSlug(result.tableSlug);
-      setMapTabEpoch((n) => n + 1);
-      router.refresh();
-    },
-    [router]
-  );
-
-  useEffect(() => {
-    if (!mapDxfImportOpen || !mapImportTableId) {
-      setMapImportTableRows([]);
-      return;
-    }
-    let cancelled = false;
-    void fetchVirtualRowsAction(mapImportTableId).then((result) => {
-      if (cancelled) return;
-      setMapImportTableRows(
-        result.error ? [] : (result.rows as VirtualDataRow[])
-      );
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [mapDxfImportOpen, mapImportTableId]);
-
-  useEffect(() => {
-    if (vtablesWithGeometry.length === 0) {
-      setVtableGeometryLayers([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      const layers: MapFootprint[] = [];
-      for (const vt of vtablesWithGeometry) {
-        const result = await fetchVirtualRowsAction(vt.id);
-        if (cancelled) return;
-        if (result.error || !result.rows) continue;
-
-        const tableCols: VirtualColumnForMapPopup[] = virtualColumns
-          .filter((c) => c.table_id === vt.id)
-          .map((c) => ({
-            slug: c.slug,
-            display_name: c.display_name,
-            data_type: c.data_type,
-            position: c.position,
-          }));
-
-        const geoCols = tableCols.filter((c) => c.data_type === "geometry");
-
-        const rowPayloads = result.rows.map((row) => ({
-          payload:
-            ((row as Record<string, unknown>).payload as Record<string, unknown> | null) ??
-            {},
-        }));
-        const relationIds = collectRelationIdsFromVirtualPayloads(
-          rowPayloads,
-          tableCols
-        );
-        let relationLabels: Record<string, string> = {};
-        if (relationIds.length > 0) {
-          const resolved = await resolveRelationLabelsAction(relationIds);
-          if (cancelled) return;
-          if (!resolved.error) relationLabels = resolved.labels;
-        }
-
-        for (const row of result.rows) {
-          const payload = (row as Record<string, unknown>).payload as Record<
-            string,
-            unknown
-          > | null;
-          if (!payload) continue;
-          const rowId = (row as Record<string, unknown>).id as string;
-          const rowTitle = pickMapRowTitle(
-            payload,
-            tableCols,
-            relationLabels,
-            rowId
-          );
-          const chatPathSegments = buildChatRowPathSegments({
-            projectName: selectedProject?.name ?? null,
-            tableDisplayName: vt.display_name,
-            rowLabel: rowTitle,
-          });
-
-          for (const gc of geoCols) {
-            const geo = payload[gc.slug];
-            if (!geo || typeof geo !== "object") continue;
-            layers.push({
-              id: `vtable:${rowId}:${gc.slug}`,
-              label: `${vt.display_name}: ${rowTitle}`,
-              geojson: geo,
-              popupProperties: buildVirtualTableMapPopupProperties(
-                vt.display_name,
-                tableCols,
-                payload,
-                relationLabels,
-                memberNameByUserId,
-                {
-                  skipGeometrySlug: gc.slug,
-                  rowTitle,
-                  virtualRowId: rowId,
-                  virtualTableId: vt.id,
-                  projectName: selectedProject?.name ?? null,
-                  chatPathSegments,
-                }
-              ),
-              layerKind: "virtual_table",
-              virtualTableId: vt.id,
-            });
-          }
-        }
-      }
-      if (!cancelled) setVtableGeometryLayers(layers);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    mapTabEpoch,
-    vtablesWithGeometry,
-    vtablesWithGeometrySig,
-    virtualColumnsGeomSig,
-    memberNameByUserId,
-  ]);
-
   const tableRows = useMemo((): TableRow[] => {
     if (!selectedProjectId) return [];
     if (selectedTaskId) {
@@ -4173,6 +3331,23 @@ export function WorkspaceClient({
     [enabledModulesForOrg, commitScopeInUrl]
   );
 
+  /**
+   * Fokuskan sebuah tabel. Di DESKTOP → pilih di tab Tabel master–detail (opsional
+   * pindah ke tab Tabel). Di MOBILE → buka penampil layar penuh. Tidak ada lagi
+   * overlay tabel di desktop.
+   */
+  const focusVirtualTable = useCallback(
+    (slug: string, opts?: { navigate?: boolean }) => {
+      if (isBelowMd) {
+        setActiveVirtualTableSlug(slug);
+      } else {
+        setTabelSelectedSlug(slug);
+        if (opts?.navigate) handleActiveViewChange("Tabel");
+      }
+    },
+    [isBelowMd, handleActiveViewChange]
+  );
+
   useEffect(() => {
     if (Date.now() < viewChangeLockUntilRef.current) return;
     if (visibleViews.includes(activeView)) return;
@@ -4180,8 +3355,17 @@ export function WorkspaceClient({
   }, [visibleViews, activeView, handleActiveViewChange, isBelowMd]);
 
   useEffect(() => {
-    if (activeView === "Chat" && !isBelowMd) {
-      workspaceRightPanelApiRef.current?.closePanel();
+    if (isBelowMd) return;
+    const api = workspaceRightPanelApiRef.current;
+    const p = api?.panel;
+    if (!p) return;
+    const isDataKind = p.kind === "table-data" || p.kind === "row-detail";
+    if (activeView === "Chat") {
+      // Masuk tab Obrolan: tutup panel chat (data dibuka dari dalam tab).
+      if (!isDataKind) api?.closePanel();
+    } else if (isDataKind) {
+      // Keluar tab Obrolan: tutup panel data agar tak muncul di tab lain.
+      api?.closePanel();
     }
   }, [activeView, isBelowMd]);
 
@@ -4442,9 +3626,9 @@ export function WorkspaceClient({
         },
         { syncView: false }
       );
-      setActiveVirtualTableSlug(vt.slug);
+      focusVirtualTable(vt.slug);
     },
-    [virtualTables, isBelowMd, activeView, applyActiveView, commitScopeInUrl]
+    [virtualTables, isBelowMd, activeView, applyActiveView, commitScopeInUrl, focusVirtualTable]
   );
 
   const openActivityVirtualRow = useCallback(
@@ -4468,7 +3652,7 @@ export function WorkspaceClient({
         }
         if (!tableIdHint) {
           const vt = virtualTables.find((t) => t.id === res.data!.tableId);
-          if (vt) setActiveVirtualTableSlug(vt.slug);
+          if (vt) focusVirtualTable(vt.slug);
         }
         api.openRowPanel({
           tableId: res.data.tableId,
@@ -4486,6 +3670,7 @@ export function WorkspaceClient({
       openActivityVirtualTable,
       virtualTables,
       workspaceChatMentionOptions,
+      focusVirtualTable,
     ]
   );
 
@@ -4502,6 +3687,30 @@ export function WorkspaceClient({
       }, { syncView: false });
     },
     [projects, isBelowMd, commitScopeInUrl]
+  );
+
+  const handleActivitySheetOpenTable = useCallback(
+    (tableId: string) => {
+      setActivitySheetOpen(false);
+      openActivityVirtualTable(tableId);
+    },
+    [openActivityVirtualTable]
+  );
+
+  const handleActivitySheetOpenRow = useCallback(
+    (rowId: string, tableIdHint: string | null) => {
+      setActivitySheetOpen(false);
+      openActivityVirtualRow(rowId, tableIdHint);
+    },
+    [openActivityVirtualRow]
+  );
+
+  const handleActivitySheetOpenProject = useCallback(
+    (projectId: string) => {
+      setActivitySheetOpen(false);
+      openActivityProject(projectId);
+    },
+    [openActivityProject]
   );
 
   const projectNameById = useMemo(
@@ -5426,12 +4635,12 @@ export function WorkspaceClient({
                   <li key={vt.id}>
                     <SidebarVirtualTableItem
                       table={vt}
-                      activeVirtualTableSlug={activeVirtualTableSlug}
-                      onSelect={() => {
-                        setActiveVirtualTableSlug(
-                          activeVirtualTableSlug === vt.slug ? null : vt.slug
-                        );
-                      }}
+                      activeVirtualTableSlug={
+                        isBelowMd ? activeVirtualTableSlug : tabelSelectedSlug
+                      }
+                      onSelect={() =>
+                        focusVirtualTable(vt.slug, { navigate: true })
+                      }
                     />
                   </li>
                 ))}
@@ -5466,12 +4675,12 @@ export function WorkspaceClient({
                   <li key={vt.id}>
                     <SidebarVirtualTableItem
                       table={vt}
-                      activeVirtualTableSlug={activeVirtualTableSlug}
-                      onSelect={() => {
-                        setActiveVirtualTableSlug(
-                          activeVirtualTableSlug === vt.slug ? null : vt.slug
-                        );
-                      }}
+                      activeVirtualTableSlug={
+                        isBelowMd ? activeVirtualTableSlug : tabelSelectedSlug
+                      }
+                      onSelect={() =>
+                        focusVirtualTable(vt.slug, { navigate: true })
+                      }
                     />
                   </li>
                 ))}
@@ -5479,6 +4688,19 @@ export function WorkspaceClient({
             )}
           </div>
         )}
+
+        <div className="mt-4 border-t border-border pt-3">
+          <button
+            type="button"
+            className="flex w-full min-h-9 items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-accent/70"
+            data-testid="activity-history-open"
+            onClick={() => setActivitySheetOpen(true)}
+            title="Riwayat perubahan data"
+          >
+            <History className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="truncate">Riwayat aktivitas</span>
+          </button>
+        </div>
           </div>
         </ScrollArea>
       </aside>
@@ -5509,10 +4731,11 @@ export function WorkspaceClient({
               formatDateTime={formatDateTime}
               signOutAction={signOut}
               disabled={workspaceActionPending}
+              onOpenActivity={() => setActivitySheetOpen(true)}
             />
           ) : (
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3 md:grid md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center">
+            <div className="flex min-w-0 flex-1 items-center gap-3 md:flex-none">
               <button
                 type="button"
                 className={cn(
@@ -5557,8 +4780,41 @@ export function WorkspaceClient({
                 </ol>
               </nav>
             </div>
+            <div className="hidden justify-self-center md:block">
+              <TabsList variant="line" className="flex-nowrap">
+                {visibleViews.map((view) => {
+                  const meta = VIEW_META[view];
+                  const Icon = meta.icon;
+                  return (
+                    <TabsTrigger
+                      key={view}
+                      value={view}
+                      title={meta.label}
+                      aria-label={meta.label}
+                      className="flex-none px-2 xl:px-3"
+                    >
+                      <span className="relative inline-flex shrink-0">
+                        <Icon className="size-4" />
+                        {view === "Chat" ? (
+                          <span className="xl:hidden">
+                            <ChatInboxScopeUnreadBadge position="tab" />
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="hidden xl:inline">
+                        {view === "Chat" ? (
+                          <ChatTabLabel label={meta.label} />
+                        ) : (
+                          meta.label
+                        )}
+                      </span>
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </div>
             {userEmail && (
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2 md:justify-self-end">
                 {selectedProjectId && (
                   <Popover>
                     <PopoverTrigger
@@ -5628,9 +4884,23 @@ export function WorkspaceClient({
                     </PopoverContent>
                   </Popover>
                 )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-auto gap-1.5 px-2 py-1 text-xs"
+                  data-testid="activity-history-open"
+            onClick={() => setActivitySheetOpen(true)}
+                  title="Riwayat aktivitas"
+                >
+                  <History className="size-3.5 shrink-0" aria-hidden />
+                  <span className="hidden sm:inline">Riwayat</span>
+                </Button>
                 <ThemeToggle />
-                <form action={signOut} className="flex shrink-0 items-center gap-2">
-                  <p className="text-xs text-muted-foreground">{userEmail}</p>
+                <form action={signOut} className="flex min-w-0 shrink items-center gap-2">
+                  <p className="hidden max-w-[12rem] truncate text-xs text-muted-foreground lg:block" title={userEmail}>
+                    {userEmail}
+                  </p>
                   <Button
                     type="submit"
                     variant="outline"
@@ -5651,9 +4921,12 @@ export function WorkspaceClient({
           )}
         </header>
 
+        {/* Baris konten: pane utama (section) + panel kanan berdampingan, keduanya
+            mulai tepat di bawah header workspace agar garis header pane sejajar. */}
+        <div className="flex min-h-0 min-w-0 flex-1">
         <section
           className={cn(
-            "relative flex min-h-0 flex-1 flex-col overflow-hidden",
+            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
             isBelowMd &&
               !mobileChatKeyboardOpen &&
               !(
@@ -5683,37 +4956,24 @@ export function WorkspaceClient({
             type="scroll"
             fillAvailableHeight={
               activeView === "Map" ||
-              (isBelowMd &&
-                (activeView === "Chat" ||
-                  activeView === "Aktivitas" ||
-                  activeView === "Tabel"))
+              activeView === "Chat" ||
+              activeView === "Tabel"
             }
             hideVerticalScrollbar={
               isBelowMd &&
-              (activeView === "Chat" ||
-                activeView === "Aktivitas" ||
-                activeView === "Tabel")
+              (activeView === "Chat" || activeView === "Tabel")
             }
           >
             <div
               className={cn(
                 "flex w-full flex-col",
                 activeView === "Map" ||
-                (isBelowMd &&
-                  (activeView === "Chat" ||
-                    activeView === "Aktivitas" ||
-                    activeView === "Tabel"))
+                activeView === "Chat" ||
+                activeView === "Tabel"
                   ? "box-border h-full min-h-0 flex-1 basis-0 overflow-hidden p-0"
                   : "min-h-full p-6"
               )}
             >
-            <TabsList className="mb-4 hidden h-auto min-h-9 w-full max-w-full shrink-0 flex-wrap justify-start gap-1 rounded-lg bg-muted p-1 text-muted-foreground md:flex md:flex-nowrap">
-              {visibleViews.map((view) => (
-                <TabsTrigger key={view} value={view} className="px-2.5 sm:px-3">
-                  {view === "Chat" ? <ChatTabLabel /> : view}
-                </TabsTrigger>
-              ))}
-            </TabsList>
             <TabsContent value="Dashboard" className="min-h-0 w-full min-w-0 flex-none outline-none">
               <TabPanelKeepAlive view="Dashboard" activeView={activeView}>
               {!selectedProjectId ? (
@@ -5743,30 +5003,14 @@ export function WorkspaceClient({
             </TabsContent>
             <TabsContent
               value="Chat"
-              className={cn(
-                "min-h-0 w-full min-w-0 outline-none",
-                isBelowMd
-                  ? "flex flex-1 basis-0 flex-col overflow-hidden"
-                  : "flex-none"
-              )}
+              className="flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col overflow-hidden outline-none"
             >
               <TabPanelKeepAlive
                 view="Chat"
                 activeView={activeView}
-                className={cn(
-                  isBelowMd
-                    ? "flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
-                    : "flex h-full min-h-0 flex-1 flex-col"
-                )}
+                className="flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
               >
-              <div
-                className={cn(
-                  "min-h-0 w-full",
-                  isBelowMd
-                    ? "flex h-0 min-h-0 flex-1 basis-0 flex-col overflow-hidden"
-                    : "mt-2"
-                )}
-              >
+              <div className="flex h-0 min-h-0 w-full min-w-0 flex-1 basis-0 flex-col overflow-hidden">
                 <WorkspaceChatInbox
                   organizationId={canonicalOrgId}
                   organizationName={selectedOrganization?.name ?? null}
@@ -5788,176 +5032,67 @@ export function WorkspaceClient({
               </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent
-              value="Aktivitas"
-              className={cn(
-                "min-h-0 w-full min-w-0 outline-none",
-                isBelowMd
-                  ? "flex flex-1 basis-0 flex-col overflow-hidden"
-                  : "flex-none"
-              )}
-            >
-              <TabPanelKeepAlive
-                view="Aktivitas"
-                activeView={activeView}
-                className={cn(
-                  isBelowMd
-                    ? "flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
-                    : undefined
-                )}
-              >
-                <WorkspaceActivityTab
-                  activityLogs={liveActivityLogs}
-                  organizationId={canonicalOrgId}
-                  organizationName={selectedOrganization?.name ?? null}
-                  selectedProjectId={selectedProjectId}
-                  hasOrgStaffAccess={hasOrgStaffAccess}
-                  projectNameById={projectNameById}
-                  virtualTableIds={virtualTableIds}
-                  virtualTableNameById={virtualTableNameById}
-                  isBelowMd={isBelowMd}
-                  isLoading={activityLogsLoading}
-                  onOpenTable={openActivityVirtualTable}
-                  onOpenRow={openActivityVirtualRow}
-                  onOpenProject={openActivityProject}
-                />
-              </TabPanelKeepAlive>
-            </TabsContent>
-            <TabsContent
               value="Tabel"
-              className={cn(
-                "min-h-0 w-full min-w-0 outline-none",
-                isBelowMd
-                  ? "flex flex-1 basis-0 flex-col overflow-hidden"
-                  : "flex-none"
-              )}
+              className="flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col overflow-hidden outline-none"
             >
               <TabPanelKeepAlive
                 view="Tabel"
                 activeView={activeView}
-                className={cn(
-                  isBelowMd
-                    ? "flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
-                    : undefined
-                )}
+                className="flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
               >
-              {canonicalOrgId && !hasOrgStaffAccess && !isBelowMd ? (
-                <p className="mt-5 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                  Tabel organisasi hanya untuk <strong>tim inti</strong>. Anda
-                  hanya melihat tabel pada project yang di-assign.
-                </p>
-              ) : null}
-              {!isBelowMd ? (
-                <p className="mt-5 text-sm text-muted-foreground">
-                  Preview <strong className="text-foreground">50 baris per halaman</strong>{" "}
-                  per tabel. Untuk seluruh data dan edit penuh, gunakan{" "}
-                  <strong className="text-foreground">Tabel lengkap</strong> (tombol di
-                  header tabel atau sidebar).
-                </p>
-              ) : null}
-              <div
-                className={cn(
-                  isBelowMd
-                    ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pm-mobile-scroll"
-                    : undefined
-                )}
-              >
-              {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
-                isBelowMd ? (
-                  <VirtualTableMobileList
-                    sectionTitle="Tabel Organisasi"
-                    tables={vtablesForOrg}
-                    virtualColumnsByTableId={virtualColumnsByTableId}
-                    onOpenTable={(slug) => setActiveVirtualTableSlug(slug)}
-                  />
-                ) : (
-                  <div className="mt-5 space-y-4">
-                    <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Tabel Organisasi
+              {isBelowMd ? (
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pm-mobile-scroll">
+                  {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
+                    <VirtualTableMobileList
+                      sectionTitle="Tabel Organisasi"
+                      tables={vtablesForOrg}
+                      virtualColumnsByTableId={virtualColumnsByTableId}
+                      onOpenTable={(slug) => setActiveVirtualTableSlug(slug)}
+                    />
+                  ) : null}
+                  {selectedProjectId && vtablesForProject.length > 0 ? (
+                    <VirtualTableMobileList
+                      sectionTitle={`Tabel ${RUANG_KERJA_LABEL}`}
+                      tables={vtablesForProject}
+                      virtualColumnsByTableId={virtualColumnsByTableId}
+                      onOpenTable={(slug) => setActiveVirtualTableSlug(slug)}
+                    />
+                  ) : null}
+                  {allAccessibleVtables.length === 0 ? (
+                    <p className="p-3 text-sm text-muted-foreground">
+                      {!selectedProjectId && !canonicalOrgId
+                        ? "Pilih organisasi dan ruang kerja untuk melihat tabel custom."
+                        : "Belum ada tabel custom pada scope ini."}
                     </p>
-                    {vtablesForOrg.map((vt) => (
-                      <div
-                        key={vt.id}
-                        id={`vtable-${vt.slug}`}
-                        className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
-                      >
-                        <VirtualTableView
-                          key={vt.id}
-                          table={vt}
-                          columns={
-                            virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
-                          }
-                          projectId={selectedProjectId}
-                          organizationId={canonicalOrgId}
-                          organizationName={selectedOrganization?.name ?? null}
-                          userId={userId}
-                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
-                          projectsForMention={projectsForMention}
-                          memberNameByUserId={memberNameByUserId}
-                          allVirtualTables={allAccessibleVtables}
-                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
-                          onActivityChange={refreshActivityLogs}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )
-              ) : null}
-
-              {selectedProjectId && vtablesForProject.length > 0 ? (
-                isBelowMd ? (
-                  <VirtualTableMobileList
-                    sectionTitle={`Tabel ${RUANG_KERJA_LABEL}`}
-                    tables={vtablesForProject}
-                    virtualColumnsByTableId={virtualColumnsByTableId}
-                    onOpenTable={(slug) => setActiveVirtualTableSlug(slug)}
-                  />
-                ) : (
-                  <div className="mt-6 space-y-4">
-                    <p className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Tabel {RUANG_KERJA_LABEL}
-                    </p>
-                    {vtablesForProject.map((vt) => (
-                      <div
-                        key={vt.id}
-                        id={`vtable-${vt.slug}`}
-                        className="overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm"
-                      >
-                        <VirtualTableView
-                          key={vt.id}
-                          table={vt}
-                          columns={
-                            virtualColumnsByTableId.get(vt.id) ?? EMPTY_VIRTUAL_COLUMNS
-                          }
-                          projectId={selectedProjectId}
-                          organizationId={canonicalOrgId}
-                          organizationName={selectedOrganization?.name ?? null}
-                          userId={userId}
-                          isOrgAdmin={isOrgAdminOfCanonicalOrg}
-                          projectsForMention={projectsForMention}
-                          memberNameByUserId={memberNameByUserId}
-                          allVirtualTables={allAccessibleVtables}
-                          onOpenInOverlay={() => setActiveVirtualTableSlug(vt.slug)}
-                          onActivityChange={refreshActivityLogs}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )
-              ) : null}
-
-              {allAccessibleVtables.length === 0 ? (
-                <p
-                  className={cn(
-                    "text-sm text-muted-foreground",
-                    isBelowMd ? "p-3" : "mt-5"
-                  )}
-                >
+                  ) : null}
+                </div>
+              ) : allAccessibleVtables.length === 0 ? (
+                <p className="p-6 text-sm text-muted-foreground">
                   {!selectedProjectId && !canonicalOrgId
                     ? "Pilih organisasi dan ruang kerja untuk melihat tabel custom."
                     : "Belum ada tabel custom pada scope ini."}
                 </p>
-              ) : null}
-              </div>
+              ) : (
+                <WorkspaceTableBrowser
+                  orgTables={
+                    canonicalOrgId && hasOrgStaffAccess ? vtablesForOrg : []
+                  }
+                  projectTables={selectedProjectId ? vtablesForProject : []}
+                  ruangKerjaLabel={RUANG_KERJA_LABEL}
+                  virtualColumnsByTableId={virtualColumnsByTableId}
+                  projectId={selectedProjectId}
+                  organizationId={canonicalOrgId}
+                  organizationName={selectedOrganization?.name ?? null}
+                  userId={userId}
+                  isOrgAdmin={isOrgAdminOfCanonicalOrg}
+                  projectsForMention={projectsForMention}
+                  memberNameByUserId={memberNameByUserId}
+                  allVirtualTables={allAccessibleVtables}
+                  selectedSlug={tabelSelectedSlug}
+                  onSelectSlug={setTabelSelectedSlug}
+                  onActivityChange={refreshActivityLogs}
+                />
+              )}
               </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Berkas" className="min-h-0 w-full min-w-0 flex-none outline-none">
@@ -6072,1617 +5207,28 @@ export function WorkspaceClient({
                 activeView={activeView}
                 className="flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col"
               >
-              <div className="flex h-0 min-h-0 flex-1 basis-0 flex-col">
-                {!selectedProjectId ? (
-                  <p className="text-sm text-muted-foreground">
-                    {pilihRuangKerjaUntuk("untuk melihat peta.")}
-                  </p>
-                ) : (
-                  <div className="flex h-0 min-h-0 min-w-0 flex-1 basis-0 flex-col">
-                    {selectedTaskId && (
-                        <Dialog
-                          open={mapGeomDialogOpen}
-                          onOpenChange={setMapGeomDialogOpen}
-                        >
-                          <DialogContent className="max-h-[90vh] max-w-[min(96vw,760px)] overflow-x-hidden overflow-y-auto">
-                            <DialogHeader>
-                              <DialogTitle>
-                                {mapGeomInputMode === "manage"
-                                  ? "Hapus geometri fitur unit kerja"
-                                  : "Simpan geometri fitur unit kerja"}
-                              </DialogTitle>
-                              <DialogDescription>
-                                {mapGeomInputMode === "manage" ? (
-                                  <>
-                                    Daftar fitur geometri untuk unit kerja aktif. Hapus per
-                                    baris atau sekaligus sebelum batch ulang.
-                                  </>
-                                ) : (
-                                  <>
-                                    Simpan geometri unit kerja dari GeoJSON, ZIP shapefile
-                                    (poligon), atau DXF (poligon tertutup per layer).
-                                  </>
-                                )}
-                              </DialogDescription>
-                            </DialogHeader>
-                            <p
-                              className="mb-3 rounded-md border border-border bg-muted/45 px-3 py-2 text-sm text-foreground"
-                              role="status"
-                            >
-                              <span className="block text-xs font-medium text-muted-foreground">
-                                Unit kerja
-                              </span>
-                              <span className="mt-1 block font-semibold leading-snug">
-                                {selectedScopePath}
-                              </span>
-                            </p>
-                            {mapGeomInputMode !== "manage" && (
-                              <details className="mb-3 rounded-md border border-border bg-muted/30 text-xs text-foreground">
-                                <summary className="cursor-pointer select-none px-3 py-2 font-medium text-muted-foreground hover:text-foreground">
-                                  Petunjuk impor geometri & CRS
-                                </summary>
-                                <div className="space-y-2 border-t border-border/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-                                  <p>
-                                    <span className="font-medium text-foreground">
-                                      feature_key:
-                                    </span>{" "}
-                                    kunci yang sama menghubungkan geometri (Map) dan atribut
-                                    (Tabel); huruf besar/kecil harus konsisten.
-                                  </p>
-                                  <p>
-                                    <span className="font-medium text-foreground">
-                                      SRID:
-                                    </span>{" "}
-                                    pilih EPSG yang sesuai koordinat file. GeoJSON lon/lat →
-                                    4326. Shapefile dengan .prj yang dikenali parser sering sudah
-                                    lon/lat → 4326; tanpa .prj pilih SRID koordinat mentah DXF/SHP.
-                                  </p>
-                                  <p>
-                                    <span className="font-medium text-foreground">
-                                      Batas:
-                                    </span>{" "}
-                                    teks GeoJSON/DXF/batch ~{MAX_SPATIAL_GEOMETRY_TEXT_MB} MB;
-                                    ZIP shapefile ~{Math.round(MAX_SHAPEFILE_ZIP_BYTES / (1024 * 1024))}{" "}
-                                    MB.
-                                  </p>
-                                  <p className="text-[10px]">
-                                    <Link
-                                      href="/help/spatial-import"
-                                      className="font-medium text-primary underline-offset-2 hover:underline"
-                                    >
-                                      Buka halaman bantuan impor spasial
-                                    </Link>
-                                    <span className="text-muted-foreground">
-                                      {" "}
-                                      · Dokumen repo:{" "}
-                                      <span className="font-mono text-foreground">
-                                        docs/spatial-import-user-guide.md
-                                      </span>
-                                    </span>
-                                  </p>
-                                </div>
-                              </details>
-                            )}
-                            {mapGeomInputMode === "manage" ? (
-                              <div className="space-y-3">
-                                {issueGeometriesForManageTask.length === 0 ? (
-                                  <p className="text-sm text-muted-foreground">
-                                    Belum ada geometri fitur untuk unit kerja ini.
-                                  </p>
-                                ) : (
-                                  <>
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <p className="text-xs text-muted-foreground">
-                                        Total{" "}
-                                        <span className="font-semibold text-foreground">
-                                          {issueGeometriesForManageTask.length}
-                                        </span>{" "}
-                                        fitur.
-                                      </p>
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="destructive"
-                                        className="h-7 px-2 text-xs"
-                                        disabled={mapGeomPending}
-                                        onClick={() => {
-                                          if (
-                                            !selectedProjectId ||
-                                            !selectedTaskId
-                                          ) {
-                                            return;
-                                          }
-                                          if (
-                                            !window.confirm(
-                                              `Hapus semua ${issueGeometriesForManageTask.length} geometri fitur unit kerja ini?`
-                                            )
-                                          ) {
-                                            return;
-                                          }
-                                          setMapGeomDeleteMsg(null);
-                                          startMapGeomTransition(async () => {
-                                            const fd = new FormData();
-                                            fd.set(
-                                              "project_id",
-                                              selectedProjectId
-                                            );
-                                            fd.set("issue_id", selectedTaskId);
-                                            const r =
-                                              await deleteAllIssueGeometryFeaturesForIssueAction(
-                                                fd
-                                              );
-                                            if (r.error) {
-                                              setMapGeomDeleteMsg(r.error);
-                                              return;
-                                            }
-                                            setMapGeomDeleteMsg(
-                                              `Terhapus ${r.deleted} fitur.`
-                                            );
-                                            router.refresh();
-                                          });
-                                        }}
-                                      >
-                                        Hapus semua
-                                      </Button>
-                                    </div>
-                                    <div className="max-h-[36vh] overflow-y-auto rounded-md border border-border">
-                                      <table className="w-full border-collapse text-left text-xs">
-                                        <thead>
-                                          <tr className="border-b border-border bg-muted/50 text-muted-foreground">
-                                            <th className="px-2 py-1.5 font-medium">
-                                              feature_key
-                                            </th>
-                                            <th className="px-2 py-1.5 font-medium">
-                                              label
-                                            </th>
-                                            <th className="w-20 px-2 py-1.5 text-right font-medium">
-                                              Aksi
-                                            </th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {issueGeometriesForManageTask.map(
-                                            (row) => (
-                                              <tr
-                                                key={row.id}
-                                                className="border-b border-border/70"
-                                              >
-                                                <td className="px-2 py-1.5 font-mono text-[11px]">
-                                                  {row.feature_key}
-                                                </td>
-                                                <td className="max-w-[200px] truncate px-2 py-1.5">
-                                                  {row.label}
-                                                </td>
-                                                <td className="px-2 py-1.5 text-right">
-                                                  <Button
-                                                    type="button"
-                                                    size="sm"
-                                                    variant="outline"
-                                                    className="h-6 px-2 text-[11px] text-destructive hover:bg-destructive/10"
-                                                    disabled={mapGeomPending}
-                                                    onClick={() => {
-                                                      if (
-                                                        !selectedProjectId ||
-                                                        !selectedTaskId
-                                                      ) {
-                                                        return;
-                                                      }
-                                                      setMapGeomDeleteMsg(null);
-                                                      startMapGeomTransition(
-                                                        async () => {
-                                                          const fd =
-                                                            new FormData();
-                                                          fd.set(
-                                                            "project_id",
-                                                            selectedProjectId
-                                                          );
-                                                          fd.set(
-                                                            "issue_id",
-                                                            selectedTaskId
-                                                          );
-                                                          fd.set(
-                                                            "feature_id",
-                                                            row.id
-                                                          );
-                                                          const r =
-                                                            await deleteIssueGeometryFeatureByIdAction(
-                                                              fd
-                                                            );
-                                                          if (r.error) {
-                                                            setMapGeomDeleteMsg(
-                                                              r.error
-                                                            );
-                                                            return;
-                                                          }
-                                                          setMapGeomDeleteMsg(
-                                                            "Satu fitur dihapus."
-                                                          );
-                                                          router.refresh();
-                                                        }
-                                                      );
-                                                    }}
-                                                  >
-                                                    Hapus
-                                                  </Button>
-                                                </td>
-                                              </tr>
-                                            )
-                                          )}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </>
-                                )}
-                                {mapGeomDeleteMsg && (
-                                  <p
-                                    className={`text-xs ${mapGeomDeleteMsg.includes("Terhapus") || mapGeomDeleteMsg.includes("Satu fitur") ? "text-emerald-700" : "text-red-600"}`}
-                                    role="alert"
-                                  >
-                                    {mapGeomDeleteMsg}
-                                  </p>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="space-y-4">
-                                <div className="inline-flex rounded-lg border border-border bg-muted/50 p-0.5">
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                                      mapGeomFileMode === "geojson"
-                                        ? "bg-card text-foreground shadow-sm"
-                                        : "text-muted-foreground hover:text-foreground"
-                                    )}
-                                    onClick={() => {
-                                      setMapGeomFileMode("geojson");
-                                      setMapDxfError(null);
-                                      setMapGeomMsg(null);
-                                    }}
-                                  >
-                                    GeoJSON
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                                      mapGeomFileMode === "dxf"
-                                        ? "bg-card text-foreground shadow-sm"
-                                        : "text-muted-foreground hover:text-foreground"
-                                    )}
-                                    onClick={() => {
-                                      setMapGeomFileMode("dxf");
-                                      setMapGeomMsg(null);
-                                      setMapGeomBatchText("");
-                                      setMapGeomGeojsonBatchPrefix("");
-                                      setMapGeojsonBatchKeys([]);
-                                      setMapGeojsonBatchLabels([]);
-                                      setMapShpLayers(null);
-                                      setMapShpSelectedFileName("");
-                                      setMapShpLoadHint(null);
-                                      setMapDxfError(null);
-                                    }}
-                                  >
-                                    DXF
-                                  </button>
-                                </div>
-
-                                {mapGeomFileMode === "geojson" ? (
-                                  <form
-                                    key={`geom-single-${mapGeomFormNonce}`}
-                                    className="grid gap-3"
-                                    action={(fd) => {
-                                      if (!selectedProjectId || !selectedTaskId) return;
-                                      setMapGeomMsg(null);
-                                      fd.set("project_id", selectedProjectId);
-                                      fd.set("issue_id", selectedTaskId);
-                                      fd.set("source_srid", mapGeomSourceSrid);
-                                      startMapGeomTransition(async () => {
-                                        const rawGeojson = String(
-                                          fd.get("geojson_json") ?? ""
-                                        ).trim();
-                                        if (!rawGeojson) {
-                                          setMapGeomMsg("GeoJSON wajib diisi.");
-                                          return;
-                                        }
-                                        let parsed: unknown;
-                                        try {
-                                          parsed = JSON.parse(rawGeojson);
-                                        } catch {
-                                          setMapGeomMsg("GeoJSON tidak valid.");
-                                          return;
-                                        }
-
-                                        const geoType =
-                                          parsed && typeof parsed === "object"
-                                            ? String((parsed as { type?: unknown }).type ?? "")
-                                            : "";
-
-                                        if (geoType === "FeatureCollection") {
-                                          const rowCount = listGeoJsonBatchPolygonRows(
-                                            parsed as GeoJsonFeatureCollectionForBatch
-                                          ).length;
-                                          if (
-                                            rowCount > 0 &&
-                                            (mapGeojsonBatchKeys.length !== rowCount ||
-                                              mapGeojsonBatchLabels.length !== rowCount)
-                                          ) {
-                                            setMapGeomMsg(
-                                              "Pemetaan key belum siap — tunggu sebentar atau ubah prefix/file lalu coba lagi."
-                                            );
-                                            return;
-                                          }
-                                          let batchJson = rawGeojson;
-                                          let prefixForBatch = mapGeomGeojsonBatchPrefix;
-                                          if (
-                                            rowCount > 0 &&
-                                            mapGeojsonBatchKeys.length === rowCount &&
-                                            mapGeojsonBatchLabels.length === rowCount
-                                          ) {
-                                            const mapped = applyGeoJsonBatchKeyLabelMapping(
-                                              rawGeojson,
-                                              mapGeojsonBatchKeys,
-                                              mapGeojsonBatchLabels
-                                            );
-                                            if (!mapped.ok) {
-                                              setMapGeomMsg(mapped.error);
-                                              return;
-                                            }
-                                            if (
-                                              mapped.json.length >
-                                              MAX_SPATIAL_GEOMETRY_TEXT_CHARS
-                                            ) {
-                                              setMapGeomMsg(
-                                                spatialGeometryTextTooLargeMessage(
-                                                  "Batch GeoJSON"
-                                                )
-                                              );
-                                              return;
-                                            }
-                                            batchJson = mapped.json;
-                                            prefixForBatch = "";
-                                          }
-                                          const batchFd = new FormData();
-                                          batchFd.set("project_id", selectedProjectId);
-                                          batchFd.set("issue_id", selectedTaskId);
-                                          batchFd.set("batch_geojson_json", batchJson);
-                                          batchFd.set(
-                                            "feature_key_prefix",
-                                            prefixForBatch
-                                          );
-                                          batchFd.set("source_srid", mapGeomSourceSrid);
-                                          const r =
-                                            await upsertIssueGeometryFeatureBatchAction(
-                                              batchFd
-                                            );
-                                          if (r.error) {
-                                            setMapGeomMsg(r.error);
-                                            return;
-                                          }
-                                          const failText =
-                                            r.failed > 0 ? `, gagal ${r.failed}` : "";
-                                          const sampleText =
-                                            r.failureSamples.length > 0
-                                              ? ` (${r.failureSamples
-                                                  .slice(0, 3)
-                                                  .join(" | ")})`
-                                              : "";
-                                          setMapGeomMsg(
-                                            `Batch selesai: berhasil ${r.insertedOrUpdated}${failText}.${sampleText}`
-                                          );
-                                          setMapGeomDialogOpen(false);
-                                          router.refresh();
-                                          return;
-                                        }
-
-                                        const featureKey = String(
-                                          fd.get("feature_key") ?? ""
-                                        ).trim();
-                                        if (!featureKey) {
-                                          setMapGeomMsg(
-                                            "Feature key wajib diisi jika GeoJSON bukan FeatureCollection."
-                                          );
-                                          return;
-                                        }
-
-                                        const r = await upsertIssueGeometryFeatureAction(fd);
-                                        if (r.error) {
-                                          setMapGeomMsg(r.error);
-                                          return;
-                                        }
-                                        setMapGeomMsg("Berhasil simpan geometri.");
-                                        setMapGeomDialogOpen(false);
-                                        router.refresh();
-                                      });
-                                    }}
-                                  >
-                                    <div className="space-y-1">
-                                      <Label>GeoJSON *</Label>
-                                      <Input
-                                        type="file"
-                                        accept=".geojson,.json,application/geo+json,application/json"
-                                        className="w-full overflow-hidden file:mr-3 file:rounded-md file:border-0 file:bg-foreground file:px-3 file:py-1 file:text-xs file:font-medium file:text-background hover:file:opacity-90"
-                                        onChange={(e) => {
-                                          const file = e.currentTarget.files?.[0];
-                                          if (!file) {
-                                            setMapGeomBatchText("");
-                                            setMapGeomGeojsonBatchPrefix("");
-                                            setMapShpLayers(null);
-                                            setMapShpSelectedFileName("");
-                                            setMapShpLoadHint(null);
-                                            return;
-                                          }
-                                          setMapGeomMsg(null);
-                                          setMapShpLayers(null);
-                                          setMapShpSelectedFileName("");
-                                          setMapShpLoadHint(null);
-                                          const reader = new FileReader();
-                                          reader.onload = () => {
-                                            const raw =
-                                              typeof reader.result === "string"
-                                                ? reader.result
-                                                : "";
-                                            if (raw.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
-                                              setMapGeomBatchText("");
-                                              setMapGeomMsg(
-                                                spatialGeometryTextTooLargeMessage(
-                                                  "GeoJSON"
-                                                )
-                                              );
-                                              return;
-                                            }
-                                            try {
-                                              const parsed = JSON.parse(raw);
-                                              setMapGeomGeojsonBatchPrefix("");
-                                              setMapGeomBatchText(
-                                                JSON.stringify(parsed, null, 2)
-                                              );
-                                            } catch {
-                                              setMapGeomGeojsonBatchPrefix("");
-                                              setMapGeomBatchText(raw);
-                                            }
-                                          };
-                                          reader.onerror = () => {
-                                            setMapGeomMsg(
-                                              "Gagal membaca file. Coba file .geojson/.json lain."
-                                            );
-                                          };
-                                          reader.readAsText(file);
-                                        }}
-                                      />
-                                      <p className="text-[11px] text-muted-foreground">
-                                        Batas isi file teks ~{MAX_SPATIAL_GEOMETRY_TEXT_MB} MB
-                                        (sama untuk GeoJSON dan DXF).
-                                      </p>
-                                      <div className="space-y-2 rounded-md border border-dashed border-border/80 bg-muted/25 px-3 py-2">
-                                        <p className="text-[11px] font-medium text-foreground">
-                                          Atau ZIP shapefile (.shp + .dbf, idealnya .shx + .prj)
-                                        </p>
-                                        <Input
-                                          type="file"
-                                          accept=".zip,application/zip"
-                                          className="w-full overflow-hidden file:mr-3 file:rounded-md file:border-0 file:bg-foreground file:px-3 file:py-1 file:text-xs file:font-medium file:text-background hover:file:opacity-90"
-                                          onChange={(e) => {
-                                            const file = e.currentTarget.files?.[0];
-                                            if (!file) {
-                                              setMapShpLayers(null);
-                                              setMapShpSelectedFileName("");
-                                              setMapShpLoadHint(null);
-                                              return;
-                                            }
-                                            setMapGeomMsg(null);
-                                            setMapShpLoadHint(null);
-                                            const reader = new FileReader();
-                                            reader.onload = async () => {
-                                              const buf = reader.result;
-                                              if (!(buf instanceof ArrayBuffer)) {
-                                                setMapGeomMsg(
-                                                  "Gagal membaca ZIP shapefile."
-                                                );
-                                                return;
-                                              }
-                                              if (buf.byteLength > MAX_SHAPEFILE_ZIP_BYTES) {
-                                                setMapShpLayers(null);
-                                                setMapShpSelectedFileName("");
-                                                setMapGeomBatchText("");
-                                                setMapGeomMsg(shapefileZipTooLargeMessage());
-                                                return;
-                                              }
-                                              const parsed =
-                                                await parseShapefileZipToPolygonLayers(buf);
-                                              if (!parsed.ok) {
-                                                setMapShpLayers(null);
-                                                setMapShpSelectedFileName("");
-                                                setMapGeomBatchText("");
-                                                setMapGeomMsg(parsed.error);
-                                                return;
-                                              }
-                                              const layers = parsed.layers;
-                                              setMapShpLayers(layers);
-                                              const first = layers[0]!;
-                                              setMapShpSelectedFileName(first.fileName);
-                                              setMapGeomGeojsonBatchPrefix("");
-                                              const ok = applyShapefileLayerToBatch(
-                                                layers,
-                                                first.fileName
-                                              );
-                                              if (!ok) {
-                                                setMapShpLayers(null);
-                                                setMapShpSelectedFileName("");
-                                              }
-                                            };
-                                            reader.onerror = () => {
-                                              setMapGeomMsg(
-                                                "Gagal membaca ZIP. Coba file lain."
-                                              );
-                                            };
-                                            reader.readAsArrayBuffer(file);
-                                          }}
-                                        />
-                                        <p className="text-[11px] text-muted-foreground">
-                                          Batas ZIP ~{Math.round(MAX_SHAPEFILE_ZIP_BYTES / (1024 * 1024))} MB.
-                                          Hasil konversi ke GeoJSON batch tidak boleh melebihi
-                                          ~{MAX_SPATIAL_GEOMETRY_TEXT_MB} MB teks. Jika ada{" "}
-                                          <span className="font-mono">.prj</span> yang dikenali
-                                          parser, koordinat biasanya sudah lon/lat — pilih{" "}
-                                          <span className="font-mono">EPSG:4326</span>. Tanpa{" "}
-                                          <span className="font-mono">.prj</span>, pilih SRID
-                                          sesuai koordinat di berkas .shp.
-                                        </p>
-                                        {mapShpLayers && mapShpLayers.length > 1 && (
-                                          <div className="space-y-1">
-                                            <Label className="text-xs">Layer di ZIP</Label>
-                                            <select
-                                              value={mapShpSelectedFileName}
-                                              onChange={(ev) => {
-                                                const name = ev.target.value;
-                                                setMapShpSelectedFileName(name);
-                                                applyShapefileLayerToBatch(mapShpLayers, name);
-                                              }}
-                                              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                                            >
-                                              {mapShpLayers.map((ly) => (
-                                                <option key={ly.fileName} value={ly.fileName}>
-                                                  {ly.fileName} ({ly.polygonFeatureCount} poligon)
-                                                </option>
-                                              ))}
-                                            </select>
-                                          </div>
-                                        )}
-                                        {mapShpLoadHint && (
-                                          <p
-                                            className="text-[11px] text-muted-foreground"
-                                            role="status"
-                                          >
-                                            {mapShpLoadHint}
-                                          </p>
-                                        )}
-                                      </div>
-                                      <input
-                                        type="hidden"
-                                        name="geojson_json"
-                                        value={mapGeomBatchText}
-                                      />
-                                    </div>
-                                    {mapGeomDetectedKind === "single" && (
-                                      <>
-                                        <div className="space-y-1">
-                                          <Label>Feature key *</Label>
-                                          <Input
-                                            name="feature_key"
-                                            placeholder="contoh: sambeng-001 / bidang-12"
-                                          />
-                                        </div>
-                                        <div className="space-y-1">
-                                          <Label>Label (opsional)</Label>
-                                          <Input
-                                            name="label"
-                                            placeholder="contoh: Bidang Sambeng A1"
-                                          />
-                                        </div>
-                                      </>
-                                    )}
-                                    {mapGeomDetectedKind === "batch" && (
-                                      <>
-                                        <div className="space-y-1">
-                                          <Label>Prefix key (opsional)</Label>
-                                          <Input
-                                            value={mapGeomGeojsonBatchPrefix}
-                                            onChange={(e) =>
-                                              setMapGeomGeojsonBatchPrefix(e.target.value)
-                                            }
-                                            placeholder="contoh: sambeng-"
-                                            autoComplete="off"
-                                          />
-                                          <p className="text-[11px] text-muted-foreground">
-                                            Mengubah prefix mengatur ulang kolom Feature key dari
-                                            properti file (atur manual di tabel bila perlu).
-                                          </p>
-                                        </div>
-                                        {mapGeojsonBatchKeys.length > 0 && (
-                                          <div className="space-y-2">
-                                            <Label className="text-xs">
-                                              Feature key & label per poligon (
-                                              {mapGeojsonBatchKeys.length})
-                                            </Label>
-                                            <p className="text-[11px] text-muted-foreground">
-                                              Kolom <span className="font-medium text-foreground">Geometri</span>:{" "}
-                                              <span className="font-medium">Sudah ada</span> = key ini sudah punya
-                                              geometri untuk unit kerja ini (simpan akan menimpa);{" "}
-                                              <span className="font-medium">Belum</span> = belum ada.
-                                            </p>
-                                            <div className="max-h-[38vh] overflow-y-auto rounded-md border border-border">
-                                              <table className="w-full border-collapse text-left text-[11px]">
-                                                <thead>
-                                                  <tr className="border-b border-border bg-muted/50 text-muted-foreground">
-                                                    <th className="w-8 px-1.5 py-1 font-medium">
-                                                      #
-                                                    </th>
-                                                    <th className="w-[5.5rem] shrink-0 px-1.5 py-1 font-medium">
-                                                      Geometri
-                                                    </th>
-                                                    <th className="px-1.5 py-1 font-medium">
-                                                      Feature key
-                                                    </th>
-                                                    <th className="px-1.5 py-1 font-medium">
-                                                      Label
-                                                    </th>
-                                                  </tr>
-                                                </thead>
-                                                <tbody>
-                                                  {mapGeojsonBatchKeys.map((keyVal, i) => (
-                                                    <tr
-                                                      key={i}
-                                                      className="border-b border-border/60 align-top"
-                                                    >
-                                                      <td className="px-1.5 py-1 text-muted-foreground">
-                                                        {i + 1}
-                                                      </td>
-                                                      <td className="px-1 py-1 align-middle">
-                                                        {geometryKeyStatusCell(
-                                                          keyVal,
-                                                          geometryKeysLowerForSelectedTask
-                                                        )}
-                                                      </td>
-                                                      <td className="px-1 py-0.5">
-                                                        <Input
-                                                          value={keyVal}
-                                                          onChange={(e) => {
-                                                            const v = e.target.value;
-                                                            setMapGeojsonBatchKeys((prev) => {
-                                                              const next = [...prev];
-                                                              next[i] = v;
-                                                              return next;
-                                                            });
-                                                          }}
-                                                          className="h-7 px-1.5 font-mono text-[11px]"
-                                                          autoComplete="off"
-                                                        />
-                                                      </td>
-                                                      <td className="px-1 py-0.5">
-                                                        <Input
-                                                          value={
-                                                            mapGeojsonBatchLabels[i] ?? ""
-                                                          }
-                                                          onChange={(e) => {
-                                                            const v = e.target.value;
-                                                            setMapGeojsonBatchLabels((prev) => {
-                                                              const next = [...prev];
-                                                              next[i] = v;
-                                                              return next;
-                                                            });
-                                                          }}
-                                                          className="h-7 px-1.5 text-[11px]"
-                                                          autoComplete="off"
-                                                        />
-                                                      </td>
-                                                    </tr>
-                                                  ))}
-                                                </tbody>
-                                              </table>
-                                            </div>
-                                            <p className="text-[10px] text-muted-foreground">
-                                              Hanya fitur Polygon/MultiPolygon; urutan sama proses
-                                              batch server.
-                                            </p>
-                                          </div>
-                                        )}
-                                      </>
-                                    )}
-                                    <div className="space-y-1">
-                                      <Label>EPSG/SRID sumber</Label>
-                                      <select
-                                        name="source_srid"
-                                        value={mapGeomSourceSrid}
-                                        onChange={(e) =>
-                                          setMapGeomSourceSrid(e.target.value)
-                                        }
-                                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                                      >
-                                        {SOURCE_SRID_OPTIONS.map((opt) => (
-                                          <option key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      <p className="text-[11px] text-muted-foreground">
-                                        Koordinat dari CRS ini otomatis ditransform ke
-                                        WGS84 (EPSG:4326) saat disimpan.
-                                      </p>
-                                    </div>
-                                    {mapGeomDetectedKind === "none" && (
-                                      <p className="text-xs text-muted-foreground">
-                                        Pilih file GeoJSON dulu untuk menampilkan form sesuai
-                                        tipe data (single atau batch).
-                                      </p>
-                                    )}
-                                    {mapGeomDetectedKind === "invalid" && (
-                                      <p className="text-xs text-red-600" role="alert">
-                                        File/isi GeoJSON tidak valid.
-                                      </p>
-                                    )}
-                                    {mapGeomDetectedKind === "unsupported" && (
-                                      <p className="text-xs text-red-600" role="alert">
-                                        Tipe GeoJSON belum didukung. Gunakan Polygon,
-                                        MultiPolygon, Feature, atau FeatureCollection.
-                                      </p>
-                                    )}
-                                    <Button
-                                      type="submit"
-                                      disabled={
-                                        mapGeomPending ||
-                                        mapGeomDetectedKind === "none" ||
-                                        mapGeomDetectedKind === "invalid" ||
-                                        mapGeomDetectedKind === "unsupported" ||
-                                        (mapGeomDetectedKind === "batch" &&
-                                          mapGeomGeojsonPolygonRowCount > 0 &&
-                                          mapGeojsonBatchKeys.length !==
-                                            mapGeomGeojsonPolygonRowCount)
-                                      }
-                                    >
-                                      Simpan geometri
-                                    </Button>
-                                  </form>
-                                ) : (
-                                  <div className="grid gap-3">
-                                    <div className="space-y-1">
-                                      <Label>File DXF *</Label>
-                                      <Input
-                                        type="file"
-                                        accept=".dxf,text/plain,application/dxf,application/x-dxf"
-                                        className="w-full overflow-hidden file:mr-3 file:rounded-md file:border-0 file:bg-foreground file:px-3 file:py-1 file:text-xs file:font-medium file:text-background hover:file:opacity-90"
-                                        onChange={(e) => {
-                                          const file = e.currentTarget.files?.[0];
-                                          if (!file) {
-                                            setMapDxfRawText("");
-                                            setMapDxfLayers([]);
-                                            setMapDxfLayer("");
-                                            setMapDxfPolygonCount(0);
-                                            setMapDxfPreviewRings([]);
-                                            mapDxfParsedRef.current = null;
-                                            setMapDxfError(null);
-                                            return;
-                                          }
-                                          setMapGeomMsg(null);
-                                          setMapDxfError(null);
-                                          const reader = new FileReader();
-                                          reader.onload = () => {
-                                            const raw =
-                                              typeof reader.result === "string"
-                                                ? reader.result
-                                                : "";
-                                            if (raw.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
-                                              setMapDxfRawText("");
-                                              setMapDxfLayers([]);
-                                              setMapDxfLayer("");
-                                              setMapDxfPolygonCount(0);
-                                              setMapDxfPreviewRings([]);
-                                              mapDxfParsedRef.current = null;
-                                              setMapDxfError(
-                                                spatialGeometryTextTooLargeMessage("DXF")
-                                              );
-                                              return;
-                                            }
-                                            setMapDxfRawText(raw);
-                                            try {
-                                              const dxf = parseDxfDocument(raw);
-                                              mapDxfParsedRef.current = dxf;
-                                              const layers = listDxfLayerNames(dxf, raw);
-                                              setMapDxfLayers(layers);
-                                              const first = layers[0] ?? "";
-                                              setMapDxfLayer(first);
-                                              const rings = first
-                                                ? extractClosedPolygonRingsFromDxfLayer(
-                                                    dxf,
-                                                    first,
-                                                    raw
-                                                  )
-                                                : [];
-                                              setMapDxfPolygonCount(rings.length);
-                                              setMapDxfPreviewRings(rings);
-                                            } catch (err) {
-                                              mapDxfParsedRef.current = null;
-                                              setMapDxfLayers([]);
-                                              setMapDxfLayer("");
-                                              setMapDxfPolygonCount(0);
-                                              setMapDxfPreviewRings([]);
-                                              setMapDxfError(
-                                                err instanceof Error
-                                                  ? err.message
-                                                  : "Gagal membaca DXF."
-                                              );
-                                            }
-                                          };
-                                          reader.onerror = () => {
-                                            setMapDxfError("Gagal membaca file DXF.");
-                                          };
-                                          reader.readAsText(file);
-                                        }}
-                                      />
-                                      <p className="text-[11px] text-muted-foreground">
-                                        <span className="font-medium text-foreground">
-                                          LWPOLYLINE
-                                        </span>
-                                        ,{" "}
-                                        <span className="font-medium text-foreground">
-                                          POLYLINE
-                                        </span>{" "}
-                                        tertutup,{" "}
-                                        <span className="font-medium text-foreground">
-                                          INSERT
-                                        </span>{" "}
-                                        blok (LW/PL tertutup di blok) pada layer yang dipilih, atau{" "}
-                                        <span className="font-medium text-foreground">
-                                          HATCH
-                                        </span>{" "}
-                                        (boundary poliline / garis+busur); bulge diraster. Koordinat Z
-                                        diabaikan.
-                                      </p>
-                                      <p className="text-[11px] text-muted-foreground">
-                                        Batas isi file teks ~{MAX_SPATIAL_GEOMETRY_TEXT_MB} MB
-                                        (sama untuk GeoJSON dan DXF).
-                                      </p>
-                                    </div>
-                                    {mapDxfError && (
-                                      <p className="text-xs text-red-600" role="alert">
-                                        {mapDxfError}
-                                      </p>
-                                    )}
-                                    {mapDxfLayers.length > 0 && (
-                                      <div className="space-y-1">
-                                        <Label>Layer</Label>
-                                        <select
-                                          value={mapDxfLayer}
-                                          onChange={(e) => {
-                                            const v = e.target.value;
-                                            setMapDxfLayer(v);
-                                            const dxf = mapDxfParsedRef.current;
-                                            if (!dxf) return;
-                                            try {
-                                              const rings =
-                                                extractClosedPolygonRingsFromDxfLayer(
-                                                  dxf,
-                                                  v,
-                                                  mapDxfRawText
-                                                );
-                                              setMapDxfPolygonCount(rings.length);
-                                              setMapDxfPreviewRings(rings);
-                                              setMapDxfError(null);
-                                            } catch (err) {
-                                              setMapDxfPolygonCount(0);
-                                              setMapDxfPreviewRings([]);
-                                              setMapDxfError(
-                                                err instanceof Error
-                                                  ? err.message
-                                                  : "Gagal menganalisis layer."
-                                              );
-                                            }
-                                          }}
-                                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                                        >
-                                          {mapDxfLayers.map((ly) => (
-                                            <option key={ly} value={ly}>
-                                              {ly}
-                                            </option>
-                                          ))}
-                                        </select>
-                                      </div>
-                                    )}
-                                    <div className="space-y-1">
-                                      <Label>Prefix feature_key (opsional)</Label>
-                                      <Input
-                                        value={mapDxfKeyPrefix}
-                                        onChange={(e) => setMapDxfKeyPrefix(e.target.value)}
-                                        placeholder="contoh: bidang- — mengisi ulang key di tabel"
-                                        autoComplete="off"
-                                      />
-                                      <p className="text-[11px] text-muted-foreground">
-                                        Default key per baris:{" "}
-                                        <span className="font-mono text-[10px]">
-                                          {"{prefix}{layer-slug}-{nomor}"}
-                                        </span>
-                                        . Mengubah prefix/layer mengatur ulang tabel; edit manual
-                                        per baris agar cocok dengan CSV atribut.
-                                      </p>
-                                    </div>
-                                    <div className="space-y-1">
-                                      <Label>EPSG/SRID sumber</Label>
-                                      <select
-                                        value={mapGeomSourceSrid}
-                                        onChange={(e) =>
-                                          setMapGeomSourceSrid(e.target.value)
-                                        }
-                                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                                      >
-                                        {SOURCE_SRID_OPTIONS.map((opt) => (
-                                          <option key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      <p className="text-[11px] text-muted-foreground">
-                                        Koordinat dari CRS ini otomatis ditransform ke WGS84
-                                        (EPSG:4326) saat disimpan.
-                                      </p>
-                                    </div>
-                                    {mapDxfPolygonCount > 0 && mapDxfLayer && (
-                                      <div className="space-y-2">
-                                        <p className="text-xs font-medium text-foreground">
-                                          Mapping feature_key & label ({mapDxfPolygonCount}{" "}
-                                          poligon)
-                                        </p>
-                                        <div className="space-y-1">
-                                          <Label className="text-xs font-medium text-foreground">
-                                            Pratinjau poligon (WGS84 / peta dasar)
-                                          </Label>
-                                          <p className="text-[11px] text-muted-foreground">
-                                            Klik poligon di peta untuk menyorot baris di bawah;
-                                            klik baris tabel (di luar kotak isian) untuk
-                                            menyorot poligon. Proyeksi mengikuti SRID sumber yang
-                                            dipilih.
-                                          </p>
-                                          {mapDxfPreviewFeatureCollection.err ? (
-                                            <p
-                                              className="text-xs text-amber-700 dark:text-amber-500/95"
-                                              role="status"
-                                            >
-                                              {mapDxfPreviewFeatureCollection.err} Tabel mapping
-                                              tetap bisa dipakai.
-                                            </p>
-                                          ) : null}
-                                          <DxfMappingPreviewMap
-                                            featureCollection={
-                                              mapDxfPreviewFeatureCollection.fc
-                                            }
-                                            highlightIndex={mapDxfHighlightRow}
-                                            onSelectPolygon={handleDxfPreviewPolygonClick}
-                                          />
-                                        </div>
-                                        <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
-                                          <Label className="text-xs font-medium text-foreground">
-                                            Saran dari atribut (belum ada geometri di unit kerja
-                                            ini)
-                                          </Label>
-                                          {mapDxfAttributeKeysWithoutGeometry.length === 0 ? (
-                                            <p className="mt-1 text-[11px] text-muted-foreground">
-                                              Tidak ada baris atribut tanpa geometri untuk unit
-                                              kerja ini.
-                                            </p>
-                                          ) : (
-                                            <>
-                                              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                                                Klik key untuk menambahkannya ke textarea tempel;
-                                                atau isi tabel langsung dari daftar terurut.
-                                              </p>
-                                              <div className="mt-2 flex max-h-24 flex-wrap gap-1 overflow-y-auto">
-                                                {mapDxfAttributeKeysWithoutGeometry.map((k) => (
-                                                  <Button
-                                                    key={k}
-                                                    type="button"
-                                                    size="sm"
-                                                    variant="outline"
-                                                    className="h-7 max-w-full shrink-0 px-2 font-mono text-[10px]"
-                                                    title={`Tambahkan "${k}" ke daftar tempel`}
-                                                    onClick={() => {
-                                                      setMapDxfBulkKeyText((prev) => {
-                                                        const t = prev.trim();
-                                                        return t ? `${t}\n${k}` : k;
-                                                      });
-                                                      setMapDxfBulkKeyHint(null);
-                                                    }}
-                                                  >
-                                                    {k}
-                                                  </Button>
-                                                ))}
-                                              </div>
-                                              <div className="mt-2 flex flex-wrap gap-2">
-                                                <Button
-                                                  type="button"
-                                                  size="sm"
-                                                  variant="secondary"
-                                                  className="h-8 text-xs"
-                                                  onClick={() => {
-                                                    setMapDxfBulkKeyText(
-                                                      mapDxfAttributeKeysWithoutGeometry.join(
-                                                        "\n"
-                                                      )
-                                                    );
-                                                    setMapDxfBulkKeyHint(null);
-                                                  }}
-                                                >
-                                                  Salin semua ke textarea tempel
-                                                </Button>
-                                                <Button
-                                                  type="button"
-                                                  size="sm"
-                                                  variant="secondary"
-                                                  className="h-8 text-xs"
-                                                  onClick={() => {
-                                                    const sug = mapDxfAttributeKeysWithoutGeometry;
-                                                    const n = mapDxfPolygonCount;
-                                                    setMapDxfFeatureKeys((prev) => {
-                                                      const next = [...prev];
-                                                      const take = Math.min(sug.length, next.length);
-                                                      for (let i = 0; i < take; i++) {
-                                                        next[i] = sug[i]!;
-                                                      }
-                                                      return next;
-                                                    });
-                                                    if (sug.length > n) {
-                                                      setMapDxfBulkKeyHint(
-                                                        `Mengisi ${n} baris pertama dari ${sug.length} key atribut; sisanya edit manual atau tempel.`
-                                                      );
-                                                    } else if (sug.length < n) {
-                                                      setMapDxfBulkKeyHint(
-                                                        `Mengisi ${sug.length} baris pertama; ${n - sug.length} baris di bawah tidak diubah.`
-                                                      );
-                                                    } else {
-                                                      setMapDxfBulkKeyHint(
-                                                        `Semua ${sug.length} baris diisi dari daftar atribut (urutan alfabet).`
-                                                      );
-                                                    }
-                                                  }}
-                                                >
-                                                  Terapkan ke tabel (urutan terurut)
-                                                </Button>
-                                              </div>
-                                            </>
-                                          )}
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                          <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            className="h-8 shrink-0 text-xs"
-                                            onClick={() => {
-                                              const csv = dxfKeyMappingTemplateCsv();
-                                              const blob = new Blob([csv], {
-                                                type: "text/csv;charset=utf-8",
-                                              });
-                                              const url = URL.createObjectURL(blob);
-                                              const a = document.createElement("a");
-                                              a.href = url;
-                                              a.download = "template-mapping-dxf-feature_key.csv";
-                                              a.rel = "noopener";
-                                              document.body.appendChild(a);
-                                              a.click();
-                                              a.remove();
-                                              URL.revokeObjectURL(url);
-                                            }}
-                                          >
-                                            Unduh template CSV (feature_key + label)
-                                          </Button>
-                                          <p className="min-w-0 max-w-xl text-[11px] text-muted-foreground">
-                                            Untuk spreadsheet lapangan: baris setelah header = urutan poligon #1,
-                                            #2, …; salin kolom feature_key ke textarea tempel di bawah. Kolom
-                                            label opsional selaras dengan tabel.
-                                          </p>
-                                        </div>
-                                        <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
-                                          <Label className="text-xs font-medium text-foreground">
-                                            Tempel daftar feature_key (satu per baris)
-                                          </Label>
-                                          <p className="mt-0.5 text-[11px] text-muted-foreground">
-                                            Salin satu kolom dari spreadsheet / CSV: baris ke-1
-                                            → poligon #1, dst. Kosongkan baris diabaikan.
-                                          </p>
-                                          <Textarea
-                                            value={mapDxfBulkKeyText}
-                                            onChange={(e) => {
-                                              setMapDxfBulkKeyText(e.target.value);
-                                              setMapDxfBulkKeyHint(null);
-                                            }}
-                                            placeholder={"key-a\nkey-b\nkey-c"}
-                                            rows={3}
-                                            className="mt-2 min-h-[4.5rem] resize-y font-mono text-[11px]"
-                                            aria-label="Daftar feature_key untuk ditempel"
-                                          />
-                                          <Button
-                                            type="button"
-                                            size="sm"
-                                            variant="secondary"
-                                            className="mt-2 h-8 text-xs"
-                                            onClick={() => {
-                                              const lines = mapDxfBulkKeyText
-                                                .split(/\r?\n/)
-                                                .map((s) => s.trim())
-                                                .filter((s) => s.length > 0);
-                                              if (lines.length === 0) {
-                                                setMapDxfBulkKeyHint(
-                                                  "Tidak ada baris non-kosong untuk diterapkan."
-                                                );
-                                                return;
-                                              }
-                                              const n = mapDxfPolygonCount;
-                                              setMapDxfFeatureKeys((prev) => {
-                                                const next = [...prev];
-                                                const take = Math.min(lines.length, next.length);
-                                                for (let i = 0; i < take; i++) {
-                                                  next[i] = lines[i]!;
-                                                }
-                                                return next;
-                                              });
-                                              if (lines.length > n) {
-                                                setMapDxfBulkKeyHint(
-                                                  `Memakai ${n} baris pertama; ${lines.length - n} baris ekstra diabaikan.`
-                                                );
-                                              } else if (lines.length < n) {
-                                                setMapDxfBulkKeyHint(
-                                                  `Mengisi ${lines.length} baris pertama; ${n - lines.length} baris di bawah tidak diubah.`
-                                                );
-                                              } else {
-                                                setMapDxfBulkKeyHint(
-                                                  `Semua ${lines.length} baris diterapkan ke tabel.`
-                                                );
-                                              }
-                                            }}
-                                          >
-                                            Terapkan ke kolom Feature key
-                                          </Button>
-                                          {mapDxfBulkKeyHint ? (
-                                            <p
-                                              className="mt-2 text-[11px] text-muted-foreground"
-                                              role="status"
-                                            >
-                                              {mapDxfBulkKeyHint}
-                                            </p>
-                                          ) : null}
-                                        </div>
-                                        <p className="text-[11px] text-muted-foreground">
-                                          Kolom <span className="font-medium text-foreground">Geometri</span>:{" "}
-                                          <span className="font-medium">Sudah ada</span> = key ini sudah punya
-                                          geometri untuk unit kerja ini (simpan akan menimpa);{" "}
-                                          <span className="font-medium">Belum</span> = belum ada.
-                                        </p>
-                                        <div className="max-h-52 overflow-y-auto rounded-md border border-border">
-                                          <table className="w-full border-collapse text-left text-xs">
-                                            <thead>
-                                              <tr className="sticky top-0 border-b border-border bg-muted/80 text-muted-foreground">
-                                                <th className="w-10 px-2 py-1.5 font-medium">#</th>
-                                                <th className="w-[5.5rem] shrink-0 px-2 py-1.5 font-medium">
-                                                  Geometri
-                                                </th>
-                                                <th className="min-w-[8rem] px-2 py-1.5 font-medium">
-                                                  Feature key
-                                                </th>
-                                                <th className="min-w-[7rem] px-2 py-1.5 font-medium">
-                                                  Label (opsional)
-                                                </th>
-                                              </tr>
-                                            </thead>
-                                            <tbody>
-                                              {mapDxfFeatureKeys.map((key, idx) => (
-                                                <tr
-                                                  key={`dxf-key-${idx}`}
-                                                  ref={(el) => {
-                                                    dxfMappingRowRefs.current[idx] = el;
-                                                  }}
-                                                  onClick={(e) => {
-                                                    if (
-                                                      (e.target as HTMLElement).closest(
-                                                        "input, textarea, button, select, a"
-                                                      )
-                                                    ) {
-                                                      return;
-                                                    }
-                                                    setMapDxfHighlightRow(idx);
-                                                  }}
-                                                  className={cn(
-                                                    "border-b border-border/60 last:border-0",
-                                                    mapDxfHighlightRow === idx
-                                                      ? "bg-orange-500/12 ring-1 ring-orange-500/35 ring-inset"
-                                                      : "cursor-pointer hover:bg-muted/45"
-                                                  )}
-                                                >
-                                                  <td className="px-2 py-1.5 text-muted-foreground">
-                                                    {idx + 1}
-                                                  </td>
-                                                  <td className="px-1 py-1.5 align-middle">
-                                                    {geometryKeyStatusCell(
-                                                      key,
-                                                      geometryKeysLowerForSelectedTask
-                                                    )}
-                                                  </td>
-                                                  <td className="px-1 py-0.5">
-                                                    <Input
-                                                      value={key}
-                                                      onChange={(e) => {
-                                                        const v = e.target.value;
-                                                        setMapDxfFeatureKeys((prev) => {
-                                                          const next = [...prev];
-                                                          next[idx] = v;
-                                                          return next;
-                                                        });
-                                                      }}
-                                                      className="h-8 font-mono text-[11px]"
-                                                      autoComplete="off"
-                                                      aria-label={`Feature key poligon ${idx + 1}`}
-                                                    />
-                                                  </td>
-                                                  <td className="px-1 py-0.5">
-                                                    <Input
-                                                      value={mapDxfFeatureLabels[idx] ?? ""}
-                                                      onChange={(e) => {
-                                                        const v = e.target.value;
-                                                        setMapDxfFeatureLabels((prev) => {
-                                                          const next = [...prev];
-                                                          next[idx] = v;
-                                                          return next;
-                                                        });
-                                                      }}
-                                                      className="h-8 text-[11px]"
-                                                      placeholder={`DXF ${mapDxfLayer} #${idx + 1}`}
-                                                      autoComplete="off"
-                                                      aria-label={`Label poligon ${idx + 1}`}
-                                                    />
-                                                  </td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      </div>
-                                    )}
-                                    <Button
-                                      type="button"
-                                      disabled={
-                                        mapGeomPending ||
-                                        !!mapDxfError ||
-                                        !mapDxfRawText.trim() ||
-                                        !mapDxfLayer.trim() ||
-                                        mapDxfPolygonCount === 0 ||
-                                        mapDxfFeatureKeys.length !== mapDxfPolygonCount ||
-                                        mapDxfFeatureLabels.length !== mapDxfPolygonCount ||
-                                        !mapDxfFeatureKeys.every((k) => k.trim())
-                                      }
-                                      onClick={() => {
-                                        if (!selectedProjectId || !selectedTaskId) return;
-                                        setMapGeomMsg(null);
-                                        startMapGeomTransition(async () => {
-                                          const fd = new FormData();
-                                          fd.set("project_id", selectedProjectId);
-                                          fd.set("issue_id", selectedTaskId);
-                                          fd.set("dxf_text", mapDxfRawText);
-                                          fd.set("layer_name", mapDxfLayer);
-                                          fd.set(
-                                            "feature_key_prefix",
-                                            mapDxfKeyPrefix.trim()
-                                          );
-                                          fd.set(
-                                            "feature_keys_json",
-                                            JSON.stringify(mapDxfFeatureKeys.map((k) => k.trim()))
-                                          );
-                                          fd.set(
-                                            "feature_labels_json",
-                                            JSON.stringify(
-                                              mapDxfFeatureLabels.map((lb) => lb.trim())
-                                            )
-                                          );
-                                          fd.set("source_srid", mapGeomSourceSrid);
-                                          const r =
-                                            await upsertIssueGeometryFeaturesFromDxfAction(
-                                              fd
-                                            );
-                                          if (r.error) {
-                                            setMapGeomMsg(r.error);
-                                            return;
-                                          }
-                                          const failText =
-                                            r.failed > 0 ? `, gagal ${r.failed}` : "";
-                                          const sampleText =
-                                            r.failureSamples.length > 0
-                                              ? ` (${r.failureSamples
-                                                  .slice(0, 3)
-                                                  .join(" | ")})`
-                                              : "";
-                                          setMapGeomMsg(
-                                            `Impor DXF selesai: berhasil ${r.insertedOrUpdated}${failText}.${sampleText}`
-                                          );
-                                          setMapGeomDialogOpen(false);
-                                          router.refresh();
-                                        });
-                                      }}
-                                    >
-                                      Simpan geometri dari DXF
-                                    </Button>
-                                  </div>
-                                )}
-
-                                {mapGeomMsg && (
-                                  <p
-                                    className={`text-xs ${mapGeomMsg.includes("Berhasil") || mapGeomMsg.includes("Batch selesai") || mapGeomMsg.includes("Impor DXF selesai") ? "text-emerald-700" : "text-red-600"}`}
-                                    role="alert"
-                                  >
-                                    {mapGeomMsg}
-                                  </p>
-                                )}
-                              </div>
-                            )}
-                          </DialogContent>
-                        </Dialog>
-                    )}
-                    {selectedProjectId ? (
-                      <VirtualTableLayerUploadDialog
-                        open={mapLayerUploadOpen}
-                        onOpenChange={handleMapLayerUploadOpenChange}
-                        projectId={selectedProjectId}
-                        mapPreviewEnabled
-                        onPreviewChange={handleMapImportPreviewChange}
-                        onCreated={handleMapLayerCreated}
-                      />
-                    ) : null}
-                    {mapImportTable ? (
-                      <>
-                        <VirtualTableGeoJsonImportDialog
-                          open={mapGeoImportOpen}
-                          onOpenChange={handleMapGeoImportOpenChange}
-                          table={mapImportTable}
-                          columns={mapImportTableColumns}
-                          allVirtualTables={allAccessibleVtables}
-                          mapPreviewEnabled
-                          onPreviewChange={handleMapImportPreviewChange}
-                          onImported={handleMapGeoImported}
-                        />
-                        <VirtualTableDxfImportDialog
-                          open={mapDxfImportOpen}
-                          onOpenChange={handleMapDxfImportOpenChange}
-                          table={mapImportTable}
-                          columns={mapImportTableColumns}
-                          allVirtualTables={allAccessibleVtables}
-                          rows={mapImportTableRows}
-                          onImported={handleMapDxfImported}
-                        />
-                      </>
-                    ) : null}
-                    <div className="grid min-h-0 min-w-0 flex-1 basis-0 grid-rows-[auto_minmax(0,1fr)] gap-y-3">
-                      <div className="flex min-w-0 shrink-0 flex-col gap-2">
-                        {selectedProjectId || vtablesWithGeometry.length > 0 ? (
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                            {selectedProjectId ? (
-                              <div className="flex min-w-0 shrink-0 flex-col justify-center gap-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 sm:w-[min(100%,14rem)]">
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  className="w-fit shrink-0"
-                                  disabled={!selectedProjectId}
-                                  onClick={() => setMapLayerUploadOpen(true)}
-                                >
-                                  <Upload className="mr-1 size-3.5" />
-                                  Layer baru dari file
-                                </Button>
-                                <p className="text-[11px] leading-snug text-muted-foreground">
-                                  Tabel baru (no_bidang + geom) dari GeoJSON/DXF —
-                                  untuk surveyor.
-                                </p>
-                              </div>
-                            ) : null}
-                            {vtablesWithGeometry.length > 0 ? (
-                              <div className="flex min-w-0 flex-1 flex-wrap items-end gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
-                            <div className="min-w-[10rem] flex-1 sm:max-w-[14rem]">
-                              <label
-                                htmlFor="map-vtable-import-select"
-                                className="text-xs font-medium text-muted-foreground"
-                              >
-                                Tabel impor
-                              </label>
-                              <select
-                                id="map-vtable-import-select"
-                                value={mapImportTableId}
-                                onChange={(e) => {
-                                  setMapImportTableId(e.target.value);
-                                  setMapImportPreviewLayers([]);
-                                }}
-                                className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                              >
-                                {vtablesWithGeometry.map((vt) => (
-                                  <option key={vt.id} value={vt.id}>
-                                    {vt.display_name}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              disabled={!mapImportTableId}
-                              onClick={() => setMapGeoImportOpen(true)}
-                            >
-                              <Upload className="mr-1 size-3.5" />
-                              Impor GeoJSON ke tabel
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              disabled={!mapImportTableId}
-                              onClick={() => setMapDxfImportOpen(true)}
-                            >
-                              <Upload className="mr-1 size-3.5" />
-                              Impor DXF ke tabel
-                            </Button>
-                            {mapImportPreviewLayers.length > 0 ? (
-                              <p
-                                className="flex items-center gap-1 text-xs text-teal-800 dark:text-teal-300"
-                                role="status"
-                              >
-                                <MapPin className="size-3.5 shrink-0" />
-                                Pratinjau {mapImportPreviewLayers.length} poligon di
-                                peta
-                              </p>
-                            ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {mapLayersForSelectedProject.length === 0 &&
-                          mapImportPreviewLayers.length === 0 && (
-                          <p className="text-sm text-muted-foreground">
-                            Belum ada geometri di peta untuk {ruangKerjaIni}. Impor
-                            GeoJSON atau DXF ke tabel virtual di atas, atau pilih
-                            unit kerja untuk geometri issue (legacy).
-                          </p>
-                        )}
-                        {mapLayersForSelectedProject.length > 0 &&
-                          visibleMapLayers.length === 0 && (
-                            <p
-                              className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-foreground"
-                              role="status"
-                            >
-                              Semua lapisan peta dimatikan. Buka tombol{" "}
-                              <span className="font-semibold">Atur lapisan</span>{" "}
-                              lalu centang minimal satu lapisan untuk
-                              menampilkannya kembali di peta.
-                            </p>
-                          )}
-                        {mapLayersForSelectedProject.length > 0 && (
-                          <div
-                            className={cn(
-                              "flex flex-wrap items-center gap-2 text-sm",
-                              isBelowMd && "gap-3"
-                            )}
-                          >
-                            <span className="w-full font-medium text-muted-foreground md:w-auto">
-                              Lapisan peta:
-                            </span>
-                            <label
-                              className={cn(
-                                "inline-flex cursor-pointer items-center gap-2 text-sm text-foreground",
-                                isBelowMd && "min-h-11 rounded-md border border-border/60 px-3 py-2"
-                              )}
-                            >
-                              <input
-                                type="checkbox"
-                                className="size-4 rounded border-border"
-                                checked={mapShowIssueGeometry}
-                                disabled={issueGeometryForSelectedProject.length === 0}
-                                onChange={(e) =>
-                                  setMapShowIssueGeometry(e.target.checked)
-                                }
-                              />
-                              Geometri
-                            </label>
-                            {vtableGeometryLayers.length > 0 && (
-                              <label
-                                className={cn(
-                                  "inline-flex cursor-pointer items-center gap-2 text-sm text-foreground",
-                                  isBelowMd &&
-                                    "min-h-11 rounded-md border border-border/60 px-3 py-2"
-                                )}
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="size-4 rounded border-border"
-                                  checked={mapShowVirtualTableGeometry}
-                                  onChange={(e) =>
-                                    setMapShowVirtualTableGeometry(e.target.checked)
-                                  }
-                                />
-                                Tabel Custom ({vtableGeometryLayers.length})
-                              </label>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-y-2 overflow-hidden">
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                          <WorkspaceMap
-                            footprints={visibleMapLayers}
-                            highlightBerkasId={null}
-                            onVirtualRowChat={(rowId) => {
-                              openVirtualRowChatPanel(rowId, {
-                                switchToMapTab: false,
-                              });
-                            }}
-                          />
-                        </div>
-                        <div className="flex shrink-0 min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                          <p className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                            <span>
-                              <span
-                                className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
-                                style={{ background: "#a78bfa" }}
-                              />{" "}
-                              Geometri
-                            </span>
-                            {vtableGeometryLayers.length > 0 && (
-                              <span>
-                                <span
-                                  className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
-                                  style={{ background: "#fbbf24" }}
-                                />{" "}
-                                Tabel Custom
-                              </span>
-                            )}
-                            {mapImportPreviewLayers.length > 0 && (
-                              <span>
-                                <span
-                                  className="mr-1 inline-block h-2 w-2 rounded-sm align-middle border border-teal-700"
-                                  style={{
-                                    background: "#5eead4",
-                                    borderStyle: "dashed",
-                                  }}
-                                />{" "}
-                                Pratinjau impor
-                              </span>
-                            )}
-                          </p>
-                          {selectedTaskId ? (
-                            <div
-                              className={cn(
-                                "flex shrink-0 flex-wrap items-center gap-2",
-                                isBelowMd && "[&_button]:min-h-11"
-                              )}
-                            >
-                              <Button
-                                type="button"
-                                size={isBelowMd ? "default" : "sm"}
-                                variant="secondary"
-                                onClick={openMapGeomDialog}
-                              >
-                                Tambah/Ubah geometri unit kerja
-                              </Button>
-                              <Button
-                                type="button"
-                                size={isBelowMd ? "default" : "sm"}
-                                variant="outline"
-                                className="border-destructive/40 text-destructive hover:bg-destructive/10"
-                                onClick={openMapGeomManageDialog}
-                              >
-                                Hapus geometri
-                              </Button>
-                            </div>
-                          ) : (
-                            <p className="text-xs text-muted-foreground">
-                              Pilih unit kerja di sidebar/tabel untuk menambah geometri.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+                <WorkspaceSpatialView
+                  selectedProjectId={selectedProjectId}
+                  selectedTaskId={selectedTaskId}
+                  selectedScopePath={selectedScopePath}
+                  selectedProject={
+                    selectedProject
+                      ? { id: selectedProject.id, name: selectedProject.name }
+                      : null
+                  }
+                  isBelowMd={isBelowMd}
+                  isMapTabActive={activeView === "Map"}
+                  issues={issues}
+                  issueGeometryFeatureMap={issueGeometryFeatureMap}
+                  issueFeatureAttributes={issueFeatureAttributes}
+                  allAccessibleVtables={allAccessibleVtables}
+                  virtualColumns={virtualColumns}
+                  memberNameByUserId={memberNameByUserId}
+                  onSelectTableSlug={(slug) => {
+                    if (isBelowMd) setActiveVirtualTableSlug(slug);
+                    else setTabelSelectedSlug(slug);
+                  }}
+                />
               </TabPanelKeepAlive>
             </TabsContent>
             <TabsContent value="Kanban" className="min-h-0 w-full min-w-0 flex-none outline-none">
@@ -7818,70 +5364,24 @@ export function WorkspaceClient({
             </div>
           </ScrollArea>
 
-        {/* Overlay tabel — hanya menutup area konten tab, bukan header workspace */}
-        {activeVirtualTable && (
-          isBelowMd ? (
-            <WorkspaceMobileVirtualTableOverlay
-              table={activeVirtualTable}
-              columns={activeVirtualTableColumns}
-              organizationId={canonicalOrgId}
-              organizationName={selectedOrganization?.name ?? null}
-              userId={userId}
-              projectsForMention={projectsForMention}
-              memberNameByUserId={memberNameByUserId}
-              onBack={() => setActiveVirtualTableSlug(null)}
-            />
-          ) : (
-          <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-background max-md:pb-[env(safe-area-inset-bottom)]">
-            <div className="shrink-0 border-b border-border bg-card/90 px-4 py-2 max-md:pt-[env(safe-area-inset-top)]">
-              <button
-                type="button"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => setActiveVirtualTableSlug(null)}
-              >
-                ← Kembali
-              </button>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col">
-              <VirtualTableView
-                key={activeVirtualTable.id}
-                layout="overlay"
-                table={activeVirtualTable}
-                columns={activeVirtualTableColumns}
-                projectId={selectedProjectId}
-                organizationId={canonicalOrgId}
-                organizationName={selectedOrganization?.name ?? null}
-                userId={userId}
-                isOrgAdmin={isOrgAdminOfCanonicalOrg}
-                projectsForMention={projectsForMention}
-                memberNameByUserId={memberNameByUserId}
-                allVirtualTables={allAccessibleVtables}
-                onTableDeleted={() => setActiveVirtualTableSlug(null)}
-                onLayerCreated={(result) => {
-                  setActiveVirtualTableSlug(result.tableSlug);
-                  setMapImportTableId(result.tableId);
-                  router.refresh();
-                  void refreshActivityLogs();
-                }}
-                onActivityChange={refreshActivityLogs}
-              />
-            </div>
-          </div>
-          )
+        {/* Penampil tabel layar penuh — MOBILE saja. Di desktop tabel dibuka di
+            tab Tabel (master–detail), bukan overlay. */}
+        {isBelowMd && activeVirtualTable && (
+          <WorkspaceMobileVirtualTableOverlay
+            table={activeVirtualTable}
+            columns={activeVirtualTableColumns}
+            organizationId={canonicalOrgId}
+            organizationName={selectedOrganization?.name ?? null}
+            userId={userId}
+            projectsForMention={projectsForMention}
+            memberNameByUserId={memberNameByUserId}
+            onBack={() => setActiveVirtualTableSlug(null)}
+          />
         )}
         </section>
-        </Tabs>
-        {isBelowMd && !mobileChatKeyboardOpen ? (
-          <WorkspaceMobileTabBar
-            activeView={activeView}
-            visibleViews={visibleViews}
-            onViewChange={handleActiveViewChange}
-            className="absolute inset-x-0 bottom-0 z-20 md:hidden"
-          />
-        ) : null}
-      </main>
-
-      {activeView !== "Chat" || isBelowMd ? (
+        {/* Panel kanan berdampingan dengan pane utama, di bawah header workspace.
+            Komponen menyembunyikan dirinya sesuai state; di tab Obrolan desktop
+            hanya kind data ("Buka berdampingan") yang tampil. */}
         <WorkspaceRightPanel
           organizationId={canonicalOrgId}
           organizationName={selectedOrganization?.name ?? null}
@@ -7893,9 +5393,39 @@ export function WorkspaceClient({
           memberNameByUserId={memberNameByUserId}
           allVirtualTables={allAccessibleVtables}
           virtualColumns={virtualColumns}
+          chatTabActive={activeView === "Chat"}
         />
-      ) : null}
+        </div>
+        </Tabs>
+        {isBelowMd && !mobileChatKeyboardOpen ? (
+          <WorkspaceMobileTabBar
+            activeView={activeView}
+            visibleViews={visibleViews}
+            onViewChange={handleActiveViewChange}
+            className="absolute inset-x-0 bottom-0 z-20 md:hidden"
+          />
+        ) : null}
+      </main>
       </div>
+
+      {/* Riwayat aktivitas (audit log) — bukan tab utama sejak Fase 1 navigasi */}
+      <WorkspaceActivitySheet
+        open={activitySheetOpen}
+        onOpenChange={setActivitySheetOpen}
+        isBelowMd={isBelowMd}
+        activityLogs={liveActivityLogs}
+        organizationId={canonicalOrgId}
+        organizationName={selectedOrganization?.name ?? null}
+        selectedProjectId={selectedProjectId}
+        hasOrgStaffAccess={hasOrgStaffAccess}
+        projectNameById={projectNameById}
+        virtualTableIds={virtualTableIds}
+        virtualTableNameById={virtualTableNameById}
+        isLoading={activityLogsLoading}
+        onOpenTable={handleActivitySheetOpenTable}
+        onOpenRow={handleActivitySheetOpenRow}
+        onOpenProject={handleActivitySheetOpenProject}
+      />
 
       {/* Create virtual table dialog */}
       <VirtualTableCreateDialog
@@ -7906,7 +5436,7 @@ export function WorkspaceClient({
         onOpenChange={setVtableCreateDialogOpen}
         onCreated={(tableId) => {
           const created = virtualTables.find((vt) => vt.id === tableId);
-          if (created) setActiveVirtualTableSlug(created.slug);
+          if (created) focusVirtualTable(created.slug, { navigate: true });
         }}
       />
       </div>

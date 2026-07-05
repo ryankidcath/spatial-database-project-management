@@ -36,6 +36,19 @@ const ScrollArea = React.forwardRef<
     fillAvailableHeight?: boolean;
     /** Sembunyikan scrollbar vertikal (mis. tab mobile dengan scroll internal). */
     hideVerticalScrollbar?: boolean;
+    /** Scrollbar mana yang ditampilkan. Default hanya vertikal. */
+    orientation?: "vertical" | "horizontal" | "both";
+    /**
+     * Ref ke elemen Viewport (elemen scroll sebenarnya), untuk kebutuhan scroll
+     * terprogram seperti `scrollTo` / membaca `scrollTop`.
+     */
+    viewportRef?: React.Ref<HTMLDivElement>;
+    /**
+     * Kelas tambahan untuk Viewport (elemen scroll). Berguna untuk memasang
+     * batas tinggi (`max-h-…`) di scroller-nya langsung agar pola "tumbuh sampai
+     * batas lalu scroll" bekerja (Root cukup `height: auto`).
+     */
+    viewportClassName?: string;
   }
 >(
   (
@@ -46,32 +59,52 @@ const ScrollArea = React.forwardRef<
       scrollHideDelay = 900,
       fillAvailableHeight = false,
       hideVerticalScrollbar = false,
+      orientation = "vertical",
+      viewportRef,
+      viewportClassName,
       ...props
     },
     ref
-  ) => (
-    <ScrollAreaPrimitive.Root
-      ref={ref}
-      type={type}
-      scrollHideDelay={scrollHideDelay}
-      className={cn("relative overflow-hidden", className)}
-      {...props}
-    >
-      <ScrollAreaPrimitive.Viewport
-        className={cn(
-          "relative z-0 size-full rounded-[inherit]",
-          fillAvailableHeight && "overflow-hidden",
-          fillAvailableHeight
-            ? "[&>div]:box-border [&>div]:flex [&>div]:h-full [&>div]:min-h-0 [&>div]:w-full [&>div]:flex-col [&>div]:overflow-hidden"
-            : "[&>div]:!block"
-        )}
+  ) => {
+    const showVertical =
+      !hideVerticalScrollbar &&
+      (orientation === "vertical" || orientation === "both");
+    const showHorizontal =
+      orientation === "horizontal" || orientation === "both";
+    return (
+      <ScrollAreaPrimitive.Root
+        ref={ref}
+        type={type}
+        scrollHideDelay={scrollHideDelay}
+        className={cn("relative overflow-hidden", className)}
+        {...props}
       >
-        {children}
-      </ScrollAreaPrimitive.Viewport>
-      {!hideVerticalScrollbar ? <ScrollBar orientation="vertical" /> : null}
-      <ScrollAreaPrimitive.Corner />
-    </ScrollAreaPrimitive.Root>
-  )
+        <ScrollAreaPrimitive.Viewport
+          ref={viewportRef}
+          className={cn(
+            "relative z-0 size-full rounded-[inherit]",
+            fillAvailableHeight && "overflow-hidden",
+            fillAvailableHeight
+              ? // `!flex` wajib: Radix memasang `display:table` inline pada wrapper
+                // konten. Tanpa `!important`, inline menang → wrapper memakai
+                // table-layout auto yang menyusut ke max-content, sehingga konten
+                // lebar (mis. tabel) melebarkan area melewati viewport. `!flex`
+                // memaksa kolom flex ber-lebar 100% (tidak shrink-to-fit).
+                "[&>div]:box-border [&>div]:!flex [&>div]:h-full [&>div]:min-h-0 [&>div]:w-full [&>div]:min-w-0 [&>div]:flex-col [&>div]:overflow-hidden"
+              : showHorizontal
+                ? undefined
+                : "[&>div]:!block",
+            viewportClassName
+          )}
+        >
+          {children}
+        </ScrollAreaPrimitive.Viewport>
+        {showVertical ? <ScrollBar orientation="vertical" /> : null}
+        {showHorizontal ? <ScrollBar orientation="horizontal" /> : null}
+        <ScrollAreaPrimitive.Corner />
+      </ScrollAreaPrimitive.Root>
+    );
+  }
 );
 ScrollArea.displayName = ScrollAreaPrimitive.Root.displayName;
 

@@ -3484,6 +3484,9 @@ export async function createVirtualViewAction(
     return { error: "Config bukan JSON valid", viewId: null };
   }
 
+  if (config.layoutType == null) config.layoutType = "grid";
+  if (config.layoutOptions == null) config.layoutOptions = {};
+
   const { data, error } = await supabase
     .schema("core_pm")
     .from("virtual_views")
@@ -3597,6 +3600,91 @@ export async function fetchVirtualViewsAction(
   if (error) return { views: [], error: error.message };
 
   return { views: (data ?? []) as Record<string, unknown>[], error: null };
+}
+
+export async function duplicateVirtualViewAction(
+  formData: FormData
+): Promise<{ error: string | null; viewId: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", viewId: null };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", viewId: null };
+
+  const viewId = String(formData.get("view_id") ?? "").trim();
+  if (!viewId) return { error: "view_id kosong", viewId: null };
+
+  const { data: existing, error: fetchErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .select("table_id, name, config")
+    .eq("id", viewId)
+    .maybeSingle();
+
+  if (fetchErr) return { error: fetchErr.message, viewId: null };
+  if (!existing) return { error: "View tidak ditemukan", viewId: null };
+
+  const row = existing as {
+    table_id: string;
+    name: string;
+    config: Record<string, unknown>;
+  };
+
+  const { data, error } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .insert({
+      table_id: row.table_id,
+      name: `${row.name} (salinan)`,
+      config: row.config,
+      is_default: false,
+      created_by: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (error) return { error: error.message, viewId: null };
+
+  revalidatePath("/", "layout");
+  return { error: null, viewId: (data as { id: string }).id };
+}
+
+export async function setDefaultVirtualViewAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const viewId = String(formData.get("view_id") ?? "").trim();
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  if (!viewId || !tableId) return { error: "view_id / table_id kosong" };
+
+  const { error: clearErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .update({ is_default: false, updated_at: new Date().toISOString() })
+    .eq("table_id", tableId);
+
+  if (clearErr) return { error: clearErr.message };
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_views")
+    .update({ is_default: true, updated_at: new Date().toISOString() })
+    .eq("id", viewId)
+    .eq("table_id", tableId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,15 @@ export type IssueGeometryFeatureMapRow = {
   geojson: unknown;
 };
 
+/** Baris atribut fitur per issue (pre-geometri / tanpa geometri). */
+export type IssueFeatureAttributeRow = {
+  id: string;
+  project_id: string;
+  issue_id: string;
+  feature_key: string;
+  payload: unknown;
+};
+
 /** Gabungan baris geometri + atribut-only untuk tabel Atribut Spasial. */
 export type SpatialAttributeTableRow = {
   id: string;

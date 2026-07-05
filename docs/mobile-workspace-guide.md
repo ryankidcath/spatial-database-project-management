@@ -353,6 +353,17 @@ Uji di Chrome DevTools + satu perangkat fisik jika bisa.
 
 **Kanban**, **Kalender**, dan **Gantt** tidak tampil di tab desktop maupun bottom bar mobile. URL lama (`?view=kanban`, `kalender`, `gantt`) dialihkan ke Dashboard. Kode view tetap ada; aktifkan lagi lewat `HIDDEN_WORKSPACE_VIEWS` di `app/src/app/workspace-modules.ts`.
 
+### Aktivitas keluar tab bar (Fase 1 navigasi, 2026-07)
+
+**Aktivitas** (riwayat audit `audit_log`) tidak lagi slot di bottom bar maupun tab desktop. Bottom bar mobile: **Dashboard · Data · Obrolan · Spasial** (empat tab).
+
+| Platform | Cara buka riwayat |
+|----------|-------------------|
+| Desktop | Tombol **Riwayat** di header workspace, atau **Riwayat aktivitas** di bawah sidebar |
+| Mobile | Menu **⋯** di header compact → **Riwayat aktivitas** (sheet bawah) |
+
+URL `?view=aktivitas` dialihkan ke tab default. Tap item riwayat tetap navigasi ke tabel/baris (`openActivityVirtualTable`). Detail: `docs/workspace-navigation-and-views.md`.
+
 ---
 
 ## Di luar scope (v1 mobile)

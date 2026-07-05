@@ -75,12 +75,34 @@ export type VirtualViewSort = {
   direction: "asc" | "desc";
 };
 
+import type { VirtualTableLayoutType } from "@/lib/virtual-table-layout-types";
+
+export type VirtualViewLayoutOptions = {
+  /** Slug kolom select untuk Kanban. */
+  statusColumn?: string | null;
+  /** Slug kolom date untuk Kalender / tanggal mulai Timeline. */
+  dateColumn?: string | null;
+  /** Slug kolom date akhir Timeline (opsional; default = dateColumn). */
+  endDateColumn?: string | null;
+  /** Slug kolom file untuk cover Galeri. */
+  coverColumn?: string | null;
+  /** Slug kolom geometry untuk mini-peta. */
+  geometryColumn?: string | null;
+  /** Slug kolom untuk Chart (select/number). */
+  chartColumn?: string | null;
+  /** Mode chart: bar, pie, stat. */
+  chartMode?: "bar" | "pie" | "stat";
+};
+
 export type VirtualViewConfig = {
   filters: VirtualViewFilter[];
   sorts: VirtualViewSort[];
   groupBy: string | null;
   visibleColumns: string[];
   columnWidths: Record<string, number>;
+  /** Jenis tampilan (default grid). Fase 3+. */
+  layoutType?: VirtualTableLayoutType;
+  layoutOptions?: VirtualViewLayoutOptions;
 };
 
 export type VirtualViewRow = {

@@ -6,7 +6,7 @@ import {
   MAX_SHAPEFILE_ZIP_BYTES,
   MAX_SPATIAL_GEOMETRY_TEXT_MB,
 } from "@/lib/spatial-import-limits";
-import { PORTAL_LABEL } from "@/lib/product-labels";
+import { sanitizeInternalReturnPath } from "@/lib/safe-return-url";
 
 export const metadata: Metadata = {
   title: "Bantuan impor geometri & atribut",
@@ -14,7 +14,15 @@ export const metadata: Metadata = {
     "CRS, feature_key, GeoJSON, ZIP shapefile, DXF, dan import CSV atribut di Portal.",
 };
 
-export default function SpatialImportHelpPage() {
+type PageProps = {
+  searchParams: Promise<{ return?: string }>;
+};
+
+export default async function SpatialImportHelpPage({ searchParams }: PageProps) {
+  const q = await searchParams;
+  const backHref = sanitizeInternalReturnPath(q.return) ?? "/";
+  const backLabel =
+    backHref === "/" ? "← Kembali ke Portal" : "← Kembali ke workspace";
   const zipMb = Math.round(MAX_SHAPEFILE_ZIP_BYTES / (1024 * 1024));
 
   return (
@@ -22,10 +30,10 @@ export default function SpatialImportHelpPage() {
       <article className="mx-auto max-w-3xl rounded-xl border border-border bg-card px-6 py-8 shadow-sm">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <Link
-            href="/"
+            href={backHref}
             className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
           >
-            ← Kembali ke Portal
+            {backLabel}
           </Link>
         </div>
 

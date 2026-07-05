@@ -15,6 +15,7 @@ import {
   Trash2,
   GripVertical,
   Copy,
+  Star,
   Type,
   Hash,
   Calendar,
@@ -27,12 +28,11 @@ import {
   MapPin,
   Upload,
   MessageSquare,
-  Maximize2,
-  ChevronLeft,
-  ChevronRight,
+  MoreHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -43,11 +43,38 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { RelationTargetPickerDialog } from "@/components/relation-target-picker-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useIsBelowMd } from "@/lib/use-media-query";
+import { readTableLayoutPreference } from "@/lib/virtual-table-layout-preference";
+import { TableViewSwitcher } from "./table-view-switcher";
+import { VirtualTableKanbanView } from "./virtual-table-kanban-view";
+import { VirtualTableCalendarView } from "./virtual-table-calendar-view";
+import { VirtualTableGalleryView } from "./virtual-table-gallery-view";
+import { VirtualTableTimelineView } from "./virtual-table-timeline-view";
+import { VirtualTableFormView } from "./virtual-table-form-view";
+import { VirtualTableMapView } from "./virtual-table-map-view";
+import { VirtualTableChartView } from "./virtual-table-chart-view";
+import { TableLayoutSchemaPrompt } from "./table-layout-schema-prompt";
+import { TableLayoutOptionsToolbar } from "./table-layout-options-toolbar";
+import type { VirtualTableLayoutType } from "@/lib/virtual-table-layout-types";
+import {
+  isLayoutReady,
+  resolveLayoutOptions,
+} from "@/lib/virtual-table-layout-availability";
+import {
+  emptyVirtualViewConfig,
+  normalizeVirtualViewConfig,
+  layoutTypeFromConfig,
+} from "@/lib/virtual-view-config";
+import {
+  layoutMetaFor,
+} from "@/lib/virtual-table-layout-types";
+import { virtualRowDisplayLabel } from "@/lib/virtual-table-row-label";
+import type { VirtualViewLayoutOptions } from "./virtual-table-types";
 import type {
   VirtualTableRow,
   VirtualColumnRow,
@@ -77,6 +104,8 @@ import {
   updateVirtualViewAction,
   deleteVirtualViewAction,
   fetchVirtualViewsAction,
+  duplicateVirtualViewAction,
+  setDefaultVirtualViewAction,
   importVirtualRowsCsvAction,
   importVirtualRowsGeoJsonBatchAction,
   fetchVirtualTableImportContextAction,
@@ -111,6 +140,7 @@ import {
   pickDefaultVirtualTableMatchColumn,
 } from "@/lib/virtual-table-geojson-import";
 import { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
+import { ImportDialogShell } from "./import-dialog-shell";
 import {
   VirtualTableLayerUploadDialog,
   type LayerUploadCreated,
@@ -130,6 +160,7 @@ import {
   useVirtualTableChatUnread,
   VirtualTableRoomChatUnreadBadge,
 } from "./virtual-table-chat-unread-context";
+import type { VirtualRowMapSelect } from "./workspace-map";
 import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
 import { ruangKerjaLc } from "@/lib/product-labels";
 import type { ChatAttachmentRef, ChatMentionOption } from "./chat-types";
@@ -160,10 +191,21 @@ type Props = {
   onLayerCreated?: (result: LayerUploadCreated) => void;
   /** `overlay` = sidebar full-screen; grid mengisi tinggi tanpa kotak max-h. */
   layout?: "embedded" | "overlay";
-  /** Tab Tabel: buka overlay sidebar untuk tabel lengkap (tanpa batas halaman). */
-  onOpenInOverlay?: () => void;
+  /**
+   * Isi tinggi induk (flex-fill) + seamless tanpa kotak max-h, namun tetap
+   * mode paginated seperti `embedded`. Dipakai tab Tabel (master–detail).
+   */
+  fillHeight?: boolean;
   /** Setelah mutasi yang menulis audit_log — refresh tab Aktivitas. */
   onActivityChange?: () => void;
+  /**
+   * Ditanam DI DALAM panel kanan (tab Obrolan "Buka berdampingan"). Menonaktifkan
+   * semua aksi yang menyetir panel kanan (auto-closePanel, tombol chat tabel/baris)
+   * agar tabel tidak menutup panelnya sendiri / menimpa percakapan utama.
+   */
+  embeddedInRightPanel?: boolean;
+  /** Konten di kiri header (mis. toggle rail tab Data). */
+  headerLeading?: React.ReactNode;
 };
 
 // ---------------------------------------------------------------------------
@@ -205,31 +247,96 @@ const DATA_TYPE_ICON: Record<string, React.ComponentType<{ className?: string }>
   geometry: MapPin,
 };
 
-const SELECT_COLOR_MAP: Record<string, { bg: string; text: string }> = {
-  "to do":        { bg: "bg-gray-100 dark:bg-gray-800",     text: "text-gray-700 dark:text-gray-300" },
-  "todo":         { bg: "bg-gray-100 dark:bg-gray-800",     text: "text-gray-700 dark:text-gray-300" },
-  "belum":        { bg: "bg-gray-100 dark:bg-gray-800",     text: "text-gray-700 dark:text-gray-300" },
-  "pending":      { bg: "bg-gray-100 dark:bg-gray-800",     text: "text-gray-700 dark:text-gray-300" },
-  "backlog":      { bg: "bg-gray-100 dark:bg-gray-800",     text: "text-gray-700 dark:text-gray-300" },
-  "on progress":  { bg: "bg-amber-100 dark:bg-amber-900",   text: "text-amber-800 dark:text-amber-200" },
-  "in progress":  { bg: "bg-amber-100 dark:bg-amber-900",   text: "text-amber-800 dark:text-amber-200" },
-  "sedang":       { bg: "bg-amber-100 dark:bg-amber-900",   text: "text-amber-800 dark:text-amber-200" },
-  "proses":       { bg: "bg-amber-100 dark:bg-amber-900",   text: "text-amber-800 dark:text-amber-200" },
-  "review":       { bg: "bg-blue-100 dark:bg-blue-900",     text: "text-blue-800 dark:text-blue-200" },
-  "done":         { bg: "bg-green-100 dark:bg-green-900",   text: "text-green-800 dark:text-green-200" },
-  "selesai":      { bg: "bg-green-100 dark:bg-green-900",   text: "text-green-800 dark:text-green-200" },
-  "complete":     { bg: "bg-green-100 dark:bg-green-900",   text: "text-green-800 dark:text-green-200" },
-  "completed":    { bg: "bg-green-100 dark:bg-green-900",   text: "text-green-800 dark:text-green-200" },
-  "approved":     { bg: "bg-green-100 dark:bg-green-900",   text: "text-green-800 dark:text-green-200" },
-  "cancelled":    { bg: "bg-red-100 dark:bg-red-900",       text: "text-red-800 dark:text-red-200" },
-  "batal":        { bg: "bg-red-100 dark:bg-red-900",       text: "text-red-800 dark:text-red-200" },
-  "rejected":     { bg: "bg-red-100 dark:bg-red-900",       text: "text-red-800 dark:text-red-200" },
-  "ditolak":      { bg: "bg-red-100 dark:bg-red-900",       text: "text-red-800 dark:text-red-200" },
-  "blocked":      { bg: "bg-red-100 dark:bg-red-900",       text: "text-red-800 dark:text-red-200" },
+type SelectTone = { bg: string; text: string; dot: string; ring: string };
+
+const SELECT_TONES = {
+  gray: {
+    bg: "bg-gray-100 dark:bg-gray-800/60",
+    text: "text-gray-700 dark:text-gray-300",
+    dot: "bg-gray-400 dark:bg-gray-500",
+    ring: "ring-gray-200/70 dark:ring-gray-700/60",
+  },
+  amber: {
+    bg: "bg-amber-100 dark:bg-amber-900/40",
+    text: "text-amber-800 dark:text-amber-200",
+    dot: "bg-amber-500",
+    ring: "ring-amber-200/70 dark:ring-amber-800/60",
+  },
+  blue: {
+    bg: "bg-blue-100 dark:bg-blue-900/40",
+    text: "text-blue-800 dark:text-blue-200",
+    dot: "bg-blue-500",
+    ring: "ring-blue-200/70 dark:ring-blue-800/60",
+  },
+  green: {
+    bg: "bg-green-100 dark:bg-green-900/40",
+    text: "text-green-800 dark:text-green-200",
+    dot: "bg-green-500",
+    ring: "ring-green-200/70 dark:ring-green-800/60",
+  },
+  red: {
+    bg: "bg-red-100 dark:bg-red-900/40",
+    text: "text-red-800 dark:text-red-200",
+    dot: "bg-red-500",
+    ring: "ring-red-200/70 dark:ring-red-800/60",
+  },
+} satisfies Record<string, SelectTone>;
+
+const SELECT_TONE_BY_VALUE: Record<string, keyof typeof SELECT_TONES> = {
+  "to do": "gray",
+  todo: "gray",
+  belum: "gray",
+  pending: "gray",
+  backlog: "gray",
+  "on progress": "amber",
+  "in progress": "amber",
+  sedang: "amber",
+  proses: "amber",
+  review: "blue",
+  done: "green",
+  selesai: "green",
+  complete: "green",
+  completed: "green",
+  approved: "green",
+  cancelled: "red",
+  batal: "red",
+  rejected: "red",
+  ditolak: "red",
+  blocked: "red",
 };
 
-function getSelectColor(value: string): { bg: string; text: string } | null {
-  return SELECT_COLOR_MAP[value.toLowerCase().trim()] ?? null;
+/** Tone status; nilai tak dikenal memakai tone netral (gray). */
+function getSelectTone(value: string): SelectTone {
+  const key = SELECT_TONE_BY_VALUE[value.toLowerCase().trim()];
+  return SELECT_TONES[key ?? "gray"];
+}
+
+/** Pill status seragam: ring halus + dot berwarna + label. */
+function SelectPill({
+  value,
+  className,
+}: {
+  value: string;
+  className?: string;
+}) {
+  const tone = getSelectTone(value);
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset",
+        tone.bg,
+        tone.text,
+        tone.ring,
+        className
+      )}
+    >
+      <span
+        className={cn("size-1.5 shrink-0 rounded-full", tone.dot)}
+        aria-hidden
+      />
+      {value}
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -296,13 +403,7 @@ function compareRows(
   return 0;
 }
 
-const EMPTY_VIEW_CONFIG: VirtualViewConfig = {
-  filters: [],
-  sorts: [],
-  groupBy: null,
-  visibleColumns: [],
-  columnWidths: {},
-};
+const EMPTY_VIEW_CONFIG: VirtualViewConfig = emptyVirtualViewConfig();
 
 type StoredViewSession = {
   activeViewId: string | null;
@@ -380,6 +481,29 @@ function groupRowStickyClass(frozen: "rowNum" | "first", extra?: string) {
   );
 }
 
+/** Label baris grup: nama kolom (uppercase, muted) + nilai + chip jumlah baris. */
+function GroupRowLabel({
+  label,
+  value,
+  count,
+}: {
+  label?: string;
+  value: string;
+  count: number;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}:
+      </span>
+      <span className="text-xs font-medium text-foreground">{value}</span>
+      <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-foreground/10 px-1 text-[10px] font-semibold tabular-nums text-muted-foreground">
+        {count}
+      </span>
+    </span>
+  );
+}
+
 function headStickyClass(
   kind: "rowNum" | "first" | "scroll" | "actions",
   extra?: string
@@ -429,6 +553,8 @@ type DataRowProps = {
   onOpenRowChat: (rowId: string, rowTitle: string) => void;
   isRowChatOpen?: boolean;
   hasUnreadChat?: boolean;
+  /** Sembunyikan tombol chat baris (dipakai saat tabel ditanam di panel kanan). */
+  hideRowChat?: boolean;
 };
 
 function MultiSelectCell({
@@ -475,19 +601,7 @@ function MultiSelectCell({
         onClick={handleOpen}
       >
         {selected.length > 0 ? (
-          selected.map((s) => {
-            const c = getSelectColor(s);
-            return (
-              <span
-                key={s}
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                  c ? `${c.bg} ${c.text}` : "bg-primary text-primary-foreground"
-                }`}
-              >
-                {s}
-              </span>
-            );
-          })
+          selected.map((s) => <SelectPill key={s} value={s} />)
         ) : (
           <span className="text-muted-foreground/40 text-xs">—</span>
         )}
@@ -500,7 +614,6 @@ function MultiSelectCell({
         >
           {options.map((opt) => {
             const active = selected.includes(opt);
-            const c = getSelectColor(opt);
             return (
               <button
                 key={opt}
@@ -522,9 +635,7 @@ function MultiSelectCell({
                   readOnly
                   className="h-3.5 w-3.5 rounded border-border"
                 />
-                <span className={c ? `${c.bg} ${c.text} rounded-full px-2 py-0.5` : ""}>
-                  {opt}
-                </span>
+                <SelectPill value={opt} />
               </button>
             );
           })}
@@ -557,6 +668,7 @@ function DataRow({
   onOpenRowChat,
   isRowChatOpen = false,
   hasUnreadChat = false,
+  hideRowChat = false,
 }: DataRowProps) {
   return (
     <tr
@@ -618,7 +730,6 @@ function DataRow({
           }
 
           const currentVal = val != null ? String(val) : "";
-          const chipColor = currentVal ? getSelectColor(currentVal) : null;
 
           return (
             <td key={col.id} className={cellClass("px-3 py-1.5 relative")}>
@@ -634,15 +745,7 @@ function DataRow({
                   ))}
                 </select>
                 {currentVal ? (
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium pointer-events-none ${
-                      chipColor
-                        ? `${chipColor.bg} ${chipColor.text}`
-                        : "bg-primary text-primary-foreground"
-                    }`}
-                  >
-                    {currentVal}
-                  </span>
+                  <SelectPill value={currentVal} className="pointer-events-none" />
                 ) : (
                   <span className="text-muted-foreground/40 text-xs pointer-events-none">—</span>
                 )}
@@ -821,34 +924,36 @@ function DataRow({
       })}
       <td className="px-1 py-1 text-center">
         <div className="flex items-center justify-center gap-0.5">
-          <button
-            type="button"
-            className={cn(
-              "inline-flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-md transition-colors",
-              isRowChatOpen
-                ? "bg-primary/15 text-primary"
-                : "text-muted-foreground opacity-70 group-hover:bg-muted/80 group-hover:text-primary group-hover:opacity-100"
-            )}
-            onClick={(e) => {
-              e.stopPropagation();
-              const title = pickMapRowTitle(
-                row.payload ?? {},
-                visibleColumns.map((c) => ({
-                  slug: c.slug,
-                  display_name: c.display_name,
-                  data_type: c.data_type,
-                  position: c.position,
-                })),
-                relationLabels,
-                row.id
-              );
-              onOpenRowChat(row.id, title);
-            }}
-            title="Chat baris"
-            aria-pressed={isRowChatOpen}
-          >
-            <MessageSquare className="size-4" />
-          </button>
+          {!hideRowChat && (
+            <button
+              type="button"
+              className={cn(
+                "inline-flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-md transition-colors",
+                isRowChatOpen
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground opacity-70 group-hover:bg-muted/80 group-hover:text-primary group-hover:opacity-100"
+              )}
+              onClick={(e) => {
+                e.stopPropagation();
+                const title = pickMapRowTitle(
+                  row.payload ?? {},
+                  visibleColumns.map((c) => ({
+                    slug: c.slug,
+                    display_name: c.display_name,
+                    data_type: c.data_type,
+                    position: c.position,
+                  })),
+                  relationLabels,
+                  row.id
+                );
+                onOpenRowChat(row.id, title);
+              }}
+              title="Chat baris"
+              aria-pressed={isRowChatOpen}
+            >
+              <MessageSquare className="size-4" />
+            </button>
+          )}
           <button
             type="button"
             className="inline-flex items-center justify-center rounded p-1 opacity-20 group-hover:opacity-100"
@@ -884,11 +989,21 @@ export function VirtualTableView({
   onTableDeleted,
   onLayerCreated,
   layout = "embedded",
-  onOpenInOverlay,
+  fillHeight = false,
   onActivityChange,
+  embeddedInRightPanel = false,
+  headerLeading,
 }: Props) {
   const isOverlayLayout = layout === "overlay";
   const isPaginatedEmbedded = layout === "embedded";
+  /** Grid mengisi tinggi induk + seamless (overlay, atau embedded fillHeight). */
+  const shouldFillHeight = isOverlayLayout || fillHeight;
+  /**
+   * Header dijadikan bar setinggi 3.75rem (selaras tinggi header pane lain di tab
+   * Tabel master–detail), tanpa garis bawah. Tidak untuk overlay/panel kanan yang
+   * punya header/breadcrumb sendiri.
+   */
+  const paneHeader = fillHeight && !isOverlayLayout && !embeddedInRightPanel;
   const isBelowMd = useIsBelowMd();
   const overlayTouchToolbar = isOverlayLayout && isBelowMd;
   const router = useRouter();
@@ -897,8 +1012,10 @@ export function VirtualTableView({
   }, [onActivityChange]);
   const { refreshEpoch } = useVirtualTableChatUnread();
   const {
+    panel,
     openTableChat,
     openRowPanel,
+    openRowDetail: openGlobalRowDetail,
     closePanel,
     isTableChatOpen,
     isRowPanelOpen,
@@ -916,6 +1033,11 @@ export function VirtualTableView({
   const [pinnedUnreadScrollRowId, setPinnedUnreadScrollRowId] = useState<
     string | null
   >(null);
+  const [layoutType, setLayoutType] =
+    useState<VirtualTableLayoutType>("grid");
+  const [layoutOptions, setLayoutOptions] = useState<VirtualViewLayoutOptions>(
+    {}
+  );
 
   const scrollUnreadRowIntoView = useCallback((rowId: string) => {
     const container = tableScrollRef.current;
@@ -938,20 +1060,24 @@ export function VirtualTableView({
   }, []);
 
   // --- Row data (lazy-loaded + cache agar tab Tabel tidak reload penuh) ---
-  const [pageIndex, setPageIndex] = useState(0);
+  // Pola "muat lebih banyak": baris dimuat bertahap per VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE
+  // lalu di-append. `loadedCountRef` menyimpan ukuran jendela baris yang sedang dimuat
+  // supaya refresh (loadRows) tidak menyusutkannya kembali ke satu halaman.
   const rowsCacheKey = useMemo(
     () =>
       virtualTableRowsCacheKey(
         table.id,
-        pageIndex,
+        0,
         isPaginatedEmbedded ? VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE : null
       ),
-    [table.id, pageIndex, isPaginatedEmbedded]
+    [table.id, isPaginatedEmbedded]
   );
 
   const [rows, setRows] = useState<VirtualDataRow[]>([]);
   const [totalRowCount, setTotalRowCount] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadedCountRef = useRef(VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE);
 
   useLayoutEffect(() => {
     let cancelled = false;
@@ -959,13 +1085,22 @@ export function VirtualTableView({
     if (cached && cached.rows.length > 0) {
       setRows(cached.rows);
       setTotalRowCount(cached.totalCount);
+      loadedCountRef.current = Math.max(
+        VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+        cached.rows.length
+      );
       setInitialLoading(false);
       return;
     }
+    loadedCountRef.current = VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE;
     void hydrateVirtualTableRowsCache(rowsCacheKey).then((fromIdb) => {
       if (cancelled || !fromIdb?.rows.length) return;
       setRows(fromIdb.rows);
       setTotalRowCount(fromIdb.totalCount);
+      loadedCountRef.current = Math.max(
+        VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+        fromIdb.rows.length
+      );
       setInitialLoading(false);
     });
     return () => {
@@ -978,13 +1113,12 @@ export function VirtualTableView({
     if (!cached?.rows.length) {
       setInitialLoading(true);
     }
+    // Muat ulang seluruh jendela baris yang sedang tampil (bukan cuma satu halaman)
+    // agar baris hasil "muat lebih banyak" tidak hilang setelah refresh/mutasi.
     const result = await fetchVirtualRowsAction(
       table.id,
       isPaginatedEmbedded
-        ? {
-            limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
-            offset: pageIndex * VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
-          }
+        ? { limit: loadedCountRef.current, offset: 0 }
         : undefined
     );
     if (result.error) {
@@ -993,6 +1127,12 @@ export function VirtualTableView({
       setTotalRowCount(0);
     } else {
       const nextRows = result.rows as VirtualDataRow[];
+      if (isPaginatedEmbedded) {
+        loadedCountRef.current = Math.max(
+          VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+          nextRows.length
+        );
+      }
       setVirtualTableRowsCache(rowsCacheKey, {
         rows: nextRows,
         totalCount: result.totalCount,
@@ -1001,29 +1141,45 @@ export function VirtualTableView({
       setTotalRowCount(result.totalCount);
     }
     setInitialLoading(false);
-  }, [table.id, isPaginatedEmbedded, pageIndex, rowsCacheKey]);
+  }, [table.id, isPaginatedEmbedded, rowsCacheKey]);
 
-  const totalPages = isPaginatedEmbedded
-    ? Math.max(1, Math.ceil(totalRowCount / VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE))
-    : 1;
+  const loadedRowCount = rows.length;
+  const hasMoreRows = isPaginatedEmbedded && loadedRowCount < totalRowCount;
+  const remainingRowCount = Math.max(0, totalRowCount - loadedRowCount);
 
-  const pageRowStart =
-    totalRowCount === 0
-      ? 0
-      : pageIndex * VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE + 1;
-  const pageRowEnd = isPaginatedEmbedded
-    ? Math.min(totalRowCount, (pageIndex + 1) * VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE)
-    : totalRowCount;
-
-  useEffect(() => {
-    setPageIndex(0);
-  }, [table.id]);
-
-  useEffect(() => {
-    if (pageIndex > totalPages - 1) {
-      setPageIndex(Math.max(0, totalPages - 1));
+  const loadMoreRows = useCallback(async () => {
+    if (!isPaginatedEmbedded || loadingMore || initialLoading) return;
+    setLoadingMore(true);
+    const result = await fetchVirtualRowsAction(table.id, {
+      limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+      offset: rows.length,
+    });
+    if (result.error) {
+      toast.error(result.error);
+    } else {
+      const more = result.rows as VirtualDataRow[];
+      const seen = new Set(rows.map((r) => r.id));
+      const merged = [...rows, ...more.filter((r) => !seen.has(r.id))];
+      loadedCountRef.current = Math.max(
+        VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+        merged.length
+      );
+      setVirtualTableRowsCache(rowsCacheKey, {
+        rows: merged,
+        totalCount: result.totalCount,
+      });
+      setRows(merged);
+      setTotalRowCount(result.totalCount);
     }
-  }, [pageIndex, totalPages]);
+    setLoadingMore(false);
+  }, [
+    isPaginatedEmbedded,
+    loadingMore,
+    initialLoading,
+    table.id,
+    rows,
+    rowsCacheKey,
+  ]);
 
   useEffect(() => {
     if (isOverlayLayout) {
@@ -1777,6 +1933,103 @@ export function VirtualTableView({
     [loadRows, bumpActivity]
   );
 
+  const openRowDetail = useCallback(
+    (rowId: string) => {
+      const row = rows.find((r) => r.id === rowId);
+      const rowTitle = row
+        ? virtualRowDisplayLabel(row, columns)
+        : "Baris";
+      const pathSegments = buildChatRowPathSegments({
+        projectName: table.project_id
+          ? (projectsForMention.find((p) => p.id === table.project_id)?.name ??
+            null)
+          : null,
+        organizationName: table.project_id ? null : organizationName,
+        tableDisplayName: table.display_name,
+        rowLabel: rowTitle,
+      });
+      openRowPanel({
+        tableId: table.id,
+        rowId,
+        pathSegments,
+        tab: "detail",
+        closeWhenOverlayCloses: isOverlayLayout,
+        mentionOptions: [
+          ...buildBaseMentionOptions(),
+          { id: rowId, label: rowTitle, kind: "row" },
+        ],
+        fileAttachmentOptions: buildRowFileOptions(rowId),
+        rowPayload: row?.payload as Record<string, unknown> | undefined,
+        relationLabels,
+      });
+    },
+    [
+      rows,
+      columns,
+      projectsForMention,
+      table.project_id,
+      table.display_name,
+      table.id,
+      organizationName,
+      isOverlayLayout,
+      openRowPanel,
+      buildBaseMentionOptions,
+      buildRowFileOptions,
+      relationLabels,
+    ]
+  );
+
+  const handleKanbanStatusChange = useCallback(
+    (rowId: string, newStatus: string | null) => {
+      const slug = layoutOptions.statusColumn;
+      if (!slug) return;
+      saveCell(rowId, slug, newStatus ?? "");
+    },
+    [layoutOptions.statusColumn, saveCell]
+  );
+
+  const openGeometryForForm = useCallback(
+    (rowId: string, colSlug: string) => {
+      const row = rows.find((r) => r.id === rowId);
+      const val = row?.payload[colSlug];
+      const hasGeo = val != null && val !== "" && typeof val === "object";
+      setGeometryEditor({
+        rowId,
+        colSlug,
+        currentGeoJSON: hasGeo ? JSON.stringify(val, null, 2) : "",
+      });
+    },
+    [rows]
+  );
+
+  const handleMapVirtualRowSelect = useCallback(
+    (select: VirtualRowMapSelect) => {
+      if (select.tableId !== table.id) return;
+      const row = rows.find((r) => r.id === select.rowId);
+      openGlobalRowDetail({
+        tableId: table.id,
+        rowId: select.rowId,
+        pathSegments: select.pathSegments,
+        rowPayload:
+          (row?.payload as Record<string, unknown> | undefined) ??
+          select.rowPayload,
+        relationLabels: select.relationLabels ?? relationLabels,
+      });
+    },
+    [table.id, rows, openGlobalRowDetail, relationLabels]
+  );
+
+  const highlightVirtualRowId =
+    panel?.kind === "row-detail" && panel.tableId === table.id
+      ? panel.rowId
+      : null;
+
+  const handleMapBackgroundClick = useCallback(() => {
+    if (panel?.kind === "row-detail" && panel.tableId === table.id) {
+      closePanel();
+    }
+  }, [panel, table.id, closePanel]);
+
   // --- Sorted columns ---
   const sortedColumns = useMemo(
     () => [...columns].sort((a, b) => a.position - b.position),
@@ -1793,6 +2046,7 @@ export function VirtualTableView({
   const [groupBy, setGroupBy] = useState<string | null>(null);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   const [showViewToolbar, setShowViewToolbar] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [saveViewName, setSaveViewName] = useState("");
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const viewSessionHydratedRef = useRef(false);
@@ -1801,12 +2055,15 @@ export function VirtualTableView({
   columnsRef.current = columns;
 
   const applyViewConfig = useCallback((config: VirtualViewConfig) => {
-    setFilters(config.filters ?? []);
-    setSorts(config.sorts ?? []);
-    setGroupBy(config.groupBy ?? null);
+    const normalized = normalizeVirtualViewConfig(config);
+    setFilters(normalized.filters ?? []);
+    setSorts(normalized.sorts ?? []);
+    setGroupBy(normalized.groupBy ?? null);
+    setLayoutType(normalized.layoutType ?? "grid");
+    setLayoutOptions(normalized.layoutOptions ?? {});
     const allSlugs = columnsRef.current.map((c) => c.slug);
-    if (config.visibleColumns && config.visibleColumns.length > 0) {
-      const visible = new Set(config.visibleColumns);
+    if (normalized.visibleColumns && normalized.visibleColumns.length > 0) {
+      const visible = new Set(normalized.visibleColumns);
       setHiddenColumns(new Set(allSlugs.filter((s) => !visible.has(s))));
     } else {
       setHiddenColumns(new Set());
@@ -1841,8 +2098,14 @@ export function VirtualTableView({
 
       const defaultView = views.find((v) => v.is_default);
       if (defaultView) {
-        applyViewConfig(defaultView.config);
+        applyViewConfig(defaultView.config as VirtualViewConfig);
         setActiveViewId(defaultView.id);
+      } else {
+        const prefLayout = readTableLayoutPreference(table.id);
+        setLayoutType(prefLayout);
+        setLayoutOptions(
+          resolveLayoutOptions(prefLayout, {}, columnsRef.current)
+        );
       }
       viewSessionHydratedRef.current = true;
     });
@@ -1860,7 +2123,90 @@ export function VirtualTableView({
       .map((c) => c.slug)
       .filter((s) => !hiddenColumns.has(s)),
     columnWidths: {},
-  }), [filters, sorts, groupBy, sortedColumns, hiddenColumns]);
+    layoutType,
+    layoutOptions,
+  }), [filters, sorts, groupBy, sortedColumns, hiddenColumns, layoutType, layoutOptions]);
+
+  const handleLayoutChange = useCallback(
+    (next: VirtualTableLayoutType, options: VirtualViewLayoutOptions) => {
+      setLayoutType(next);
+      setLayoutOptions(options);
+    },
+    []
+  );
+
+  const handleLayoutOptionsChange = useCallback(
+    (patch: Partial<VirtualViewLayoutOptions>) => {
+      setLayoutOptions((prev) => ({ ...prev, ...patch }));
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (layoutType === "grid" || layoutType === "form") return;
+    setLayoutOptions((prev) =>
+      resolveLayoutOptions(layoutType, prev, columns)
+    );
+  }, [columns, layoutType]);
+
+  const effectiveLayout = useMemo(() => {
+    if (
+      isLayoutReady(layoutType, layoutOptions, columns) &&
+      (layoutType === "grid" ||
+        layoutType === "kanban" ||
+        layoutType === "calendar" ||
+        layoutType === "timeline" ||
+        layoutType === "gallery" ||
+        layoutType === "form" ||
+        layoutType === "map" ||
+        layoutType === "chart")
+    ) {
+      return layoutType;
+    }
+    return "grid" as const;
+  }, [layoutType, layoutOptions, columns]);
+
+  const openAddColumnForLayout = useCallback(
+    (dataType: VirtualColumnDataType, suggestedName: string) => {
+      setNewColType(dataType);
+      setNewColName(suggestedName);
+      setShowAddColumn(true);
+    },
+    []
+  );
+
+  const layoutSchemaMismatch =
+    layoutType !== effectiveLayout && layoutType !== "grid";
+
+  const altLayoutShellClass = cn(
+    "flex min-h-0 min-w-0 flex-col bg-card",
+    shouldFillHeight ? "flex-1" : "rounded-xl border border-border shadow-sm"
+  );
+
+  const loadMoreFooter =
+    hasMoreRows ? (
+      <div className="flex shrink-0 justify-center border-t border-border/60 px-3 py-2.5">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-2"
+          disabled={loadingMore || initialLoading}
+          onClick={() => void loadMoreRows()}
+        >
+          {loadingMore ? (
+            <>
+              <Spinner className="size-4" /> Memuat…
+            </>
+          ) : (
+            `Muat ${Math.min(
+              VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+              remainingRowCount
+            )} baris lagi · sisa ${remainingRowCount}`
+          )}
+        </Button>
+      </div>
+    ) : null;
 
   // Persist filter/sort/group/columns to localStorage (survives refresh & tab switch)
   useEffect(() => {
@@ -1912,15 +2258,49 @@ export function VirtualTableView({
       if (r.error) toast.error(r.error);
       if (activeViewId === viewId) {
         setActiveViewId(null);
-        setFilters([]);
-        setSorts([]);
-        setGroupBy(null);
-        setHiddenColumns(new Set());
+        applyViewConfig(emptyVirtualViewConfig());
       }
       const updated = await fetchVirtualViewsAction(table.id);
       if (!updated.error) setSavedViews(updated.views as VirtualViewRow[]);
     });
-  }, [activeViewId, table.id]);
+  }, [activeViewId, table.id, applyViewConfig]);
+
+  const duplicateView = useCallback(
+    (viewId: string) => {
+      const fd = new FormData();
+      fd.set("view_id", viewId);
+      startTransition(async () => {
+        const r = await duplicateVirtualViewAction(fd);
+        if (r.error) toast.error(r.error);
+        const updated = await fetchVirtualViewsAction(table.id);
+        if (!updated.error) {
+          const views = updated.views as VirtualViewRow[];
+          setSavedViews(views);
+          if (r.viewId) {
+            setActiveViewId(r.viewId);
+            const copied = views.find((v) => v.id === r.viewId);
+            if (copied) applyViewConfig(copied.config);
+          }
+        }
+      });
+    },
+    [table.id, applyViewConfig]
+  );
+
+  const setDefaultView = useCallback(
+    (viewId: string) => {
+      const fd = new FormData();
+      fd.set("view_id", viewId);
+      fd.set("table_id", table.id);
+      startTransition(async () => {
+        const r = await setDefaultVirtualViewAction(fd);
+        if (r.error) toast.error(r.error);
+        const updated = await fetchVirtualViewsAction(table.id);
+        if (!updated.error) setSavedViews(updated.views as VirtualViewRow[]);
+      });
+    },
+    [table.id]
+  );
 
   // Toggle column sort (click header)
   const toggleSort = useCallback((colSlug: string) => {
@@ -1976,8 +2356,9 @@ export function VirtualTableView({
     scrolledUnreadLockRef.current = null;
     unreadScrollInProgressRef.current = null;
     setPinnedUnreadScrollRowId(null);
-    closePanel();
-  }, [table.id, closePanel]);
+    // Jangan tutup panel bila tabel ini justru dirender DI DALAM panel kanan.
+    if (!embeddedInRightPanel) closePanel();
+  }, [table.id, closePanel, embeddedInRightPanel]);
 
   useEffect(() => {
     if (!isInView) return;
@@ -2229,41 +2610,22 @@ export function VirtualTableView({
     <div
       ref={rootRef}
       className={cn(
-        isOverlayLayout
-          ? "flex min-h-0 flex-1 flex-col gap-3 px-4 pb-4 pt-3"
-          : "space-y-3"
+        shouldFillHeight
+          ? "flex min-h-0 min-w-0 flex-1 flex-col gap-3"
+          : "space-y-3",
+        isOverlayLayout && "px-4 pb-4 pt-3"
       )}
     >
-      {isPaginatedEmbedded && totalRowCount > VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE ? (
-        <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          Preview tab: menampilkan{" "}
-          <strong className="text-foreground">
-            {VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE}
-          </strong>{" "}
-          baris per halaman dari{" "}
-          <strong className="text-foreground">{totalRowCount}</strong> total.
-          Filter dan sort hanya pada baris halaman ini.{" "}
-          {onOpenInOverlay ? (
-            <button
-              type="button"
-              className="font-medium text-primary underline-offset-2 hover:underline"
-              onClick={onOpenInOverlay}
-            >
-              Buka tabel lengkap
-            </button>
-          ) : null}{" "}
-          untuk seluruh data tanpa batas halaman.
-        </p>
-      ) : null}
-
       {/* Header */}
       <div
         className={cn(
           "flex shrink-0 flex-wrap items-center justify-between gap-2",
+          paneHeader && "min-h-[3.75rem] items-center",
           overlayTouchToolbar && "flex-col items-stretch gap-3"
         )}
       >
         <div className="flex min-w-0 items-center gap-2">
+          {headerLeading}
           {table.icon && <span className="text-lg">{table.icon}</span>}
           <div className="min-w-0">
             <h2 className="truncate text-xl font-semibold tracking-tight text-foreground">
@@ -2280,6 +2642,18 @@ export function VirtualTableView({
               </p>
             ) : null}
           </div>
+          {!overlayTouchToolbar ? (
+            <Badge
+              variant="secondary"
+              className="shrink-0 font-normal text-muted-foreground"
+              title="Jumlah baris dan kolom"
+            >
+              {(totalRowCount || rows.length).toLocaleString("id-ID")} baris
+              {" · "}
+              {visibleColumns.length}
+              {hiddenColumns.size > 0 ? `/${sortedColumns.length}` : ""} kolom
+            </Badge>
+          ) : null}
         </div>
         <div
           className={cn(
@@ -2292,20 +2666,25 @@ export function VirtualTableView({
               <Spinner className="size-3" /> Menyimpan…
             </div>
           )}
-          {isPaginatedEmbedded && onOpenInOverlay ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              className="gap-1.5"
-              onClick={onOpenInOverlay}
-              title="Buka seluruh data tabel di panel overlay"
-            >
-              <Maximize2 className="size-3.5 shrink-0" />
-              Tabel lengkap
-            </Button>
+          <TableViewSwitcher
+            tableId={table.id}
+            columns={columns}
+            layout={layoutType}
+            layoutOptions={layoutOptions}
+            onLayoutChange={handleLayoutChange}
+            onAddColumn={embeddedInRightPanel ? undefined : openAddColumnForLayout}
+            className={overlayTouchToolbar ? "min-h-11 touch-manipulation" : undefined}
+          />
+          {layoutType !== "grid" && layoutType !== "form" ? (
+            <TableLayoutOptionsToolbar
+              layout={layoutType}
+              columns={columns}
+              layoutOptions={layoutOptions}
+              onLayoutOptionsChange={handleLayoutOptionsChange}
+              touchFriendly={overlayTouchToolbar}
+            />
           ) : null}
-          {resolvedOrganizationId && userId ? (
+          {resolvedOrganizationId && userId && !embeddedInRightPanel ? (
             <Button
               type="button"
               variant={isTableChatOpen(table.id) ? "default" : "outline"}
@@ -2335,6 +2714,7 @@ export function VirtualTableView({
             type="button"
             variant={showViewToolbar ? "default" : "outline"}
             size="sm"
+            data-testid="table-view-toolbar-toggle"
             onClick={() => setShowViewToolbar((v) => !v)}
           >
             {hasActiveFilters ? "Filter ●" : "Filter"}
@@ -2360,73 +2740,113 @@ export function VirtualTableView({
           <Button type="button" variant="outline" size="sm" onClick={addRow} disabled={pending}>
             + Baris
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowAddColumn(true)}
-            disabled={pending}
-          >
-            + Kolom
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowCsvImport(true)}
-            disabled={pending || initialLoading}
-          >
-            <Upload className="mr-1 size-3.5" />
-            Impor CSV
-          </Button>
-          {projectId ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              onClick={() => setShowLayerUpload(true)}
-              disabled={pending || initialLoading}
-            >
-              <Upload className="mr-1 size-3.5" />
-              Layer baru dari file
-            </Button>
-          ) : null}
-          {geometryColumns.length > 0 ? (
-            <>
+          <Popover open={showMoreMenu} onOpenChange={setShowMoreMenu}>
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  title="Aksi lainnya"
+                  aria-label="Aksi lainnya"
+                >
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              }
+            />
+            <PopoverContent align="end" className="w-56 gap-0.5 p-1.5">
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                onClick={() => setShowGeoJsonImport(true)}
-                disabled={pending || initialLoading}
+                className="w-full justify-start"
+                onClick={() => {
+                  setShowMoreMenu(false);
+                  setShowAddColumn(true);
+                }}
+                disabled={pending}
               >
-                <MapPin className="mr-1 size-3.5" />
-                Impor GeoJSON
+                + Kolom
               </Button>
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                onClick={() => setShowDxfImport(true)}
+                className="w-full justify-start"
+                onClick={() => {
+                  setShowMoreMenu(false);
+                  setShowCsvImport(true);
+                }}
                 disabled={pending || initialLoading}
               >
-                <Upload className="mr-1 size-3.5" />
-                Impor DXF
+                <Upload className="size-3.5" />
+                Impor CSV
               </Button>
-            </>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setEditTableName(table.display_name);
-              setEditTableDesc(table.description ?? "");
-              setShowTableSettings(true);
-            }}
-          >
-            Pengaturan
-          </Button>
+              {projectId ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    setShowLayerUpload(true);
+                  }}
+                  disabled={pending || initialLoading}
+                >
+                  <Upload className="size-3.5" />
+                  Layer baru dari file
+                </Button>
+              ) : null}
+              {geometryColumns.length > 0 ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setShowGeoJsonImport(true);
+                    }}
+                    disabled={pending || initialLoading}
+                  >
+                    <MapPin className="size-3.5" />
+                    Impor GeoJSON
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setShowDxfImport(true);
+                    }}
+                    disabled={pending || initialLoading}
+                  >
+                    <Upload className="size-3.5" />
+                    Impor DXF
+                  </Button>
+                </>
+              ) : null}
+              <div className="my-1 h-px bg-border" />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  setShowMoreMenu(false);
+                  setEditTableName(table.display_name);
+                  setEditTableDesc(table.description ?? "");
+                  setShowTableSettings(true);
+                }}
+              >
+                Pengaturan
+              </Button>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
@@ -2443,16 +2863,16 @@ export function VirtualTableView({
               }`}
               onClick={() => {
                 setActiveViewId(null);
-                setFilters([]);
-                setSorts([]);
-                setGroupBy(null);
-                setHiddenColumns(new Set());
+                applyViewConfig(emptyVirtualViewConfig());
                 clearViewSession(table.id);
               }}
             >
               Default
             </button>
-            {savedViews.map((v) => (
+            {savedViews.map((v) => {
+              const vLayout = layoutTypeFromConfig(v.config);
+              const layoutLabel = layoutMetaFor(vLayout).shortLabel;
+              return (
               <div key={v.id} className="group flex items-center gap-0.5">
                 <button
                   type="button"
@@ -2466,12 +2886,32 @@ export function VirtualTableView({
                     applyViewConfig(v.config);
                     saveViewSession(table.id, {
                       activeViewId: v.id,
-                      config: v.config,
+                      config: normalizeVirtualViewConfig(v.config),
                     });
                   }}
                 >
+                  {v.is_default ? "★ " : ""}
                   {v.name}
+                  <span className="ml-1 opacity-70">({layoutLabel})</span>
                 </button>
+                <button
+                  type="button"
+                  className="rounded p-0.5 text-muted-foreground opacity-40 hover:opacity-100"
+                  onClick={() => duplicateView(v.id)}
+                  title="Duplikat view"
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+                {!v.is_default ? (
+                  <button
+                    type="button"
+                    className="rounded p-0.5 text-muted-foreground opacity-40 hover:text-amber-600 hover:opacity-100"
+                    onClick={() => setDefaultView(v.id)}
+                    title="Jadikan default"
+                  >
+                    <Star className="h-3 w-3" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   style={{ color: "var(--muted-foreground)", opacity: 0.2 }}
@@ -2483,10 +2923,11 @@ export function VirtualTableView({
                   <Trash2 className="h-3 w-3" />
                 </button>
               </div>
-            ))}
+            );})}
             <button
               type="button"
               className="text-xs text-muted-foreground underline hover:text-foreground"
+              data-testid="table-save-view"
               onClick={() => setShowSaveViewDialog(true)}
             >
               + Simpan view
@@ -2660,14 +3101,167 @@ export function VirtualTableView({
         </div>
       )}
 
-      {/* Table scroll viewport */}
-      <div
-        ref={tableScrollRef}
+      {layoutSchemaMismatch ? (
+        <TableLayoutSchemaPrompt
+          layout={layoutType}
+          columns={columns}
+          onAddColumn={openAddColumnForLayout}
+          className="mb-3 px-1"
+        />
+      ) : null}
+
+      {/* Table / alternate layout viewport */}
+      {effectiveLayout === "kanban" && layoutOptions.statusColumn ? (
+        <div className={altLayoutShellClass}>
+          <VirtualTableKanbanView
+            rows={processedRows}
+            columns={columns}
+            statusColumnSlug={layoutOptions.statusColumn}
+            statusOptions={
+              selectOptionsBySlug.get(layoutOptions.statusColumn) ?? []
+            }
+            onOpenRow={openRowDetail}
+            onStatusChange={
+              embeddedInRightPanel ? undefined : handleKanbanStatusChange
+            }
+            className="min-h-[min(70vh,calc(100dvh-14rem))] flex-1 px-2 pt-2"
+          />
+          {loadMoreFooter}
+        </div>
+      ) : effectiveLayout === "calendar" && layoutOptions.dateColumn ? (
+        <ScrollArea
+          orientation="vertical"
+          type="scroll"
+          className={cn(
+            "min-h-0 min-w-0 bg-card",
+            shouldFillHeight
+              ? "flex-1"
+              : "rounded-xl border border-border shadow-sm"
+          )}
+          viewportClassName={cn(
+            !shouldFillHeight && "max-h-[min(70vh,calc(100dvh-14rem))]"
+          )}
+        >
+          <VirtualTableCalendarView
+            rows={processedRows}
+            columns={columns}
+            dateColumnSlug={layoutOptions.dateColumn}
+            onOpenRow={openRowDetail}
+            className="p-3"
+          />
+          {loadMoreFooter}
+        </ScrollArea>
+      ) : effectiveLayout === "timeline" && layoutOptions.dateColumn ? (
+        <div className={altLayoutShellClass}>
+          <VirtualTableTimelineView
+            rows={processedRows}
+            columns={columns}
+            startDateColumnSlug={layoutOptions.dateColumn}
+            endDateColumnSlug={
+              layoutOptions.endDateColumn ?? layoutOptions.dateColumn
+            }
+            onOpenRow={openRowDetail}
+            className="min-h-[min(70vh,calc(100dvh-14rem))] flex-1 px-2 pt-2"
+          />
+          {loadMoreFooter}
+        </div>
+      ) : effectiveLayout === "gallery" ? (
+        <ScrollArea
+          orientation="vertical"
+          type="scroll"
+          className={cn(
+            "min-h-0 min-w-0 bg-card",
+            shouldFillHeight
+              ? "flex-1"
+              : "rounded-xl border border-border shadow-sm"
+          )}
+          viewportClassName={cn(
+            !shouldFillHeight && "max-h-[min(70vh,calc(100dvh-14rem))]"
+          )}
+        >
+          <VirtualTableGalleryView
+            rows={processedRows}
+            columns={columns}
+            coverColumnSlug={layoutOptions.coverColumn}
+            onOpenRow={openRowDetail}
+          />
+          {loadMoreFooter}
+        </ScrollArea>
+      ) : effectiveLayout === "form" ? (
+        <div className={altLayoutShellClass}>
+          <VirtualTableFormView
+            rows={processedRows}
+            columns={columns}
+            visibleColumnSlugs={visibleColumns.map((c) => c.slug)}
+            selectOptionsBySlug={selectOptionsBySlug}
+            relationLabels={relationLabels}
+            memberNameByUserId={memberNameByUserId}
+            onSaveCell={saveCell}
+            onAddRow={addRow}
+            onOpenGeometry={openGeometryForForm}
+            readOnly={embeddedInRightPanel}
+            className="min-h-[min(70vh,calc(100dvh-14rem))] flex-1"
+          />
+          {loadMoreFooter}
+        </div>
+      ) : effectiveLayout === "map" && layoutOptions.geometryColumn ? (
+        <div className={altLayoutShellClass}>
+          <VirtualTableMapView
+            table={table}
+            columns={columns}
+            rows={processedRows}
+            geometryColumnSlug={layoutOptions.geometryColumn}
+            relationLabels={relationLabels}
+            memberNameByUserId={memberNameByUserId}
+            projectName={
+              table.project_id
+                ? (projectsForMention.find((p) => p.id === table.project_id)
+                    ?.name ?? null)
+                : null
+            }
+            onVirtualRowSelect={handleMapVirtualRowSelect}
+            highlightVirtualRowId={highlightVirtualRowId}
+            onMapBackgroundClick={handleMapBackgroundClick}
+            className="min-h-[min(70vh,calc(100dvh-14rem))] flex-1"
+          />
+          {loadMoreFooter}
+        </div>
+      ) : effectiveLayout === "chart" ? (
+        <ScrollArea
+          orientation="vertical"
+          type="scroll"
+          className={cn(
+            "min-h-0 min-w-0 bg-card",
+            shouldFillHeight
+              ? "flex-1"
+              : "rounded-xl border border-border shadow-sm"
+          )}
+          viewportClassName={cn(
+            !shouldFillHeight && "max-h-[min(70vh,calc(100dvh-14rem))]"
+          )}
+        >
+          <VirtualTableChartView
+            rows={processedRows}
+            columns={columns}
+            chartColumnSlug={layoutOptions.chartColumn}
+            chartMode={layoutOptions.chartMode ?? "bar"}
+            className="pb-2"
+          />
+          {loadMoreFooter}
+        </ScrollArea>
+      ) : (
+      <ScrollArea
+        viewportRef={tableScrollRef}
+        orientation="both"
+        type="scroll"
         className={cn(
-          "min-h-0 overflow-auto bg-card",
-          isOverlayLayout
-            ? "min-h-0 flex-1"
-            : "max-h-[min(70vh,calc(100dvh-14rem))] rounded-xl border border-border shadow-sm"
+          "min-h-0 min-w-0 bg-card",
+          shouldFillHeight
+            ? "flex-1"
+            : "rounded-xl border border-border shadow-sm"
+        )}
+        viewportClassName={cn(
+          !shouldFillHeight && "max-h-[min(70vh,calc(100dvh-14rem))]"
         )}
       >
         <table className="w-full border-separate border-spacing-0 text-sm">
@@ -2707,7 +3301,7 @@ export function VirtualTableView({
                     )}
                   >
                     <GripVertical
-                      className="h-3 w-3 shrink-0 cursor-grab text-muted-foreground/30 hover:text-muted-foreground active:cursor-grabbing"
+                      className="h-3 w-3 shrink-0 cursor-grab text-muted-foreground/30 opacity-0 transition-opacity hover:text-muted-foreground active:cursor-grabbing col-reveal:opacity-100"
                     />
                     {renamingCol?.id === col.id ? (
                       <input
@@ -2756,10 +3350,7 @@ export function VirtualTableView({
                     {col.data_type === "select" && (
                       <button
                         type="button"
-                        className="ml-1 text-[10px] underline"
-                        style={{ color: "var(--muted-foreground)", opacity: 0.3 }}
-                        onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.3"; }}
+                        className="ml-1 text-[10px] text-muted-foreground underline opacity-0 transition-opacity pointer-events-none hover:text-foreground col-reveal:pointer-events-auto col-reveal:opacity-100"
                         onClick={() =>
                           setEditingColOptions({
                             columnId: col.id,
@@ -2773,10 +3364,7 @@ export function VirtualTableView({
                     )}
                     <button
                       type="button"
-                      className="ml-auto"
-                      style={{ color: "var(--muted-foreground)", opacity: 0.2 }}
-                      onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--foreground)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.2"; e.currentTarget.style.color = "var(--muted-foreground)"; }}
+                      className="ml-auto text-muted-foreground opacity-0 transition-opacity pointer-events-none hover:text-foreground col-reveal:pointer-events-auto col-reveal:opacity-100"
                       onClick={() => duplicateColumn(col)}
                       title={`Duplikat kolom ${col.display_name}`}
                     >
@@ -2784,9 +3372,7 @@ export function VirtualTableView({
                     </button>
                     <button
                       type="button"
-                      style={{ color: "var(--muted-foreground)", opacity: 0.2 }}
-                      onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--destructive)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.2"; e.currentTarget.style.color = "var(--muted-foreground)"; }}
+                      className="text-muted-foreground opacity-0 transition-opacity pointer-events-none hover:text-destructive col-reveal:pointer-events-auto col-reveal:opacity-100"
                       onClick={() => removeColumn(col.id)}
                       title={`Hapus kolom ${col.display_name}`}
                     >
@@ -2837,19 +3423,27 @@ export function VirtualTableView({
               [...groupedRows.entries()].map(([groupKey, groupRows]) => (
                 <React.Fragment key={groupKey}>
                   <tr className="bg-muted">
-                    <td className={groupRowStickyClass("rowNum")} />
+                    <td
+                      className={groupRowStickyClass(
+                        "rowNum",
+                        "border-y border-border border-l-2 border-l-primary/40"
+                      )}
+                    />
                     {visibleColumns.length === 0 ? (
                       <td
                         className={groupRowStickyClass(
                           "first",
-                          "px-3 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap"
+                          "border-y border-border px-3 py-2 whitespace-nowrap"
                         )}
                       >
-                        {sortedColumns.find((c) => c.slug === groupBy)?.display_name}:{" "}
-                        {groupKey}{" "}
-                        <span className="font-normal text-muted-foreground">
-                          ({groupRows.length})
-                        </span>
+                        <GroupRowLabel
+                          label={
+                            sortedColumns.find((c) => c.slug === groupBy)
+                              ?.display_name
+                          }
+                          value={groupKey}
+                          count={groupRows.length}
+                        />
                       </td>
                     ) : (
                       visibleColumns.map((col, colIndex) =>
@@ -2858,21 +3452,31 @@ export function VirtualTableView({
                             key={col.id}
                             className={groupRowStickyClass(
                               "first",
-                              "px-3 py-1.5 text-xs font-semibold text-foreground whitespace-nowrap"
+                              "border-y border-border px-3 py-2 whitespace-nowrap"
                             )}
                           >
-                            {sortedColumns.find((c) => c.slug === groupBy)?.display_name}:{" "}
-                            {groupKey}{" "}
-                            <span className="font-normal text-muted-foreground">
-                              ({groupRows.length})
-                            </span>
+                            <GroupRowLabel
+                              label={
+                                sortedColumns.find((c) => c.slug === groupBy)
+                                  ?.display_name
+                              }
+                              value={groupKey}
+                              count={groupRows.length}
+                            />
                           </td>
                         ) : (
-                          <td key={col.id} className="bg-muted p-0" aria-hidden="true" />
+                          <td
+                            key={col.id}
+                            className="border-y border-border bg-muted p-0"
+                            aria-hidden="true"
+                          />
                         )
                       )
                     )}
-                    <td className="bg-muted w-10 p-0" aria-hidden="true" />
+                    <td
+                      className="w-10 border-y border-border bg-muted p-0"
+                      aria-hidden="true"
+                    />
                   </tr>
                   {groupRows.map((row, idx) => (
                     <DataRow
@@ -2895,6 +3499,7 @@ export function VirtualTableView({
                       onOpenRowChat={openRowChat}
                       isRowChatOpen={isRowPanelOpen(row.id)}
                       hasUnreadChat={unreadChatRowIds.has(row.id)}
+                      hideRowChat={embeddedInRightPanel}
                     />
                   ))}
                 </React.Fragment>
@@ -2921,20 +3526,45 @@ export function VirtualTableView({
                   onOpenRowChat={openRowChat}
                   isRowChatOpen={isRowPanelOpen(row.id)}
                   hasUnreadChat={unreadChatRowIds.has(row.id)}
+                  hideRowChat={embeddedInRightPanel}
                 />
               ))
             )}
           </tbody>
         </table>
-      </div>
+        {hasMoreRows ? (
+          <div className="sticky left-0 flex w-full justify-center border-t border-border/60 bg-card px-3 py-2.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={loadingMore || initialLoading}
+              onClick={() => void loadMoreRows()}
+            >
+              {loadingMore ? (
+                <>
+                  <Spinner className="size-4" /> Memuat…
+                </>
+              ) : (
+                `Muat ${Math.min(
+                  VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+                  remainingRowCount
+                )} baris lagi · sisa ${remainingRowCount}`
+              )}
+            </Button>
+          </div>
+        ) : null}
+      </ScrollArea>
+      )}
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
           {isPaginatedEmbedded && totalRowCount > 0 ? (
             <>
-              Baris {pageRowStart}–{pageRowEnd} dari {totalRowCount}
+              Menampilkan {loadedRowCount} dari {totalRowCount} baris
               {filters.length > 0
-                ? ` · ${processedRows.length} setelah filter (halaman ini)`
+                ? ` · ${processedRows.length} setelah filter (yang dimuat)`
                 : null}
             </>
           ) : (
@@ -2947,39 +3577,6 @@ export function VirtualTableView({
           {visibleColumns.length}
           {hiddenColumns.size > 0 ? ` / ${sortedColumns.length}` : ""} kolom
         </span>
-        {isPaginatedEmbedded && totalPages > 1 ? (
-          <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-xs"
-              className="h-7 w-7"
-              disabled={pending || initialLoading || pageIndex <= 0}
-              onClick={() => setPageIndex((p) => Math.max(0, p - 1))}
-              aria-label="Halaman sebelumnya"
-            >
-              <ChevronLeft className="size-4" />
-            </Button>
-            <span className="min-w-[5rem] text-center tabular-nums">
-              {pageIndex + 1} / {totalPages}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-xs"
-              className="h-7 w-7"
-              disabled={
-                pending || initialLoading || pageIndex >= totalPages - 1
-              }
-              onClick={() =>
-                setPageIndex((p) => Math.min(totalPages - 1, p + 1))
-              }
-              aria-label="Halaman berikutnya"
-            >
-              <ChevronRight className="size-4" />
-            </Button>
-          </div>
-        ) : null}
       </div>
 
       {/* Dialog: Add Column */}
@@ -3669,7 +4266,7 @@ export function VirtualTableView({
           <DialogHeader>
             <DialogTitle>Simpan view</DialogTitle>
             <DialogDescription>
-              Simpan konfigurasi filter, sort, group, dan kolom saat ini sebagai view bernama.
+              Simpan konfigurasi filter, sort, group, kolom, dan tampilan (Grid/Kanban/Kalender) saat ini sebagai view bernama.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -3687,13 +4284,21 @@ export function VirtualTableView({
               />
             </div>
             <div className="text-xs text-muted-foreground">
-              <p>{filters.length} filter, {sorts.length} sort, group: {groupBy ?? "—"}, {visibleColumns.length} kolom terlihat</p>
+              <p>
+                {filters.length} filter, {sorts.length} sort, group:{" "}
+                {groupBy ?? "—"}, {visibleColumns.length} kolom terlihat ·{" "}
+                tampilan: {layoutMetaFor(effectiveLayout).label}
+              </p>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowSaveViewDialog(false)}>
                 Batal
               </Button>
-              <Button onClick={saveCurrentView} disabled={pending || !saveViewName.trim()}>
+              <Button
+                data-testid="table-save-view-submit"
+                onClick={saveCurrentView}
+                disabled={pending || !saveViewName.trim()}
+              >
                 Simpan
               </Button>
             </div>
@@ -4116,6 +4721,8 @@ export function VirtualTableGeoJsonImportDialog({
   onImported,
   mapPreviewEnabled = false,
   onPreviewChange,
+  embedded = false,
+  cancelLabel = "Tutup",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -4126,6 +4733,8 @@ export function VirtualTableGeoJsonImportDialog({
   /** Tampilkan poligon di tab Map sebelum impor (hanya dari workspace Map). */
   mapPreviewEnabled?: boolean;
   onPreviewChange?: (footprints: MapFootprint[] | null) => void;
+  embedded?: boolean;
+  cancelLabel?: string;
 }) {
   const [geojsonText, setGeojsonText] = useState("");
   const [importMsg, setImportMsg] = useState<string | null>(null);
@@ -4399,20 +5008,21 @@ export function VirtualTableGeoJsonImportDialog({
   );
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Impor GeoJSON ke {table.display_name}</DialogTitle>
-          <DialogDescription>
-            File harus berupa <span className="font-mono">FeatureCollection</span>{" "}
-            (banyak poligon). Setiap feature → satu baris di tabel ini.{" "}
-            <strong>Upsert</strong> memakai pasangan{" "}
-            <span className="font-mono">kolom relasi (opsional) + kolom kunci</span>{" "}
-            agar aman bila satu file berisi banyak nilai relasi berbeda.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3 text-sm">
+    <ImportDialogShell
+      embedded={embedded}
+      open={open}
+      onOpenChange={handleOpenChange}
+      title={`Impor GeoJSON ke ${table.display_name}`}
+      description={
+        <>
+          File harus berupa <span className="font-mono">FeatureCollection</span>{" "}
+          (banyak poligon). Setiap feature → satu baris di tabel ini.{" "}
+          <strong>Upsert</strong> memakai pasangan{" "}
+          <span className="font-mono">kolom relasi (opsional) + kolom kunci</span>{" "}
+          agar aman bila satu file berisi banyak nilai relasi berbeda.
+        </>
+      }
+    >
           {mapPreviewEnabled ? (
             <p className="rounded-md border border-teal-500/30 bg-teal-500/10 px-3 py-2 text-xs text-foreground">
               Pilih file GeoJSON di bawah — poligon valid langsung ditampilkan di
@@ -4739,7 +5349,7 @@ export function VirtualTableGeoJsonImportDialog({
               onClick={() => handleOpenChange(false)}
               disabled={importPending}
             >
-              Tutup
+              {cancelLabel}
             </Button>
             <Button
               type="button"
@@ -4761,9 +5371,7 @@ export function VirtualTableGeoJsonImportDialog({
               )}
             </Button>
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+    </ImportDialogShell>
   );
 }
 

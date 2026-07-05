@@ -138,7 +138,7 @@ export type OpenMobileTableResult = "opened" | "no-table" | "no-rows";
 export async function openFirstMobileTableRowDetail(
   page: Page
 ): Promise<OpenMobileTableResult> {
-  await page.getByRole("tab", { name: "Tabel" }).click();
+  await page.getByRole("tab", { name: "Data" }).click();
   await expect(
     page.getByText(/Ketuk kartu tabel|Preview.*50 baris/i)
   ).toBeVisible({ timeout: 20_000 });

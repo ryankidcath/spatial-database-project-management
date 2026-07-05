@@ -7,15 +7,20 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
 } from "react";
 import { MessageSquare } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { collectRelationIdsFromVirtualPayloads } from "@/lib/virtual-table-map-popup";
+import { cn } from "@/lib/utils";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
 import {
   fetchVirtualRowsAction,
   resolveRelationLabelsAction,
+  createVirtualRowAction,
+  updateVirtualRowCellAction,
 } from "./virtual-table-actions";
 import type { ChatAttachmentRef, ChatMentionOption } from "./chat-types";
 import type { VirtualColumnRow, VirtualDataRow, VirtualTableRow } from "./virtual-table-types";
@@ -37,8 +42,26 @@ import {
   VIRTUAL_TABLE_MOBILE_ROW_PAGE_SIZE,
   virtualTableMobileRowsCacheKey,
 } from "@/lib/virtual-table-mobile-rows-cache";
+import type { VirtualRowMapSelect } from "./workspace-map";
 import { useWorkspaceRightPanel } from "./workspace-right-panel-context";
 import { WORKSPACE_MOBILE_TAB_BAR_PADDING } from "./workspace-mobile-tabs";
+import { VirtualTableKanbanView } from "./virtual-table-kanban-view";
+import { VirtualTableCalendarView } from "./virtual-table-calendar-view";
+import { VirtualTableGalleryView } from "./virtual-table-gallery-view";
+import { VirtualTableTimelineView } from "./virtual-table-timeline-view";
+import { VirtualTableFormView } from "./virtual-table-form-view";
+import { VirtualTableMapView } from "./virtual-table-map-view";
+import { VirtualTableChartView } from "./virtual-table-chart-view";
+import { TableViewSwitcher } from "./table-view-switcher";
+import { TableLayoutOptionsToolbar } from "./table-layout-options-toolbar";
+import type { VirtualTableLayoutType } from "@/lib/virtual-table-layout-types";
+import { readTableLayoutPreference } from "@/lib/virtual-table-layout-preference";
+import { virtualRowDisplayLabel } from "@/lib/virtual-table-row-label";
+import {
+  isLayoutReady,
+  resolveLayoutOptions,
+} from "@/lib/virtual-table-layout-availability";
+import type { VirtualViewLayoutOptions } from "./virtual-table-types";
 
 type Props = {
   table: VirtualTableRow;
@@ -62,8 +85,10 @@ export function WorkspaceMobileVirtualTableOverlay({
   onBack,
 }: Props) {
   const {
+    panel,
     openTableChat,
     openRowPanel,
+    openRowDetail: openGlobalRowDetail,
     closePanel,
     isTableChatOpen,
     isRowPanelOpen,
@@ -84,6 +109,67 @@ export function WorkspaceMobileVirtualTableOverlay({
     (initialCache?.rows.length ?? 0) === 0
   );
   const [loadingMore, setLoadingMore] = useState(false);
+  const [, startTransition] = useTransition();
+  const [activeLayout, setActiveLayout] =
+    useState<VirtualTableLayoutType>("grid");
+  const [layoutOptions, setLayoutOptions] = useState<VirtualViewLayoutOptions>(
+    {}
+  );
+
+  useLayoutEffect(() => {
+    const layout = readTableLayoutPreference(table.id);
+    setActiveLayout(layout);
+    setLayoutOptions(resolveLayoutOptions(layout, {}, columns));
+  }, [table.id, columns]);
+
+  const handleLayoutChange = useCallback(
+    (layout: VirtualTableLayoutType, options: VirtualViewLayoutOptions) => {
+      setActiveLayout(layout);
+      setLayoutOptions(options);
+    },
+    []
+  );
+
+  const handleLayoutOptionsChange = useCallback(
+    (patch: Partial<VirtualViewLayoutOptions>) => {
+      setLayoutOptions((prev) => ({ ...prev, ...patch }));
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (activeLayout === "grid" || activeLayout === "form") return;
+    setLayoutOptions((prev) =>
+      resolveLayoutOptions(activeLayout, prev, columns)
+    );
+  }, [columns, activeLayout]);
+
+  const effectiveLayout = useMemo(() => {
+    if (
+      isLayoutReady(activeLayout, layoutOptions, columns) &&
+      (activeLayout === "grid" ||
+        activeLayout === "kanban" ||
+        activeLayout === "calendar" ||
+        activeLayout === "timeline" ||
+        activeLayout === "gallery" ||
+        activeLayout === "form" ||
+        activeLayout === "map" ||
+        activeLayout === "chart")
+    ) {
+      return activeLayout;
+    }
+    return "grid" as const;
+  }, [activeLayout, layoutOptions, columns]);
+
+  const selectOptionsBySlug = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const col of columns) {
+      if (col.data_type === "select" && col.config?.options) {
+        m.set(col.slug, col.config.options as string[]);
+      }
+    }
+    return m;
+  }, [columns]);
   const [relationLabels, setRelationLabels] = useState<Record<string, string>>(
     initialCache?.relationLabels ?? {}
   );
@@ -317,6 +403,60 @@ export function WorkspaceMobileVirtualTableOverlay({
     [table.project_id, table.display_name, projectsForMention, organizationName]
   );
 
+  const saveCell = useCallback(
+    (rowId: string, colSlug: string, value: string) => {
+      const fd = new FormData();
+      fd.set("row_id", rowId);
+      fd.set("column_slug", colSlug);
+      fd.set("value", value);
+      startTransition(async () => {
+        const r = await updateVirtualRowCellAction(fd);
+        if (r.error) toast.error(r.error);
+        else await reloadVisible();
+      });
+    },
+    [reloadVisible]
+  );
+
+  const addRow = useCallback(() => {
+    const fd = new FormData();
+    fd.set("table_id", table.id);
+    fd.set("payload", "{}");
+    startTransition(async () => {
+      const r = await createVirtualRowAction(fd);
+      if (r.error) toast.error(r.error);
+      else await reloadVisible();
+    });
+  }, [table.id, reloadVisible]);
+
+  const handleMapVirtualRowSelect = useCallback(
+    (select: VirtualRowMapSelect) => {
+      if (select.tableId !== table.id) return;
+      const row = rows.find((r) => r.id === select.rowId);
+      openGlobalRowDetail({
+        tableId: table.id,
+        rowId: select.rowId,
+        pathSegments: select.pathSegments,
+        rowPayload:
+          (row?.payload as Record<string, unknown> | undefined) ??
+          select.rowPayload,
+        relationLabels: select.relationLabels ?? relationLabels,
+      });
+    },
+    [table.id, rows, openGlobalRowDetail, relationLabels]
+  );
+
+  const highlightVirtualRowId =
+    panel?.kind === "row-detail" && panel.tableId === table.id
+      ? panel.rowId
+      : null;
+
+  const handleMapBackgroundClick = useCallback(() => {
+    if (panel?.kind === "row-detail" && panel.tableId === table.id) {
+      closePanel();
+    }
+  }, [panel, table.id, closePanel]);
+
   const openRow = useCallback(
     (rowId: string, rowTitle: string, tab: "detail" | "chat") => {
       const row = rows.find((r) => r.id === rowId);
@@ -344,6 +484,18 @@ export function WorkspaceMobileVirtualTableOverlay({
       buildRowFileOptions,
       relationLabels,
     ]
+  );
+
+  const openRowById = useCallback(
+    (rowId: string, tab: "detail" | "chat" = "detail") => {
+      const row = rows.find((r) => r.id === rowId);
+      openRow(
+        rowId,
+        row ? virtualRowDisplayLabel(row, columns) : "Baris",
+        tab
+      );
+    },
+    [rows, columns, openRow]
   );
 
   return (
@@ -377,7 +529,25 @@ export function WorkspaceMobileVirtualTableOverlay({
               </p>
             ) : null}
           </div>
-          {organizationId && userId ? (
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <TableViewSwitcher
+              tableId={table.id}
+              columns={columns}
+              layout={activeLayout}
+              layoutOptions={layoutOptions}
+              onLayoutChange={handleLayoutChange}
+              className="min-h-11 touch-manipulation"
+            />
+            {activeLayout !== "grid" && activeLayout !== "form" ? (
+              <TableLayoutOptionsToolbar
+                layout={activeLayout}
+                columns={columns}
+                layoutOptions={layoutOptions}
+                onLayoutOptionsChange={handleLayoutOptionsChange}
+                touchFriendly
+              />
+            ) : null}
+            {organizationId && userId ? (
             <Button
               type="button"
               variant={isTableChatOpen(table.id) ? "default" : "outline"}
@@ -402,11 +572,17 @@ export function WorkspaceMobileVirtualTableOverlay({
               />
             </Button>
           ) : null}
+          </div>
         </div>
       </div>
 
       <div
-        className={`min-h-0 flex-1 overflow-y-auto pm-mobile-scroll ${WORKSPACE_MOBILE_TAB_BAR_PADDING}`}
+        className={cn(
+          "min-h-0 flex-1 pm-mobile-scroll",
+          effectiveLayout === "map"
+            ? "flex flex-col overflow-hidden"
+            : `overflow-y-auto ${WORKSPACE_MOBILE_TAB_BAR_PADDING}`
+        )}
       >
         {loading && rows.length > 0 ? (
           <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
@@ -414,6 +590,84 @@ export function WorkspaceMobileVirtualTableOverlay({
             Memperbarui…
           </div>
         ) : null}
+        {effectiveLayout === "kanban" && layoutOptions.statusColumn ? (
+          <VirtualTableKanbanView
+            rows={rows}
+            columns={columns}
+            statusColumnSlug={layoutOptions.statusColumn}
+            statusOptions={
+              selectOptionsBySlug.get(layoutOptions.statusColumn) ?? []
+            }
+            onOpenRow={(rowId) => openRowById(rowId)}
+            className="px-3 pb-2"
+          />
+        ) : effectiveLayout === "calendar" && layoutOptions.dateColumn ? (
+          <VirtualTableCalendarView
+            rows={rows}
+            columns={columns}
+            dateColumnSlug={layoutOptions.dateColumn}
+            onOpenRow={(rowId) => openRowById(rowId)}
+            className="px-3 pb-2"
+          />
+        ) : effectiveLayout === "timeline" && layoutOptions.dateColumn ? (
+          <VirtualTableTimelineView
+            rows={rows}
+            columns={columns}
+            startDateColumnSlug={layoutOptions.dateColumn}
+            endDateColumnSlug={
+              layoutOptions.endDateColumn ?? layoutOptions.dateColumn
+            }
+            onOpenRow={(rowId) => openRowById(rowId)}
+            className="px-3 pb-2"
+          />
+        ) : effectiveLayout === "gallery" ? (
+          <VirtualTableGalleryView
+            rows={rows}
+            columns={columns}
+            coverColumnSlug={layoutOptions.coverColumn}
+            onOpenRow={(rowId) => openRowById(rowId)}
+            className="px-3 pb-2"
+          />
+        ) : effectiveLayout === "form" ? (
+          <VirtualTableFormView
+            rows={rows}
+            columns={columns}
+            selectOptionsBySlug={selectOptionsBySlug}
+            relationLabels={relationLabels}
+            memberNameByUserId={memberNameByUserId}
+            onSaveCell={saveCell}
+            onAddRow={addRow}
+            onOpenGeometry={(rowId) => openRowById(rowId, "detail")}
+            className="px-1 pb-2"
+          />
+        ) : effectiveLayout === "map" && layoutOptions.geometryColumn ? (
+          <VirtualTableMapView
+            table={table}
+            columns={columns}
+            rows={rows}
+            geometryColumnSlug={layoutOptions.geometryColumn}
+            relationLabels={relationLabels}
+            memberNameByUserId={memberNameByUserId}
+            projectName={
+              table.project_id
+                ? (projectsForMention.find((p) => p.id === table.project_id)
+                    ?.name ?? null)
+                : null
+            }
+            onVirtualRowSelect={handleMapVirtualRowSelect}
+            highlightVirtualRowId={highlightVirtualRowId}
+            onMapBackgroundClick={handleMapBackgroundClick}
+            className="min-h-0 flex-1 rounded-none border-0"
+          />
+        ) : effectiveLayout === "chart" ? (
+          <VirtualTableChartView
+            rows={rows}
+            columns={columns}
+            chartColumnSlug={layoutOptions.chartColumn}
+            chartMode={layoutOptions.chartMode ?? "bar"}
+            className="px-3 pb-2"
+          />
+        ) : (
         <WorkspaceMobileRowList
           rows={rows}
           columns={columns}
@@ -425,8 +679,9 @@ export function WorkspaceMobileVirtualTableOverlay({
           onOpenRowChat={(rowId, title) => openRow(rowId, title, "chat")}
           loading={loading && rows.length === 0}
         />
+        )}
 
-        {hasMore ? (
+        {hasMore && effectiveLayout !== "map" && effectiveLayout !== "chart" ? (
           <div className="px-3 pb-2">
             <Button
               type="button"

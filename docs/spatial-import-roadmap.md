@@ -32,11 +32,11 @@ Dokumen ini **dipantau bersama** sebagai catatan keputusan produk, apa yang suda
 - **ZIP shapefile** (`.shp` + `.dbf`, idealnya `.shx` + `.prj`) di area yang sama: klien memakai **shpjs** → FeatureCollection hanya **Polygon / MultiPolygon**; bila ZIP berisi beberapa set shapefile, **dropdown layer** memilih `.shp` mana yang dimuat ke textarea batch. Batas ukuran **ZIP** ~**36 MB** (`MAX_SHAPEFILE_ZIP_BYTES`); setelah konversi, batas teks **~12 MB** ke server tetap berlaku seperti GeoJSON biasa.
 - **Batas ukuran teks** payload GeoJSON (single & batch) sama dengan DXF: ~**12 MB**; pesan error server/klien memakai `spatial-import-limits.ts`.
 
-### 2.3 Atribut di view Tabel (`spatial-attributes-panel`)
+### 2.3 Atribut di view Tabel (`spatial-attributes-panel`) — **legacy, tidak terpasang di UI**
 
-- **Baris manual** + **`feature_key`** tanpa geometri.
-- **Import CSV** dengan kolom key (default nama kolom `feature_key`) → upsert ke `issue_feature_attributes`.
-- **Unduh template CSV** minimal satu kolom `feature_key` (dialog import atribut).
+- Komponen ada di `spatial-attributes-panel.tsx` tetapi **tidak dirender** di workspace saat ini.
+- Menggantikan alur ini: **baris tabel virtual** + kolom `geometry` (tab Data + Spasial).
+- Lihat `docs/workspace-spatial-tab-ux.md` §4.
 
 ### 2.4 DXF (tab Map, mode DXF) — fase 1 + mapping key (langkah kecil)
 

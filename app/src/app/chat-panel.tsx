@@ -12,6 +12,7 @@ import {
 import { Send, Trash2 } from "lucide-react";
 import { RowChatContextPath } from "@/components/row-chat-context-path";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { ChatMentionSuggestions } from "@/components/chat-mention-suggestions";
 import { useChatMentionAutocomplete } from "@/hooks/use-chat-mention-autocomplete";
 import { dispatchChatUnreadInvalidate } from "@/lib/chat-unread-invalidate";
@@ -655,6 +656,107 @@ export function ChatPanel({
 
   const showPanelHeader = !embedded;
 
+  const messageListInner = (
+    <>
+      {hasOlder ? (
+        <button
+          type="button"
+          className="w-full text-center text-xs text-muted-foreground hover:text-foreground"
+          onClick={loadOlder}
+        >
+          Muat pesan lebih lama
+        </button>
+      ) : null}
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Memuat obrolan…</p>
+      ) : messages.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Belum ada pesan. Mulai diskusi di sini.
+        </p>
+      ) : (
+        messages.map((msg) => {
+          const isOwn = msg.author_id === userId;
+          const isPending = msg.id.startsWith(PENDING_MSG_PREFIX);
+          const canDelete = isOwn || isOrgAdmin;
+          const mentionsMe =
+            !isOwn && messageMentionsUser(msg.body, userId, userEmail);
+          const displayBody = formatChatBodyForDisplay(
+            msg.body,
+            mentionLabelMap
+          );
+          return (
+            <div
+              key={msg.id}
+              className={`flex w-full min-w-0 max-w-full flex-col gap-1 ${isOwn ? "items-end" : "items-start"}`}
+            >
+              <div className="flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+                {mentionsMe ? (
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-900">
+                    Menyebut Anda
+                  </span>
+                ) : null}
+                <span>
+                  {authorNameByUserId.get(msg.author_id) ??
+                    msg.author_id.slice(0, 8)}
+                </span>
+                <span>
+                  {new Date(msg.created_at).toLocaleString("id-ID", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                </span>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    title="Hapus pesan"
+                    className="text-muted-foreground hover:text-destructive"
+                    disabled={pending}
+                    onClick={() => handleDelete(msg.id)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                ) : null}
+              </div>
+              <div
+                className={`max-w-[min(85%,20rem)] min-w-0 rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-all [overflow-wrap:anywhere] ${
+                  isOwn
+                    ? `bg-primary text-primary-foreground${isPending ? " opacity-80" : ""}`
+                    : mentionsMe
+                      ? "border-l-4 border-amber-500 bg-amber-50 text-foreground"
+                      : "bg-muted text-foreground"
+                }`}
+              >
+                {displayBody}
+                {msg.attachment_refs.length > 0 ? (
+                  <ul className="mt-2 space-y-1 border-t border-white/20 pt-2 text-xs">
+                    {msg.attachment_refs.map((a) => (
+                      <li key={a.url}>
+                        <a
+                          href={a.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline"
+                        >
+                          {escapeHtml(a.label)}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+              {isPending ? (
+                <span className="text-[10px] text-muted-foreground">
+                  Menunggu jaringan…
+                </span>
+              ) : null}
+            </div>
+          );
+        })
+      )}
+      <div ref={bottomRef} />
+    </>
+  );
+
   return (
     <div
       className={
@@ -688,121 +790,27 @@ export function ChatPanel({
         </div>
       ) : null}
 
-      <div
-        ref={listRef}
-        className={
-          embedded
-            ? mobileStickyComposer
+      {embedded && !mobileStickyComposer ? (
+        <ScrollArea className="min-h-0 min-w-0 flex-1" type="scroll">
+          <div className="min-w-0 space-y-3 px-4 py-2">{messageListInner}</div>
+        </ScrollArea>
+      ) : (
+        <div
+          ref={listRef}
+          className={
+            mobileStickyComposer
               ? cn(
-                  "min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain py-2",
+                  "pm-mobile-scroll min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain py-2",
                   "[-webkit-overflow-scrolling:touch]",
                   MOBILE_CHAT_X
                 )
-              : "min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-2"
-            : "min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-3"
-        }
-        style={
-          embedded ? undefined : { maxHeight: "min(50vh, 420px)" }
-        }
-      >
-        {hasOlder ? (
-          <button
-            type="button"
-            className="w-full text-center text-xs text-muted-foreground hover:text-foreground"
-            onClick={loadOlder}
-          >
-            Muat pesan lebih lama
-          </button>
-        ) : null}
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Memuat obrolan…</p>
-        ) : messages.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Belum ada pesan. Mulai diskusi di sini.
-          </p>
-        ) : (
-          messages.map((msg) => {
-            const isOwn = msg.author_id === userId;
-            const isPending = msg.id.startsWith(PENDING_MSG_PREFIX);
-            const canDelete = isOwn || isOrgAdmin;
-            const mentionsMe =
-              !isOwn && messageMentionsUser(msg.body, userId, userEmail);
-            const displayBody = formatChatBodyForDisplay(
-              msg.body,
-              mentionLabelMap
-            );
-            return (
-              <div
-                key={msg.id}
-                className={`flex w-full min-w-0 max-w-full flex-col gap-1 ${isOwn ? "items-end" : "items-start"}`}
-              >
-                <div className="flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
-                  {mentionsMe ? (
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-900">
-                      Menyebut Anda
-                    </span>
-                  ) : null}
-                  <span>
-                    {authorNameByUserId.get(msg.author_id) ??
-                      msg.author_id.slice(0, 8)}
-                  </span>
-                  <span>
-                    {new Date(msg.created_at).toLocaleString("id-ID", {
-                      dateStyle: "short",
-                      timeStyle: "short",
-                    })}
-                  </span>
-                  {canDelete ? (
-                    <button
-                      type="button"
-                      title="Hapus pesan"
-                      className="text-muted-foreground hover:text-destructive"
-                      disabled={pending}
-                      onClick={() => handleDelete(msg.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  ) : null}
-                </div>
-                <div
-                  className={`max-w-[min(85%,20rem)] min-w-0 rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-all [overflow-wrap:anywhere] ${
-                    isOwn
-                      ? `bg-primary text-primary-foreground${isPending ? " opacity-80" : ""}`
-                      : mentionsMe
-                        ? "border-l-4 border-amber-500 bg-amber-50 text-foreground"
-                        : "bg-muted text-foreground"
-                  }`}
-                >
-                  {displayBody}
-                  {msg.attachment_refs.length > 0 ? (
-                    <ul className="mt-2 space-y-1 border-t border-white/20 pt-2 text-xs">
-                      {msg.attachment_refs.map((a) => (
-                        <li key={a.url}>
-                          <a
-                            href={a.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="underline"
-                          >
-                            {escapeHtml(a.label)}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
-                {isPending ? (
-                  <span className="text-[10px] text-muted-foreground">
-                    Menunggu jaringan…
-                  </span>
-                ) : null}
-              </div>
-            );
-          })
-        )}
-        <div ref={bottomRef} />
-      </div>
-
+              : "pm-mobile-scroll min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-3"
+          }
+          style={embedded ? undefined : { maxHeight: "min(50vh, 420px)" }}
+        >
+          {messageListInner}
+        </div>
+      )}
       <div
         className={cn(
           mobileStickyComposer

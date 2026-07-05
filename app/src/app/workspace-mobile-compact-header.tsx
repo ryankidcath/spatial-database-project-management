@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   FolderKanban,
+  History,
   LogOut,
   MoreHorizontal,
   Users,
@@ -51,6 +52,7 @@ type Props = {
   formatDateTime: (value: string | null) => string;
   signOutAction: () => void;
   disabled?: boolean;
+  onOpenActivity?: () => void;
 };
 
 export function WorkspaceMobileCompactHeader({
@@ -68,6 +70,7 @@ export function WorkspaceMobileCompactHeader({
   formatDateTime,
   signOutAction,
   disabled = false,
+  onOpenActivity,
 }: Props) {
   const [scopeOpen, setScopeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -362,6 +365,20 @@ export function WorkspaceMobileCompactHeader({
                 </ul>
               )}
             </div>
+          ) : null}
+
+          {onOpenActivity ? (
+            <button
+              type="button"
+              className="flex w-full min-h-11 items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-foreground hover:bg-muted/60"
+              onClick={() => {
+                setMenuOpen(false);
+                onOpenActivity();
+              }}
+            >
+              <History className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              Riwayat aktivitas
+            </button>
           ) : null}
 
           <div className="flex items-center justify-between gap-2 rounded-md px-2 py-2">

@@ -42,6 +42,20 @@ export type WorkspaceRightPanelState =
       relationLabels?: Record<string, string>;
       /** Tutup saat overlay tabel ditutup (default). Popup Map = false. */
       closeWhenOverlayCloses: boolean;
+    }
+  // Kind "data" (bukan chat): dipakai tombol "Buka berdampingan" dari tab Obrolan
+  // untuk menampilkan grid tabel / detail baris di panel kanan tanpa chat.
+  | {
+      kind: "table-data";
+      tableId: string;
+    }
+  | {
+      kind: "row-detail";
+      tableId: string;
+      rowId: string;
+      pathSegments: string[];
+      rowPayload?: Record<string, unknown>;
+      relationLabels?: Record<string, string>;
     };
 
 export type OpenOrganizationChatInput = {
@@ -71,6 +85,18 @@ export type OpenRowPanelInput = {
   closeWhenOverlayCloses?: boolean;
 };
 
+export type OpenTableDataInput = {
+  tableId: string;
+};
+
+export type OpenRowDetailInput = {
+  tableId: string;
+  rowId: string;
+  pathSegments: string[];
+  rowPayload?: Record<string, unknown>;
+  relationLabels?: Record<string, string>;
+};
+
 export type PatchRowPanelInput = {
   rowPayload?: Record<string, unknown>;
   relationLabels?: Record<string, string>;
@@ -82,6 +108,8 @@ export type WorkspaceRightPanelApi = {
   openProjectChat: (input: OpenProjectChatInput) => void;
   openTableChat: (input: OpenTableChatInput) => void;
   openRowPanel: (input: OpenRowPanelInput) => void;
+  openTableData: (input: OpenTableDataInput) => void;
+  openRowDetail: (input: OpenRowDetailInput) => void;
   patchRowPanel: (patch: PatchRowPanelInput) => void;
   closePanel: () => void;
   setRowTab: (tab: WorkspaceRightPanelRowTab) => void;
@@ -89,6 +117,8 @@ export type WorkspaceRightPanelApi = {
   isProjectChatOpen: (projectId: string) => boolean;
   isTableChatOpen: (tableId: string) => boolean;
   isRowPanelOpen: (rowId: string) => boolean;
+  isTableDataOpen: (tableId: string) => boolean;
+  isRowDetailOpen: (rowId: string) => boolean;
 };
 
 const WorkspaceRightPanelContext = createContext<WorkspaceRightPanelApi | null>(null);
@@ -150,6 +180,31 @@ export function WorkspaceRightPanelProvider({
     });
   }, []);
 
+  const openTableData = useCallback((input: OpenTableDataInput) => {
+    setPanel((prev) => {
+      if (prev?.kind === "table-data" && prev.tableId === input.tableId) {
+        return null;
+      }
+      return { kind: "table-data", tableId: input.tableId };
+    });
+  }, []);
+
+  const openRowDetail = useCallback((input: OpenRowDetailInput) => {
+    setPanel((prev) => {
+      if (prev?.kind === "row-detail" && prev.rowId === input.rowId) {
+        return null;
+      }
+      return {
+        kind: "row-detail",
+        tableId: input.tableId,
+        rowId: input.rowId,
+        pathSegments: input.pathSegments,
+        rowPayload: input.rowPayload,
+        relationLabels: input.relationLabels,
+      };
+    });
+  }, []);
+
   const closePanel = useCallback(() => setPanel(null), []);
 
   const patchRowPanel = useCallback((patch: PatchRowPanelInput) => {
@@ -186,6 +241,17 @@ export function WorkspaceRightPanelProvider({
     [panel]
   );
 
+  const isTableDataOpen = useCallback(
+    (tableId: string) =>
+      panel?.kind === "table-data" && panel.tableId === tableId,
+    [panel]
+  );
+
+  const isRowDetailOpen = useCallback(
+    (rowId: string) => panel?.kind === "row-detail" && panel.rowId === rowId,
+    [panel]
+  );
+
   const value = useMemo(
     () => ({
       panel,
@@ -193,6 +259,8 @@ export function WorkspaceRightPanelProvider({
       openProjectChat,
       openTableChat,
       openRowPanel,
+      openTableData,
+      openRowDetail,
       patchRowPanel,
       closePanel,
       setRowTab,
@@ -200,6 +268,8 @@ export function WorkspaceRightPanelProvider({
       isProjectChatOpen,
       isTableChatOpen,
       isRowPanelOpen,
+      isTableDataOpen,
+      isRowDetailOpen,
     }),
     [
       panel,
@@ -207,6 +277,8 @@ export function WorkspaceRightPanelProvider({
       openProjectChat,
       openTableChat,
       openRowPanel,
+      openTableData,
+      openRowDetail,
       patchRowPanel,
       closePanel,
       setRowTab,
@@ -214,6 +286,8 @@ export function WorkspaceRightPanelProvider({
       isProjectChatOpen,
       isTableChatOpen,
       isRowPanelOpen,
+      isTableDataOpen,
+      isRowDetailOpen,
     ]
   );
 
