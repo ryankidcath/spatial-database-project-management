@@ -35,6 +35,10 @@ import {
   fetchChatInboxUnreadMentionKeysClient,
 } from "@/lib/chat-client";
 import {
+  activeRowRoomsToContextSeeds,
+  buildChatInboxEntriesFromActiveRows,
+} from "@/lib/chat-inbox-row-context";
+import {
   resolveVirtualRowChatContextAction,
   resolveVirtualRowChatContextsBatchAction,
 } from "./chat-actions";
@@ -420,33 +424,17 @@ export function WorkspaceChatInbox({
           return;
         }
 
-        const rowIds = res.data.rows.map((r) => r.virtualRowId);
-        const ctxRes = await resolveVirtualRowChatContextsBatchAction(rowIds);
+        const ctxRes = await resolveVirtualRowChatContextsBatchAction(
+          activeRowRoomsToContextSeeds(res.data.rows)
+        );
         const ctxByRowId = ctxRes.error ? {} : (ctxRes.data ?? {});
 
-        const next: ChatInboxEntry[] = res.data.rows.map((row) => {
-          const ctx = ctxByRowId[row.virtualRowId];
-          const table = tablesInScope.find((t) => t.id === row.virtualTableId);
-          const rowTitle =
-            ctx?.pathSegments[ctx.pathSegments.length - 1] ?? "Baris";
-          return {
-            key: `row:${row.virtualRowId}`,
-            kind: "virtual_row" as const,
-            scopeType: "virtual_row" as const,
-            title: rowTitle,
-            subtitle: row.tableDisplayName,
-            unreadCount: row.unreadCount,
-            lastActivityAt: row.lastMessageAt,
-            lastMessagePreview: row.lastMessagePreview,
-            organizationId,
-            projectId: table?.project_id ?? null,
-            virtualTableId: null,
-            virtualRowId: row.virtualRowId,
-            tableIdForRow: row.virtualTableId,
-            pathSegments: ctx?.pathSegments,
-            rowPayload: ctx?.rowPayload ?? row.rowPayload,
-          };
-        });
+        const next = buildChatInboxEntriesFromActiveRows(
+          res.data.rows,
+          ctxByRowId,
+          organizationId,
+          tablesInScope
+        );
 
         setRowTotalCount(res.data.totalCount);
         setRowEntries((prev) => (append ? [...prev, ...next] : next));

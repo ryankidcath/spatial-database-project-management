@@ -2,6 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
+import type {
+  VirtualRowChatContext,
+  VirtualRowChatContextSeed,
+} from "@/lib/chat-inbox-row-context";
 import {
   pickMapRowTitle,
   type VirtualColumnForMapPopup,
@@ -396,16 +400,11 @@ export async function fetchChatInboxActiveRowRoomsAction(input: {
   return { error: null, data: { rows, totalCount } };
 }
 
-export type VirtualRowChatContext = {
-  tableId: string;
-  pathSegments: string[];
-  rowPayload: Record<string, unknown>;
-  relationLabels: Record<string, string>;
-};
+export type { VirtualRowChatContext, VirtualRowChatContextSeed } from "@/lib/chat-inbox-row-context";
 
 /** Judul breadcrumb untuk banyak baris sekaligus (inbox). */
 export async function resolveVirtualRowChatContextsBatchAction(
-  virtualRowIds: string[]
+  seeds: VirtualRowChatContextSeed[]
 ): Promise<ChatActionResult<Record<string, VirtualRowChatContext>>> {
   const supabase = await createServerSupabaseClient();
   if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
@@ -414,22 +413,21 @@ export async function resolveVirtualRowChatContextsBatchAction(
   } = await supabase.auth.getUser();
   if (!user) return { error: "Belum masuk" };
 
-  const ids = [...new Set(virtualRowIds.filter(Boolean))];
-  if (ids.length === 0) {
+  const uniqueSeeds: VirtualRowChatContextSeed[] = [];
+  const seen = new Set<string>();
+  for (const seed of seeds) {
+    if (!seed.virtualRowId || seen.has(seed.virtualRowId)) continue;
+    seen.add(seed.virtualRowId);
+    uniqueSeeds.push(seed);
+  }
+
+  if (uniqueSeeds.length === 0) {
     return { error: null, data: {} };
   }
 
-  const { data: rowRows, error: rowErr } = await supabase
-    .schema("core_pm")
-    .from("virtual_rows")
-    .select("id, table_id, payload")
-    .in("id", ids)
-    .is("deleted_at", null);
-
-  if (rowErr) return { error: rowErr.message };
-  if (!rowRows?.length) return { error: null, data: {} };
-
-  const tableIds = [...new Set(rowRows.map((r) => String(r.table_id)))];
+  const tableIds = [
+    ...new Set(uniqueSeeds.map((s) => s.virtualTableId).filter(Boolean)),
+  ];
 
   const { data: tables, error: tableErr } = await supabase
     .schema("core_pm")
@@ -440,9 +438,7 @@ export async function resolveVirtualRowChatContextsBatchAction(
 
   if (tableErr) return { error: tableErr.message };
 
-  const tableById = new Map(
-    (tables ?? []).map((t) => [String(t.id), t])
-  );
+  const tableById = new Map((tables ?? []).map((t) => [String(t.id), t]));
 
   const { data: columns, error: colErr } = await supabase
     .schema("core_pm")
@@ -467,9 +463,9 @@ export async function resolveVirtualRowChatContextsBatchAction(
   }
 
   const relationIds: string[] = [];
-  for (const row of rowRows) {
-    const payload = (row.payload ?? {}) as Record<string, unknown>;
-    const tableCols = colsByTableId.get(String(row.table_id)) ?? [];
+  for (const seed of uniqueSeeds) {
+    const payload = seed.rowPayload ?? {};
+    const tableCols = colsByTableId.get(seed.virtualTableId) ?? [];
     for (const col of tableCols) {
       if (col.data_type !== "relation") continue;
       const val = payload[col.slug];
@@ -511,14 +507,12 @@ export async function resolveVirtualRowChatContextsBatchAction(
   }
 
   const out: Record<string, VirtualRowChatContext> = {};
-  for (const row of rowRows) {
-    const rowId = String(row.id);
-    const tableId = String(row.table_id);
-    const table = tableById.get(tableId);
+  for (const seed of uniqueSeeds) {
+    const table = tableById.get(seed.virtualTableId);
     if (!table) continue;
 
-    const payload = (row.payload ?? {}) as Record<string, unknown>;
-    const tableCols = colsByTableId.get(tableId) ?? [];
+    const payload = seed.rowPayload ?? {};
+    const tableCols = colsByTableId.get(seed.virtualTableId) ?? [];
     const projectId =
       table.project_id != null ? String(table.project_id) : null;
     const projectName = projectId
@@ -529,16 +523,16 @@ export async function resolveVirtualRowChatContextsBatchAction(
       payload,
       tableCols,
       relationLabels,
-      rowId
+      seed.virtualRowId
     );
 
-    out[rowId] = {
-      tableId,
+    out[seed.virtualRowId] = {
+      tableId: seed.virtualTableId,
       rowPayload: payload,
       relationLabels,
       pathSegments: buildChatRowPathSegments({
         projectName,
-        tableDisplayName: String(table.display_name),
+        tableDisplayName: seed.tableDisplayName,
         rowLabel,
       }),
     };

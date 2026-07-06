@@ -1,0 +1,30 @@
+# Cadangan jika webhook GitHub → Vercel tidak memicu preview (intermiten).
+# Setup: Vercel → Project → Settings → Git → Deploy Hooks → branch dev
+# GitHub → Settings → Secrets → VERCEL_DEPLOY_HOOK_DEV = URL hook
+
+name: Vercel preview (dev)
+
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  trigger-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST Vercel deploy hook (dev)
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_DEV }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "VERCEL_DEPLOY_HOOK_DEV belum diset — lewati (andalkan webhook Vercel)."
+            exit 0
+          fi
+          echo "Memicu build preview Vercel untuk branch dev…"
+          code=$(curl -sS -o /tmp/vercel-hook.out -w "%{http_code}" -X POST "$HOOK")
+          cat /tmp/vercel-hook.out
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "Deploy hook gagal (HTTP $code)"
+            exit 1
+          fi
+          echo "Deploy hook OK (HTTP $code)"

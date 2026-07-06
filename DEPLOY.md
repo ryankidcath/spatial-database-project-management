@@ -14,6 +14,22 @@ Blueprint singkat: [`infra/environments.md`](infra/environments.md).
 
 Jika tidak akan memakai env untuk PR: **Vercel → Project → Settings → Git →** matikan *Automatic Preview Deployments* (atau setara), supaya tidak ada URL deployment kedua yang membingungkan atau kehabisan env. QA fitur tetap lewat **lokal** (`npm run dev`) + **CI** (GitHub Actions).
 
+### Preview branch `dev` (QA cloud)
+
+Banyak tim memakai push ke **`dev`** untuk URL preview Vercel (bukan production). Itu **bukan** merge ke `main`; production tetap dari `main` saja.
+
+Jika GitHub menunjukkan push baru tetapi **Deployments** Vercel tidak berubah (intermiten):
+
+1. **Sekarang — deploy manual:** Vercel → **Deployments** → **Create Deployment** → branch **`dev`** → commit terbaru.
+2. **Diagnosa webhook:** GitHub repo → **Settings → Webhooks** → entri `vercel.com` → **Recent Deliveries** pada event `push` — status harus **200**. Gagal → **Redeliver** atau reconnect Git di Vercel.
+3. **Reconnect Git:** Vercel → **Settings → Git** → disconnect lalu connect ulang repo GitHub.
+4. **Cadangan otomatis:** workflow **`.github/workflows/vercel-preview-dev.yml`** mem-POST **Deploy Hook** setelah setiap push `dev`.
+   - Vercel → **Settings → Git → Deploy Hooks** → Create → branch **`dev`**
+   - GitHub → **Settings → Secrets and variables → Actions** → `VERCEL_DEPLOY_HOOK_DEV` = URL hook
+   - Push ke `dev` lagi; cek tab **Actions** dan **Deployments**.
+
+**Skip build:** Root Directory = `app` — commit yang **hanya** mengubah `docs/` atau `supabase/` (tanpa `app/`) bisa tidak memicu preview. Tambah commit kosong di `app/` atau gunakan deploy manual/hook.
+
 ## Supabase — satu project
 
 - Salin **URL** dan **anon key** dari dashboard Supabase ke Vercel (scope **Production** saja untuk variabel publik).

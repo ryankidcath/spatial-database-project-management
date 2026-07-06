@@ -15,7 +15,6 @@ import {
   Trash2,
   GripVertical,
   Copy,
-  Star,
   Type,
   Hash,
   Calendar,
@@ -61,6 +60,7 @@ import { VirtualTableMapView } from "./virtual-table-map-view";
 import { VirtualTableChartView } from "./virtual-table-chart-view";
 import { TableLayoutSchemaPrompt } from "./table-layout-schema-prompt";
 import { TableLayoutOptionsToolbar } from "./table-layout-options-toolbar";
+import { VirtualTableViewToolbar } from "./virtual-table-view-toolbar";
 import type { VirtualTableLayoutType } from "@/lib/virtual-table-layout-types";
 import {
   isLayoutReady,
@@ -69,7 +69,6 @@ import {
 import {
   emptyVirtualViewConfig,
   normalizeVirtualViewConfig,
-  layoutTypeFromConfig,
 } from "@/lib/virtual-view-config";
 import {
   layoutMetaFor,
@@ -99,7 +98,6 @@ import {
   reorderVirtualColumnsAction,
   updateVirtualTableAction,
   deleteVirtualTableAction,
-  fetchVirtualRowsAction,
   fetchRelationTargetRowsAction,
   resolveRelationLabelsAction,
   createVirtualViewAction,
@@ -128,7 +126,13 @@ import {
 } from "@/lib/virtual-table-import-limits";
 import { relationLookupSlugFromConfig } from "@/lib/virtual-table-relation-import";
 import {
-  getVirtualTableRowsCache,
+  fetchVirtualTableRowsWithCache,
+  peekStaleVirtualTableRowsCache,
+  peekVirtualTableRowsCache,
+  virtualTableFullRowsCacheKey,
+  type FetchVirtualTableRowsWithCacheOptions,
+} from "@/lib/virtual-table-rows-fetch";
+import {
   hydrateVirtualTableRowsCache,
   setVirtualTableRowsCache,
   virtualTableRowsCacheKey,
@@ -1125,6 +1129,18 @@ export function VirtualTableView({
     [table.id, isPaginatedEmbedded]
   );
 
+  const rowsCacheFetchOptions = useMemo(
+    () =>
+      isPaginatedEmbedded
+        ? {
+            limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+            offset: 0,
+            cachePageSize: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+          }
+        : undefined,
+    [isPaginatedEmbedded]
+  );
+
   const [rows, setRows] = useState<VirtualDataRow[]>([]);
   const [totalRowCount, setTotalRowCount] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -1133,7 +1149,7 @@ export function VirtualTableView({
 
   useLayoutEffect(() => {
     let cancelled = false;
-    const cached = getVirtualTableRowsCache(rowsCacheKey);
+    const cached = peekVirtualTableRowsCache(table.id, rowsCacheFetchOptions);
     if (cached && cached.rows.length > 0) {
       setRows(cached.rows);
       setTotalRowCount(cached.totalCount);
@@ -1145,55 +1161,100 @@ export function VirtualTableView({
       return;
     }
     loadedCountRef.current = VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE;
-    void hydrateVirtualTableRowsCache(rowsCacheKey).then((fromIdb) => {
+    void (async () => {
+      let fromIdb = await hydrateVirtualTableRowsCache(rowsCacheKey);
+      if (
+        (!fromIdb?.rows.length || cancelled) &&
+        isPaginatedEmbedded
+      ) {
+        fromIdb = await hydrateVirtualTableRowsCache(
+          virtualTableFullRowsCacheKey(table.id)
+        );
+      }
       if (cancelled || !fromIdb?.rows.length) return;
-      setRows(fromIdb.rows);
-      setTotalRowCount(fromIdb.totalCount);
+      const peeked = peekVirtualTableRowsCache(table.id, rowsCacheFetchOptions);
+      const next = peeked ?? fromIdb;
+      setRows(next.rows);
+      setTotalRowCount(next.totalCount);
       loadedCountRef.current = Math.max(
         VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
-        fromIdb.rows.length
+        next.rows.length
       );
       setInitialLoading(false);
-    });
+    })();
     return () => {
       cancelled = true;
     };
-  }, [rowsCacheKey]);
+  }, [table.id, rowsCacheKey, rowsCacheFetchOptions, isPaginatedEmbedded]);
 
-  const loadRows = useCallback(async () => {
-    const cached = getVirtualTableRowsCache(rowsCacheKey);
-    if (!cached?.rows.length) {
-      setInitialLoading(true);
-    }
-    // Muat ulang seluruh jendela baris yang sedang tampil (bukan cuma satu halaman)
-    // agar baris hasil "muat lebih banyak" tidak hilang setelah refresh/mutasi.
-    const result = await fetchVirtualRowsAction(
-      table.id,
-      isPaginatedEmbedded
-        ? { limit: loadedCountRef.current, offset: 0 }
-        : undefined
-    );
-    if (result.error) {
-      toast.error(result.error);
-      setRows([]);
-      setTotalRowCount(0);
-    } else {
-      const nextRows = result.rows as VirtualDataRow[];
+  const buildRowsFetchOptions = useCallback(():
+    | FetchVirtualTableRowsWithCacheOptions
+    | undefined => {
+    if (!isPaginatedEmbedded) return undefined;
+    return {
+      limit: loadedCountRef.current,
+      offset: 0,
+      cachePageSize: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
+    };
+  }, [isPaginatedEmbedded]);
+
+  const applyRowsPayload = useCallback(
+    (nextRows: VirtualDataRow[], totalCount: number) => {
       if (isPaginatedEmbedded) {
         loadedCountRef.current = Math.max(
           VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
           nextRows.length
         );
       }
-      setVirtualTableRowsCache(rowsCacheKey, {
-        rows: nextRows,
-        totalCount: result.totalCount,
-      });
       setRows(nextRows);
-      setTotalRowCount(result.totalCount);
-    }
-    setInitialLoading(false);
-  }, [table.id, isPaginatedEmbedded, rowsCacheKey]);
+      setTotalRowCount(totalCount);
+    },
+    [isPaginatedEmbedded]
+  );
+
+  const loadRows = useCallback(
+    async (opts?: { forceNetwork?: boolean }) => {
+      const fetchOptions = buildRowsFetchOptions();
+      const forceNetwork = opts?.forceNetwork === true;
+      let hadCachedRows = false;
+
+      if (!forceNetwork) {
+        const fresh = peekVirtualTableRowsCache(table.id, fetchOptions);
+        if (fresh?.rows.length) {
+          applyRowsPayload(fresh.rows, fresh.totalCount);
+          setInitialLoading(false);
+          return;
+        }
+
+        const stale = peekStaleVirtualTableRowsCache(table.id, fetchOptions);
+        if (stale?.rows.length) {
+          hadCachedRows = true;
+          applyRowsPayload(stale.rows, stale.totalCount);
+          setInitialLoading(false);
+        } else {
+          setInitialLoading(true);
+        }
+      } else {
+        setInitialLoading(true);
+      }
+
+      const result = await fetchVirtualTableRowsWithCache(table.id, {
+        ...fetchOptions,
+        forceNetwork: true,
+      });
+      if (result.error) {
+        toast.error(result.error);
+        if (!hadCachedRows) {
+          setRows([]);
+          setTotalRowCount(0);
+        }
+      } else {
+        applyRowsPayload(result.rows, result.totalCount);
+      }
+      setInitialLoading(false);
+    },
+    [table.id, buildRowsFetchOptions, applyRowsPayload]
+  );
 
   const loadedRowCount = rows.length;
   const hasMoreRows = isPaginatedEmbedded && loadedRowCount < totalRowCount;
@@ -1202,14 +1263,15 @@ export function VirtualTableView({
   const loadMoreRows = useCallback(async () => {
     if (!isPaginatedEmbedded || loadingMore || initialLoading) return;
     setLoadingMore(true);
-    const result = await fetchVirtualRowsAction(table.id, {
+    const result = await fetchVirtualTableRowsWithCache(table.id, {
       limit: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
       offset: rows.length,
+      cachePageSize: VIRTUAL_TABLE_EMBEDDED_PAGE_SIZE,
     });
     if (result.error) {
       toast.error(result.error);
     } else {
-      const more = result.rows as VirtualDataRow[];
+      const more = result.rows;
       const seen = new Set(rows.map((r) => r.id));
       const merged = [...rows, ...more.filter((r) => !seen.has(r.id))];
       loadedCountRef.current = Math.max(
@@ -3044,253 +3106,37 @@ export function VirtualTableView({
 
       {/* View Toolbar */}
       {showViewToolbar && (
-        <div className="shrink-0 space-y-2 rounded-lg border border-border bg-muted/30 p-3">
-          {/* Saved views row */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">View:</span>
-            <button
-              type="button"
-              className={`rounded-md px-2 py-0.5 text-xs transition-colors ${
-                !activeViewId ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"
-              }`}
-              onClick={() => {
-                setActiveViewId(null);
-                applyViewConfig(emptyVirtualViewConfig());
-                clearViewSession(table.id);
-              }}
-            >
-              Default
-            </button>
-            {savedViews.map((v) => {
-              const vLayout = layoutTypeFromConfig(v.config);
-              const layoutLabel = layoutMetaFor(vLayout).shortLabel;
-              return (
-              <div key={v.id} className="group flex items-center gap-0.5">
-                <button
-                  type="button"
-                  className={`rounded-md px-2 py-0.5 text-xs transition-colors ${
-                    activeViewId === v.id
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-foreground hover:bg-muted/80"
-                  }`}
-                  onClick={() => {
-                    setActiveViewId(v.id);
-                    applyViewConfig(v.config);
-                    saveViewSession(table.id, {
-                      activeViewId: v.id,
-                      config: normalizeVirtualViewConfig(v.config),
-                    });
-                  }}
-                >
-                  {v.is_default ? "★ " : ""}
-                  {v.name}
-                  <span className="ml-1 opacity-70">({layoutLabel})</span>
-                </button>
-                <button
-                  type="button"
-                  className="rounded p-0.5 text-muted-foreground opacity-40 hover:opacity-100"
-                  onClick={() => duplicateView(v.id)}
-                  title="Duplikat view"
-                >
-                  <Copy className="h-3 w-3" />
-                </button>
-                {!v.is_default ? (
-                  <button
-                    type="button"
-                    className="rounded p-0.5 text-muted-foreground opacity-40 hover:text-amber-600 hover:opacity-100"
-                    onClick={() => setDefaultView(v.id)}
-                    title="Jadikan default"
-                  >
-                    <Star className="h-3 w-3" />
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  style={{ color: "var(--muted-foreground)", opacity: 0.2 }}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--destructive)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.2"; e.currentTarget.style.color = "var(--muted-foreground)"; }}
-                  onClick={() => deleteView(v.id)}
-                  title="Hapus view"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-            );})}
-            <button
-              type="button"
-              className="text-xs text-muted-foreground underline hover:text-foreground"
-              data-testid="table-save-view"
-              onClick={() => setShowSaveViewDialog(true)}
-            >
-              + Simpan view
-            </button>
-            {activeViewId && (
-              <button
-                type="button"
-                className="text-xs text-muted-foreground underline hover:text-foreground"
-                onClick={updateActiveView}
-              >
-                Perbarui
-              </button>
-            )}
-          </div>
-
-          {/* Filters */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">Filter:</span>
-              <button
-                type="button"
-                className="text-xs text-muted-foreground underline hover:text-foreground"
-                onClick={() =>
-                  setFilters((prev) => [
-                    ...prev,
-                    { column: sortedColumns[0]?.slug ?? "", operator: "contains", value: "" },
-                  ])
-                }
-              >
-                + Tambah filter
-              </button>
-              {filters.length > 0 && (
-                <button
-                  type="button"
-                  className="text-xs text-red-500 underline hover:text-red-700"
-                  onClick={() => setFilters([])}
-                >
-                  Hapus semua
-                </button>
-              )}
-            </div>
-            {filters.map((f, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-1.5">
-                <select
-                  value={f.column}
-                  onChange={(e) =>
-                    setFilters((prev) =>
-                      prev.map((ff, ii) => (ii === i ? { ...ff, column: e.target.value } : ff))
-                    )
-                  }
-                  className="h-7 rounded border border-border bg-transparent px-1.5 text-xs text-foreground"
-                >
-                  {sortedColumns.map((c) => (
-                    <option key={c.slug} value={c.slug}>
-                      {c.display_name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={f.operator}
-                  onChange={(e) =>
-                    setFilters((prev) =>
-                      prev.map((ff, ii) =>
-                        ii === i
-                          ? { ...ff, operator: e.target.value as VirtualViewFilter["operator"] }
-                          : ff
-                      )
-                    )
-                  }
-                  className="h-7 rounded border border-border bg-transparent px-1.5 text-xs text-foreground"
-                >
-                  {VIEW_FILTER_OPERATORS.map((op) => (
-                    <option key={op.value} value={op.value}>
-                      {op.label}
-                    </option>
-                  ))}
-                </select>
-                {f.operator !== "is_empty" && f.operator !== "is_not_empty" && (
-                  <input
-                    type="text"
-                    value={f.value}
-                    onChange={(e) =>
-                      setFilters((prev) =>
-                        prev.map((ff, ii) => (ii === i ? { ...ff, value: e.target.value } : ff))
-                      )
-                    }
-                    placeholder="Nilai..."
-                    className="h-7 w-32 rounded border border-border bg-transparent px-1.5 text-xs text-foreground"
-                  />
-                )}
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-red-500"
-                  onClick={() => setFilters((prev) => prev.filter((_, ii) => ii !== i))}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {/* Sort */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Sort:</span>
-            {sorts.map((s, i) => (
-              <Badge key={i} variant="secondary" className="gap-1 pr-1 text-xs font-normal">
-                {sortedColumns.find((c) => c.slug === s.column)?.display_name ?? s.column}{" "}
-                {s.direction === "asc" ? "↑" : "↓"}
-                <button
-                  type="button"
-                  className="ml-0.5 text-muted-foreground hover:text-red-500"
-                  onClick={() => setSorts((prev) => prev.filter((_, ii) => ii !== i))}
-                >
-                  ×
-                </button>
-              </Badge>
-            ))}
-            {sorts.length > 0 && (
-              <button
-                type="button"
-                className="text-xs text-red-500 underline hover:text-red-700"
-                onClick={() => setSorts([])}
-              >
-                Hapus sort
-              </button>
-            )}
-            <span className="text-[10px] text-muted-foreground italic">Klik header kolom untuk sort</span>
-          </div>
-
-          {/* Group By */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Group:</span>
-            <select
-              value={groupBy ?? ""}
-              onChange={(e) => setGroupBy(e.target.value || null)}
-              className="h-7 rounded border border-border bg-transparent px-1.5 text-xs text-foreground"
-            >
-              <option value="">— Tidak ada —</option>
-              {sortedColumns
-                .filter((c) => ["select", "text", "checkbox", "relation", "user"].includes(c.data_type))
-                .map((c) => (
-                  <option key={c.slug} value={c.slug}>
-                    {c.display_name}
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          {/* Column Visibility */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Kolom:</span>
-            {sortedColumns.map((c) => (
-              <label key={c.slug} className="flex items-center gap-1 text-xs text-foreground">
-                <input
-                  type="checkbox"
-                  checked={!hiddenColumns.has(c.slug)}
-                  onChange={() => {
-                    setHiddenColumns((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(c.slug)) next.delete(c.slug);
-                      else next.add(c.slug);
-                      return next;
-                    });
-                  }}
-                  className="h-3 w-3 rounded border-border"
-                />
-                {c.display_name}
-              </label>
-            ))}
-          </div>
-        </div>
+        <VirtualTableViewToolbar
+          sortedColumns={sortedColumns}
+          filters={filters}
+          setFilters={setFilters}
+          sorts={sorts}
+          setSorts={setSorts}
+          groupBy={groupBy}
+          setGroupBy={setGroupBy}
+          hiddenColumns={hiddenColumns}
+          setHiddenColumns={setHiddenColumns}
+          savedViews={savedViews}
+          activeViewId={activeViewId}
+          onSelectDefaultView={() => {
+            setActiveViewId(null);
+            applyViewConfig(emptyVirtualViewConfig());
+            clearViewSession(table.id);
+          }}
+          onSelectSavedView={(v) => {
+            setActiveViewId(v.id);
+            applyViewConfig(v.config);
+            saveViewSession(table.id, {
+              activeViewId: v.id,
+              config: normalizeVirtualViewConfig(v.config),
+            });
+          }}
+          onSaveViewClick={() => setShowSaveViewDialog(true)}
+          onUpdateActiveView={updateActiveView}
+          onDuplicateView={duplicateView}
+          onSetDefaultView={setDefaultView}
+          onDeleteView={deleteView}
+        />
       )}
 
       {layoutSchemaMismatch ? (

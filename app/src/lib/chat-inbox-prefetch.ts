@@ -1,6 +1,9 @@
-import type { ChatInboxEntry } from "@/app/workspace-chat-inbox-types";
 import type { VirtualTableRow } from "@/app/virtual-table-types";
 import { resolveVirtualRowChatContextsBatchAction } from "@/app/chat-actions";
+import {
+  activeRowRoomsToContextSeeds,
+  buildChatInboxEntriesFromActiveRows,
+} from "@/lib/chat-inbox-row-context";
 import {
   shouldAllowBackgroundPrefetch,
   shouldAllowBackgroundPrefetchAsync,
@@ -85,32 +88,17 @@ export async function prefetchChatInboxIfNeeded(input: {
 
     if (rowsRes.error || !rowsRes.data) return;
 
-    const rowIds = rowsRes.data.rows.map((r) => r.virtualRowId);
-    const ctxRes = await resolveVirtualRowChatContextsBatchAction(rowIds);
+    const ctxRes = await resolveVirtualRowChatContextsBatchAction(
+      activeRowRoomsToContextSeeds(rowsRes.data.rows)
+    );
     const ctxByRowId = ctxRes.error ? {} : (ctxRes.data ?? {});
 
-    const rowEntries: ChatInboxEntry[] = rowsRes.data.rows.map((row) => {
-      const ctx = ctxByRowId[row.virtualRowId];
-      const table = tablesInScope.find((t) => t.id === row.virtualTableId);
-      const rowTitle = ctx?.pathSegments[ctx.pathSegments.length - 1] ?? "Baris";
-      return {
-        key: `row:${row.virtualRowId}`,
-        kind: "virtual_row" as const,
-        scopeType: "virtual_row" as const,
-        title: rowTitle,
-        subtitle: row.tableDisplayName,
-        unreadCount: row.unreadCount,
-        lastActivityAt: row.lastMessageAt,
-        lastMessagePreview: row.lastMessagePreview,
-        organizationId: input.organizationId,
-        projectId: table?.project_id ?? null,
-        virtualTableId: null,
-        virtualRowId: row.virtualRowId,
-        tableIdForRow: row.virtualTableId,
-        pathSegments: ctx?.pathSegments,
-        rowPayload: ctx?.rowPayload ?? row.rowPayload,
-      };
-    });
+    const rowEntries = buildChatInboxEntriesFromActiveRows(
+      rowsRes.data.rows,
+      ctxByRowId,
+      input.organizationId,
+      tablesInScope
+    );
 
     setChatInboxCache(cacheKey, {
       rowEntries,

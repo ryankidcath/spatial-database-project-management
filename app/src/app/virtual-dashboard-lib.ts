@@ -40,12 +40,23 @@ export function statusPieCounts(
   let inProgress = 0;
   let done = 0;
   let other = 0;
-  for (const row of rows) {
-    const b = bucketStatus(row.payload[statusColumn]);
+
+  const addValue = (val: unknown) => {
+    const b = bucketStatus(val);
     if (b === "todo") todo++;
     else if (b === "in_progress") inProgress++;
     else if (b === "done") done++;
     else other++;
+  };
+
+  for (const row of rows) {
+    const val = row.payload[statusColumn];
+    if (Array.isArray(val)) {
+      if (val.length === 0) addValue(undefined);
+      else for (const v of val) addValue(v);
+    } else {
+      addValue(val);
+    }
   }
   return { todo, inProgress, done, other };
 }
@@ -57,11 +68,20 @@ export function barByGroupCounts(
   countWhen: string
 ): { label: string; count: number; total: number }[] {
   const map = new Map<string, { done: number; total: number }>();
+  const matchWhen = countWhen.trim();
+
+  const statusMatches = (val: unknown): boolean => {
+    if (Array.isArray(val)) {
+      return val.some((v) => String(v ?? "").trim() === matchWhen);
+    }
+    return String(val ?? "").trim() === matchWhen;
+  };
+
   for (const row of rows) {
     const groupKey = String(row.payload[groupColumn] ?? "—").trim() || "—";
     const entry = map.get(groupKey) ?? { done: 0, total: 0 };
     entry.total++;
-    if (String(row.payload[statusColumn] ?? "").trim() === countWhen) {
+    if (statusMatches(row.payload[statusColumn])) {
       entry.done++;
     }
     map.set(groupKey, entry);

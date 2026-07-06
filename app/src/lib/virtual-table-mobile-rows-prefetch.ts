@@ -1,5 +1,6 @@
-import type { VirtualDataRow } from "@/app/virtual-table-types";
-import { fetchVirtualRowsAction } from "@/app/virtual-table-actions";
+import {
+  fetchVirtualTableRowsWithCache,
+} from "@/lib/virtual-table-rows-fetch";
 import {
   shouldAllowBackgroundPrefetch,
   shouldAllowBackgroundPrefetchAsync,
@@ -37,13 +38,14 @@ export async function prefetchVirtualTableMobileRowsIfNeeded(
   if (existing) return existing;
 
   const run = (async () => {
-    const result = await fetchVirtualRowsAction(tableId, {
+    const result = await fetchVirtualTableRowsWithCache(tableId, {
       limit: WARMUP_ROW_BATCH,
       offset: 0,
+      cachePageSize: WARMUP_ROW_BATCH,
     });
     if (result.error) return;
     setVirtualTableMobileRowsCache(cacheKey, {
-      rows: result.rows as VirtualDataRow[],
+      rows: result.rows,
       totalCount: result.totalCount,
       relationLabels: {},
     });

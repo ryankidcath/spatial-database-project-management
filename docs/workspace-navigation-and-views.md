@@ -13,6 +13,9 @@
 | `docs/mobile-workspace-guide.md` | Bottom bar mobile, wizard scope |
 | `docs/workspace-spatial-tab-ux.md` | Tab Spasial: UX target, legacy vs vtable, beda dengan view Peta |
 | `docs/workspace-spatial-gis-roadmap.md` | Backlog fitur GIS, biaya basemap/API |
+| `docs/workspace-dashboard-v2-roadmap.md` | Backlog Dashboard v2 + mockup UI target |
+| `docs/workspace-sidebar-v2-roadmap.md` | Backlog sidebar desktop v2 (Scope Navigator) |
+| `docs/legacy-deprecation-inventory.md` | Inventaris schema/UI legacy (PLM, finance, issues, spatial) |
 | `docs/notifikasi-event-matrix.md` | Lonceng vs tab Obrolan vs aktivitas |
 
 **Kode terkait (anchor):**
@@ -296,11 +299,10 @@ Parent (`VirtualTableView`, mobile overlay) memuat preferensi via `readTableLayo
 
 | Entry point | Desktop | Mobile |
 |-------------|---------|--------|
-| Sidebar — klik tabel | Tab **Data/Tabel** + seleksi master–detail | Penampil layar penuh |
-| Tab Aktivitas — klik tabel | Tab **Data/Tabel** + seleksi | Penampil layar penuh |
-| Buat tabel baru | Tab **Data/Tabel** + seleksi | Penampil layar penuh |
-| Impor layer peta | Pra-seleksi di tab Tabel (tanpa paksa pindah tab) | Penampil layar penuh |
 | Tab Data — master list | Seleksi controlled (`tabelSelectedSlug`) | Daftar kartu tabel |
+| Aktivitas / notifikasi — klik tabel | Tab **Data/Tabel** + seleksi (`focusVirtualTable`) | Penampil layar penuh |
+| Buat tabel baru | Tab **Data** — tombol `+` di rail daftar tabel | Tab Data — tombol `+` di atas daftar |
+| Impor layer peta | Pra-seleksi di tab Tabel (tanpa paksa pindah tab) | Penampil layar penuh |
 
 State:
 

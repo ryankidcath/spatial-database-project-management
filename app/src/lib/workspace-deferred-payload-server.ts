@@ -40,11 +40,6 @@ import type {
   VirtualTableRow,
   VirtualColumnRow,
 } from "@/app/virtual-table-types";
-import type { VirtualDashboardRow } from "@/app/virtual-dashboard-types";
-import {
-  ensureVirtualDashboardForProject,
-  fetchVirtualDashboardsForProjects,
-} from "@/lib/virtual-dashboard-server";
 import type {
   WorkspaceBootstrapScope,
   WorkspaceDeferredPayload,
@@ -101,7 +96,6 @@ export async function fetchWorkspaceDeferredPayload(
     orgIds,
     projectList,
     hasOrgStaffInSelectedOrg,
-    userId,
   } = scope;
 
   const issuesResult = await fetchAllIssuesForProjects(
@@ -558,33 +552,6 @@ export async function fetchWorkspaceDeferredPayload(
 
   const virtualColumns = (vcolsRaw ?? []) as VirtualColumnRow[];
 
-  const virtualDashboardsByProjectId: Record<string, VirtualDashboardRow> = userId
-    ? await fetchVirtualDashboardsForProjects(supabase, scopedProjectIds)
-    : {};
-
-  const bootstrapProjectId =
-    selectedProjectId ??
-    (selectedOrgId
-      ? projectList.find((p) => p.organization_id === selectedOrgId)?.id
-      : null) ??
-    projectList[0]?.id ??
-    null;
-
-  if (
-    userId &&
-    bootstrapProjectId &&
-    !virtualDashboardsByProjectId[bootstrapProjectId]
-  ) {
-    const ensured = await ensureVirtualDashboardForProject(
-      supabase,
-      userId,
-      bootstrapProjectId
-    );
-    if (ensured.dashboard) {
-      virtualDashboardsByProjectId[bootstrapProjectId] = ensured.dashboard;
-    }
-  }
-
   const fetchError =
     statusesError?.message ??
     issuesError?.message ??
@@ -646,7 +613,7 @@ export async function fetchWorkspaceDeferredPayload(
     financePembayaran,
     virtualTables,
     virtualColumns,
-    virtualDashboardsByProjectId,
+    virtualDashboardsByProjectId: {},
     fetchError,
   };
 }

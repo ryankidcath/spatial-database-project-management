@@ -1,5 +1,8 @@
 import { CHAT_PATH_SEGMENTS_PROP } from "@/lib/chat-row-context";
-import type { VirtualColumnDataType } from "@/app/virtual-table-types";
+import type {
+  VirtualColumnDataType,
+  VirtualViewFilter,
+} from "@/app/virtual-table-types";
 
 export type VirtualColumnForMapPopup = {
   slug: string;
@@ -160,4 +163,24 @@ export function collectRelationIdsFromVirtualPayloads(
     }
   }
   return [...ids];
+}
+
+/** Slug kolom payload yang dibutuhkan lapisan peta (tanpa `file`). */
+export function columnSlugsNeededForMapLayers(
+  columns: VirtualColumnForMapPopup[],
+  viewFilters: VirtualViewFilter[] = []
+): string[] {
+  const slugs = new Set<string>();
+  for (const col of columns) {
+    if (col.data_type === "file") continue;
+    slugs.add(col.slug);
+  }
+  for (const f of viewFilters) {
+    if (f.column?.trim()) slugs.add(f.column.trim());
+  }
+  return [...slugs].sort();
+}
+
+export function mapColumnSlugsSignature(slugs: string[]): string {
+  return slugs.join(",");
 }

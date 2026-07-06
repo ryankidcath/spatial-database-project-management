@@ -3421,6 +3421,49 @@ export type FetchVirtualRowsOptions = {
   offset?: number;
 };
 
+/** Baris virtual table dengan proyeksi payload untuk lapisan peta (RPC). */
+export async function fetchVirtualRowsForMapAction(
+  tableId: string,
+  columnSlugs: string[]
+): Promise<{
+  rows: Record<string, unknown>[];
+  error: string | null;
+}> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return { rows: [], error: "Supabase tidak dikonfigurasi" };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { rows: [], error: "Belum masuk" };
+
+  const slugs = [...new Set(columnSlugs.filter(Boolean))].sort();
+  if (slugs.length === 0) {
+    return { rows: [], error: "column_slugs kosong" };
+  }
+
+  const { data, error } = await supabase.schema("core_pm").rpc(
+    "fetch_virtual_rows_map_payload",
+    { p_table_id: tableId, p_column_slugs: slugs }
+  );
+
+  if (error) return { rows: [], error: error.message };
+
+  const rows = (data ?? []).map((row: Record<string, unknown>) => ({
+    id: String(row.id),
+    table_id: tableId,
+    payload: (row.payload ?? {}) as Record<string, unknown>,
+    sort_order: 0,
+    created_by: null,
+    created_at: null,
+    updated_at: null,
+  }));
+
+  return { rows, error: null };
+}
+
 export async function fetchVirtualRowsAction(
   tableId: string,
   options?: FetchVirtualRowsOptions

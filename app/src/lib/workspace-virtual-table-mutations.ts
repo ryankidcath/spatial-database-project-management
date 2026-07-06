@@ -1,3 +1,4 @@
+import { invalidateSpatialGeometryLayersCache } from "@/lib/workspace-spatial-geometry-layers-cache";
 import { invalidateVirtualTableMobileRowsCache } from "@/lib/virtual-table-mobile-rows-cache";
 import { invalidateVirtualTableRowsCache } from "@/lib/virtual-table-rows-cache";
 
@@ -10,6 +11,7 @@ export function emitVirtualTableRowsMutated(tableId: string) {
   if (typeof window === "undefined") return;
   invalidateVirtualTableRowsCache(tableId);
   invalidateVirtualTableMobileRowsCache(tableId);
+  invalidateSpatialGeometryLayersCache();
   window.dispatchEvent(
     new CustomEvent<VirtualTableRowsMutatedDetail>(VIRTUAL_TABLE_ROWS_MUTATED, {
       detail: { tableId },

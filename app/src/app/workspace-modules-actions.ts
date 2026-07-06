@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { insertAuditLogRow } from "@/lib/audit-log";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { isLegacyModuleCode } from "@/lib/legacy-module-sunset";
 
 export type SetModuleResult = { error: string | null };
 
@@ -28,6 +29,23 @@ export async function setOrganizationModuleAction(
 
   if (!organizationId || !moduleCode) {
     return { error: "organization_id atau module_code kosong" };
+  }
+
+  const normalizedCode = moduleCode.toLowerCase();
+  if (enabled && isLegacyModuleCode(normalizedCode)) {
+    const { data: existing } = await supabase
+      .schema("core_pm")
+      .from("organization_modules")
+      .select("is_enabled")
+      .eq("organization_id", organizationId)
+      .eq("module_code", normalizedCode)
+      .maybeSingle();
+    if (!existing?.is_enabled) {
+      return {
+        error:
+          "Modul legacy tidak lagi tersedia untuk organisasi baru. Gunakan tabel virtual.",
+      };
+    }
   }
 
   const { error } = await supabase.schema("core_pm").rpc(

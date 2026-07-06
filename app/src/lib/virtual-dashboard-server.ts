@@ -1,13 +1,25 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  DashboardLayoutConfig,
   DashboardWidget,
   VirtualDashboardRow,
 } from "@/app/virtual-dashboard-types";
 import type { VirtualColumnRow, VirtualTableRow } from "@/app/virtual-table-types";
+import {
+  defaultSizeForWidgetType,
+  normalizeDashboardWidgetsLayout,
+} from "@/lib/dashboard-widget-layout";
 
 export function parseDashboardWidgets(raw: unknown): DashboardWidget[] {
   if (!Array.isArray(raw)) return [];
   return raw as DashboardWidget[];
+}
+
+export function parseDashboardLayoutConfig(raw: unknown): DashboardLayoutConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { version: 2 };
+  }
+  return raw as DashboardLayoutConfig;
 }
 
 function mapDashboardRow(row: Record<string, unknown>): VirtualDashboardRow {
@@ -16,6 +28,7 @@ function mapDashboardRow(row: Record<string, unknown>): VirtualDashboardRow {
     project_id: row.project_id as string,
     name: row.name as string,
     widgets: parseDashboardWidgets(row.widgets),
+    layout_config: parseDashboardLayoutConfig(row.layout_config),
     created_by: (row.created_by as string) ?? null,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
@@ -28,48 +41,72 @@ function buildProgresTemplate(
   columns: VirtualColumnRow[]
 ): DashboardWidget[] {
   const selectCols = columns.filter((c) => c.data_type === "select");
-  const kecCol = selectCols.find((c) => c.slug === "kecamatan") ?? selectCols[0];
+  const desaCol = selectCols.find((c) => c.slug === "desa") ?? selectCols[0];
+  const kecCol = selectCols.find((c) => c.slug === "kecamatan") ?? selectCols[1];
   const statusCol =
-    selectCols.find((c) => c.slug !== kecCol?.slug && c.slug.includes("copy")) ??
-    selectCols.find((c) => c.slug !== kecCol?.slug) ??
-    selectCols[1];
+    selectCols.find((c) => c.slug.includes("laporan")) ??
+    selectCols.find((c) => c.slug !== kecCol?.slug && c.slug !== desaCol?.slug) ??
+    selectCols[2];
 
-  const widgets: DashboardWidget[] = [
-    {
-      id: crypto.randomUUID(),
-      type: "stat",
-      title: "Total baris",
-      w: 1,
-      config: { table_id: table.id },
+  const raw: DashboardWidget[] = [];
+  const statSize = defaultSizeForWidgetType("stat");
+
+  raw.push({
+    id: crypto.randomUUID(),
+    type: "stat",
+    title: desaCol ? `Jumlah ${desaCol.display_name}` : "Jumlah Desa",
+    w: statSize.w,
+    h: statSize.h,
+    config: {
+      table_id: table.id,
+      metric: "count_distinct",
+      column: desaCol?.slug,
     },
-  ];
+  });
+
+  raw.push({
+    id: crypto.randomUUID(),
+    type: "stat",
+    title: "Jumlah Bidang Tanah",
+    w: statSize.w,
+    h: statSize.h,
+    config: { table_id: table.id, metric: "count" },
+  });
 
   if (statusCol) {
-    widgets.push({
+    const distSize = defaultSizeForWidgetType("value_distribution");
+    raw.push({
       id: crypto.randomUUID(),
-      type: "status_pie",
+      type: "value_distribution",
       title: statusCol.display_name,
-      w: 2,
-      config: { table_id: table.id, status_column: statusCol.slug },
-    });
-  }
-
-  if (kecCol && statusCol) {
-    widgets.push({
-      id: crypto.randomUUID(),
-      type: "bar_by_group",
-      title: `Done per ${kecCol.display_name}`,
-      w: 4,
+      w: distSize.w,
+      h: distSize.h,
       config: {
         table_id: table.id,
-        group_column: kecCol.slug,
-        status_column: statusCol.slug,
-        count_when: "Done",
+        column: statusCol.slug,
+        chart_type: "pie",
       },
     });
   }
 
-  return widgets;
+  if (kecCol && statusCol) {
+    const barSize = defaultSizeForWidgetType("bar_by_group");
+    raw.push({
+      id: crypto.randomUUID(),
+      type: "bar_by_group",
+      title: `Progres per ${kecCol.display_name}`,
+      w: barSize.w,
+      h: barSize.h,
+      config: {
+        table_id: table.id,
+        group_column: kecCol.slug,
+        status_column: statusCol.slug,
+        count_when: "Selesai",
+      },
+    });
+  }
+
+  return normalizeDashboardWidgetsLayout(raw);
 }
 
 export async function fetchVirtualDashboardForProject(
@@ -79,7 +116,9 @@ export async function fetchVirtualDashboardForProject(
   const { data, error } = await supabase
     .schema("core_pm")
     .from("virtual_dashboards")
-    .select("id, project_id, name, widgets, created_by, created_at, updated_at")
+    .select(
+      "id, project_id, name, widgets, layout_config, created_by, created_at, updated_at"
+    )
     .eq("project_id", projectId)
     .maybeSingle();
 
@@ -140,9 +179,12 @@ export async function ensureVirtualDashboardForProject(
       project_id: projectId,
       name: "Dashboard",
       widgets,
+      layout_config: { version: 2 },
       created_by: userId,
     })
-    .select("id, project_id, name, widgets, created_by, created_at, updated_at")
+    .select(
+      "id, project_id, name, widgets, layout_config, created_by, created_at, updated_at"
+    )
     .single();
 
   if (error) return { dashboard: null, error: error.message };
@@ -162,7 +204,9 @@ export async function fetchVirtualDashboardsForProjects(
   const { data, error } = await supabase
     .schema("core_pm")
     .from("virtual_dashboards")
-    .select("id, project_id, name, widgets, created_by, created_at, updated_at")
+    .select(
+      "id, project_id, name, widgets, layout_config, created_by, created_at, updated_at"
+    )
     .in("project_id", projectIds);
 
   if (error || !data) return {};

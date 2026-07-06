@@ -1,4 +1,8 @@
 import { VIEWS, type ViewId } from "./workspace-views";
+import {
+  isLegacyModuleCode,
+  isLegacyWorkspaceView,
+} from "@/lib/legacy-module-sunset";
 
 /**
  * View yang tidak tampil di tab bar workspace.
@@ -59,9 +63,31 @@ export function isViewAllowedForModules(
   enabled: Set<string>
 ): boolean {
   if (isWorkspaceViewHidden(view)) return false;
+  if (isLegacyWorkspaceView(view)) {
+    const req = viewRequiredModuleCode(view);
+    if (!req) return false;
+    return enabled.has(req);
+  }
   const req = viewRequiredModuleCode(view);
   if (!req) return true;
   return enabled.has(req);
+}
+
+/** Modul opsional yang boleh ditampilkan di UI toggle. Legacy hanya jika sudah aktif (grandfather). */
+export function moduleRegistryVisibleInUi(
+  moduleCode: string,
+  isCore: boolean,
+  organizationId: string,
+  organizationModules: OrganizationModuleRow[]
+): boolean {
+  if (isCore) return false;
+  if (!isLegacyModuleCode(moduleCode)) return true;
+  return organizationModules.some(
+    (r) =>
+      r.organization_id === organizationId &&
+      r.module_code === moduleCode &&
+      r.is_enabled
+  );
 }
 
 export function viewsForEnabledModules(enabled: Set<string>): ViewId[] {

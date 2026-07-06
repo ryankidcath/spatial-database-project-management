@@ -21,6 +21,8 @@ const STORAGE_KEY = "pm-vtable-rows-cache-v1";
 const MAX_ENTRIES = 48;
 const CACHE_TTL_MS = DEFAULT_DURABLE_CACHE_TTL_MS;
 
+export const VIRTUAL_TABLE_ROWS_CACHE_TTL_MS = CACHE_TTL_MS;
+
 const storeConfig = {
   namespace: "vtable-rows-v1",
   maxEntries: MAX_ENTRIES,
@@ -36,6 +38,38 @@ export function virtualTableRowsCacheKey(
   pageSize: number | null
 ): string {
   return `${tableId}:${pageSize ?? "all"}:${pageIndex}`;
+}
+
+export function virtualTableFullRowsCacheKey(tableId: string): string {
+  return virtualTableRowsCacheKey(tableId, 0, null);
+}
+
+/** Cache baris proyeksi peta per set kolom (`mapColumnSlugsSignature`). */
+export function virtualTableMapRowsCacheKey(
+  tableId: string,
+  columnSlugSig: string
+): string {
+  return `${tableId}:map:${columnSlugSig}:0`;
+}
+
+export function isVirtualTableRowsCacheEntryFresh(
+  entry: VirtualTableRowsCacheEntry
+): boolean {
+  return isDurableSnapshotFresh(entry, CACHE_TTL_MS);
+}
+
+/** Baca entri cache tanpa menghapus snapshot kedaluwarsa (untuk stale-while-revalidate). */
+export function getVirtualTableRowsCacheAllowStale(
+  key: string
+): VirtualTableRowsCacheEntry | undefined {
+  const mem = memory.get(key);
+  if (mem) return mem;
+  const stored = readIndexedDbRecordMapSync<VirtualTableRowsCacheEntry>(
+    storeConfig
+  )[key];
+  if (!stored) return undefined;
+  memory.set(key, stored);
+  return stored;
 }
 
 export function getVirtualTableRowsCache(

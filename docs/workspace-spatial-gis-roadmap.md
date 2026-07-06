@@ -9,6 +9,8 @@
 
 | Dokumen                                  | Isi                                                           |
 | ---------------------------------------- | ------------------------------------------------------------- |
+| `docs/workspace-virtual-table-fetch-optimization-notes.md` | Fetch virtual table per tab + backlog optimasi (poin 1–7 ✅) |
+| `docs/workspace-dashboard-v2-roadmap.md` | Backlog Dashboard v2 + mockup UI target |
 | `docs/workspace-spatial-tab-ux.md`       | UX refactor S1–S6 ✅; legacy S7; beda tab Spasial vs view Peta |
 | `docs/workspace-navigation-and-views.md` | Tab workspace, integrasi Data/Chat                            |
 | `docs/spatial-import-roadmap.md`         | Impor GeoJSON/DXF/SHP, CRS                                    |
@@ -28,6 +30,8 @@
 | CRS / reprojeksi       | `app/src/lib/crs-reproject.ts`                                      |
 | Relasi / panel 360°    | `virtual-table-relation-explorer.tsx`, `virtual-table-entity-360-panel.tsx`, `lib/virtual-table-find-on-map.ts` |
 | Trace relasi peta      | `lib/workspace-map-relation-trace.ts`, `workspace-map-relation-trace-layer.tsx` |
+| Cache lapisan geometri | `lib/workspace-spatial-geometry-layers-cache.ts`, `lib/workspace-spatial-geometry-layers.ts` |
+| Cache baris virtual table | `lib/virtual-table-rows-fetch.ts`, `lib/virtual-table-rows-cache.ts` |
 | Dummy pola B           | `supabase/migrations/0074_gh_demo_virtual_tables_seed.sql`, `0077_ghdemo_relation_trace_seed.sql` |
 
 

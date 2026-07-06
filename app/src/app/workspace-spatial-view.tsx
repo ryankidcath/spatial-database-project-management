@@ -2,7 +2,15 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 import { pilihRuangKerjaUntuk, ruangKerjaIni } from "@/lib/product-labels";
@@ -27,7 +35,6 @@ import {
   type SpatialLayerStyleByTable,
   type SpatialLayerSymbolStyle,
 } from "@/lib/workspace-spatial-layer-style-preference";
-import { rowMatchesVirtualViewFilters } from "@/lib/virtual-table-row-filters";
 import { viewSessionFilters } from "@/lib/virtual-table-view-session";
 import {
   loadMapExtentBookmark,
@@ -108,20 +115,30 @@ import {
 import { WorkspaceSpatialImportWizard } from "./workspace-spatial-import-wizard";
 import {
   fetchRelationTraceTargetsAction,
-  fetchVirtualRowsAction,
-  resolveRelationLabelsAction,
 } from "./virtual-table-actions";
+import { fetchVirtualTableRowsWithCache } from "@/lib/virtual-table-rows-fetch";
 import {
   buildRelationTraceSegments,
   type RelationTraceEndpoint,
   type RelationTraceTarget,
 } from "@/lib/workspace-map-relation-trace";
 import {
-  buildVirtualTableMapPopupProperties,
-  collectRelationIdsFromVirtualPayloads,
-  pickMapRowTitle,
-  type VirtualColumnForMapPopup,
-} from "@/lib/virtual-table-map-popup";
+  isDurableSnapshotFresh,
+  DEFAULT_DURABLE_CACHE_TTL_MS,
+} from "@/lib/client-durable-storage";
+import {
+  buildSpatialGeometryLayers,
+  buildSpatialViewFiltersSig,
+} from "@/lib/workspace-spatial-geometry-layers";
+import {
+  buildSpatialGeometryLayersCacheKey,
+  getSpatialGeometryLayersCache,
+  hydrateSpatialGeometryLayersCache,
+  setSpatialGeometryLayersCache,
+  totalCountsMapToRecord,
+  totalCountsRecordToMap,
+} from "@/lib/workspace-spatial-geometry-layers-cache";
+import { VIRTUAL_TABLE_ROWS_MUTATED } from "@/lib/workspace-virtual-table-mutations";
 import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
 import {
@@ -560,10 +577,13 @@ export function WorkspaceSpatialView({
   }, [selectedProjectId]);
 
   useEffect(() => {
-    if (isMapTabActive) {
+    const onRowsMutated = () => {
       setMapTabEpoch((n) => n + 1);
-    }
-  }, [isMapTabActive]);
+    };
+    window.addEventListener(VIRTUAL_TABLE_ROWS_MUTATED, onRowsMutated);
+    return () =>
+      window.removeEventListener(VIRTUAL_TABLE_ROWS_MUTATED, onRowsMutated);
+  }, []);
 
   useEffect(() => {
     if (mapImportPreviewLayers.length > 0) {
@@ -614,6 +634,54 @@ export function WorkspaceSpatialView({
     [virtualColumns]
   );
 
+  const viewFiltersSig = useMemo(
+    () => buildSpatialViewFiltersSig(vtablesWithGeometry, filterSyncEnabled),
+    [vtablesWithGeometry, filterSyncEnabled]
+  );
+
+  const geometryCacheKey = useMemo(() => {
+    if (!selectedProjectId || vtablesWithGeometry.length === 0) return null;
+    return buildSpatialGeometryLayersCacheKey({
+      projectId: selectedProjectId,
+      vtablesWithGeometrySig,
+      virtualColumnsGeomSig,
+      filterSyncEnabled,
+      viewFiltersSig,
+      projectName: selectedProject?.name ?? "",
+    });
+  }, [
+    selectedProjectId,
+    selectedProject?.name,
+    vtablesWithGeometry.length,
+    vtablesWithGeometrySig,
+    virtualColumnsGeomSig,
+    filterSyncEnabled,
+    viewFiltersSig,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!geometryCacheKey) return;
+    let cancelled = false;
+    const mem = getSpatialGeometryLayersCache(geometryCacheKey);
+    if (mem) {
+      setVtableGeometryLayers(mem.layers);
+      setTotalFeatureCountByTableId(
+        totalCountsRecordToMap(mem.totalCountsByTableId)
+      );
+      return;
+    }
+    void hydrateSpatialGeometryLayersCache(geometryCacheKey).then((fromIdb) => {
+      if (cancelled || !fromIdb?.layers.length) return;
+      setVtableGeometryLayers(fromIdb.layers);
+      setTotalFeatureCountByTableId(
+        totalCountsRecordToMap(fromIdb.totalCountsByTableId)
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [geometryCacheKey]);
+
   useEffect(() => {
     if (vtablesWithGeometry.length === 0) return;
     const allIds = vtablesWithGeometry.map((vt) => vt.id);
@@ -637,7 +705,7 @@ export function WorkspaceSpatialView({
       if (filters.length > 0) map[vt.id] = true;
     }
     return map;
-  }, [filterSyncEnabled, vtablesWithGeometry, mapTabEpoch]);
+  }, [filterSyncEnabled, vtablesWithGeometry, viewFiltersSig]);
 
   const featureCountByTableId = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1042,7 +1110,7 @@ export function WorkspaceSpatialView({
       return;
     }
     let cancelled = false;
-    void fetchVirtualRowsAction(mapImportTableId).then((result) => {
+    void fetchVirtualTableRowsWithCache(mapImportTableId).then((result) => {
       if (cancelled) return;
       setMapImportTableRows(
         result.error ? [] : (result.rows as VirtualDataRow[])
@@ -1056,135 +1124,57 @@ export function WorkspaceSpatialView({
   useEffect(() => {
     if (vtablesWithGeometry.length === 0) {
       setVtableGeometryLayers([]);
+      setTotalFeatureCountByTableId(new Map());
       return;
     }
+
+    const cached =
+      geometryCacheKey != null
+        ? getSpatialGeometryLayersCache(geometryCacheKey)
+        : undefined;
+    const cacheFresh =
+      cached != null &&
+      isDurableSnapshotFresh(cached, DEFAULT_DURABLE_CACHE_TTL_MS);
+
+    if (cached && !cacheFresh) {
+      setVtableGeometryLayers(cached.layers);
+      setTotalFeatureCountByTableId(
+        totalCountsRecordToMap(cached.totalCountsByTableId)
+      );
+    }
+
+    if (cacheFresh) return;
+
     let cancelled = false;
-    (async () => {
-      const layers: MapFootprint[] = [];
-      const totalCounts = new Map<string, number>();
-      for (const vt of vtablesWithGeometry) {
-        const result = await fetchVirtualRowsAction(vt.id);
-        if (cancelled) return;
-        if (result.error || !result.rows) continue;
-
-        const tableCols: VirtualColumnForMapPopup[] = virtualColumns
-          .filter((c) => c.table_id === vt.id)
-          .map((c) => ({
-            slug: c.slug,
-            display_name: c.display_name,
-            data_type: c.data_type,
-            position: c.position,
-          }));
-
-        const geoCols = tableCols.filter((c) => c.data_type === "geometry");
-        const viewFilters = filterSyncEnabled ? viewSessionFilters(vt.id) : [];
-
-        const rowPayloads = result.rows.map((row) => ({
-          payload:
-            ((row as Record<string, unknown>).payload as Record<string, unknown> | null) ??
-            {},
-        }));
-        const relationIds = collectRelationIdsFromVirtualPayloads(
-          rowPayloads,
-          tableCols
-        );
-        let relationLabels: Record<string, string> = {};
-        if (relationIds.length > 0) {
-          const resolved = await resolveRelationLabelsAction(relationIds);
-          if (cancelled) return;
-          if (!resolved.error) relationLabels = resolved.labels;
-        }
-
-        const resolveFilterLabel = (column: string, val: unknown) => {
-          const col = tableCols.find((c) => c.slug === column);
-          if (!col) return String(val ?? "");
-          if (col.data_type === "relation" && val != null && val !== "") {
-            return relationLabels[String(val)] ?? String(val);
-          }
-          if (col.data_type === "user" && val != null && val !== "") {
-            return memberNameByUserId.get(String(val)) ?? String(val);
-          }
-          return String(val ?? "");
-        };
-
-        for (const row of result.rows) {
-          const payload = (row as Record<string, unknown>).payload as Record<
-            string,
-            unknown
-          > | null;
-          if (!payload) continue;
-          const passesFilter =
-            viewFilters.length === 0 ||
-            rowMatchesVirtualViewFilters(
-              row as VirtualDataRow,
-              viewFilters,
-              resolveFilterLabel
-            );
-          const rowId = (row as Record<string, unknown>).id as string;
-          const rowTitle = pickMapRowTitle(
-            payload,
-            tableCols,
-            relationLabels,
-            rowId
-          );
-          const chatPathSegments = buildChatRowPathSegments({
-            projectName: selectedProject?.name ?? null,
-            tableDisplayName: vt.display_name,
-            rowLabel: rowTitle,
-          });
-
-          for (const gc of geoCols) {
-            const geo = payload[gc.slug];
-            if (!geo || typeof geo !== "object") continue;
-            totalCounts.set(vt.id, (totalCounts.get(vt.id) ?? 0) + 1);
-            if (!passesFilter) continue;
-
-            layers.push({
-              id: `vtable:${rowId}:${gc.slug}`,
-              label: `${vt.display_name}: ${rowTitle}`,
-              geojson: geo,
-              popupProperties: buildVirtualTableMapPopupProperties(
-                vt.display_name,
-                tableCols,
-                payload,
-                relationLabels,
-                memberNameByUserId,
-                {
-                  skipGeometrySlug: gc.slug,
-                  rowTitle,
-                  virtualRowId: rowId,
-                  virtualTableId: vt.id,
-                  projectName: selectedProject?.name ?? null,
-                  chatPathSegments,
-                }
-              ),
-              layerKind: "virtual_table",
-              virtualTableId: vt.id,
-              virtualRowId: rowId,
-              rowPayload: payload,
-              relationLabels,
-              chatPathSegments,
-            });
-          }
-        }
+    void buildSpatialGeometryLayers({
+      vtablesWithGeometry,
+      virtualColumns,
+      filterSyncEnabled,
+      memberNameByUserId,
+      projectName: selectedProject?.name ?? null,
+    }).then((result) => {
+      if (cancelled) return;
+      setVtableGeometryLayers(result.layers);
+      setTotalFeatureCountByTableId(result.totalCounts);
+      if (geometryCacheKey) {
+        setSpatialGeometryLayersCache(geometryCacheKey, {
+          layers: result.layers,
+          totalCountsByTableId: totalCountsMapToRecord(result.totalCounts),
+        });
       }
-      if (!cancelled) {
-        setVtableGeometryLayers(layers);
-        setTotalFeatureCountByTableId(totalCounts);
-      }
-    })();
+    });
+
     return () => {
       cancelled = true;
     };
   }, [
     mapTabEpoch,
+    geometryCacheKey,
     filterSyncEnabled,
     vtablesWithGeometry,
-    vtablesWithGeometrySig,
-    virtualColumnsGeomSig,
+    virtualColumns,
     memberNameByUserId,
     selectedProject?.name,
-    virtualColumns,
   ]);
 
   const hasAnyGeometry =

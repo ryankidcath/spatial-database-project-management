@@ -17,12 +17,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import {
-  ChevronRight,
-  History,
-  PanelLeft,
-  Trash2,
-} from "lucide-react";
+import { History, PanelLeft } from "lucide-react";
 import {
   addOrganizationStaffByEmailAction,
   addProjectMemberByEmailAction,
@@ -34,8 +29,6 @@ import { toast } from "sonner";
 import { WorkspaceActivitySheet } from "./workspace-activity-sheet";
 import { fetchActivityLogsAction } from "./fetch-activity-logs-action";
 import { useWorkspaceDeferredPayload } from "./use-workspace-deferred-payload";
-import { viewNeedsDeferredPayload } from "./workspace-deferred-payload";
-import { WorkspaceMobileListSkeleton } from "./workspace-mobile-list-skeleton";
 import type { ActivityLogRow } from "./activity-log-types";
 import {
   buildActivityLogsCacheKey,
@@ -178,14 +171,22 @@ import {
 import { WorkspaceMobileSwipeBack } from "./workspace-mobile-swipe-back";
 import { WorkspaceRightPanelMobileChatGuard } from "./workspace-right-panel-mobile-guard";
 import { VirtualTableMobileList } from "./workspace-virtual-table-list";
+import { WorkspaceDesktopScopeSwitcher } from "./workspace-desktop-scope-switcher";
+import { WorkspaceScopeQuickAccess } from "./workspace-scope-quick-access";
 import {
-  SidebarOrganizationChatButton,
-  SidebarProjectChatButton,
-} from "./workspace-sidebar-chat";
-import { SidebarVirtualTableItem } from "./workspace-sidebar-vtable-item";
+  WorkspaceCommandPalette,
+  useWorkspaceCommandPaletteShortcut,
+} from "./workspace-command-palette";
+import {
+  buildQuickAccessProjectIds,
+  loadScopePrefs,
+  loadRecentProjectIds,
+  loadWorkspaceSidebarCollapsed,
+  recordRecentProject,
+  saveWorkspaceSidebarCollapsed,
+} from "@/lib/workspace-scope-preference";
 import type { ChatMentionOption } from "./chat-types";
 import {
-  ProjectChatUnreadBadge,
   VirtualTableChatUnreadBadge,
   VirtualTableChatUnreadProvider,
   ChatTabLabel,
@@ -1088,29 +1089,6 @@ function flattenIssuesWithDepth(
   return out;
 }
 
-/** True jika baris issue boleh tampak di sidebar (tidak di bawah cabang yang sedang collapsed). */
-function isSidebarIssueRowExpanded(
-  issue: IssueRow,
-  parentByIssueId: Map<string, string | null>,
-  collapsedIssueIds: Set<string>
-): boolean {
-  let parentId = issue.parent_id;
-  while (parentId) {
-    if (collapsedIssueIds.has(parentId)) return false;
-    parentId = parentByIssueId.get(parentId) ?? null;
-  }
-  return true;
-}
-
-/** ID issue yang punya minimal satu turunan — dipakai default sidebar: semua cabang collapsed. */
-function parentIssueIdsWithChildren(issues: IssueRow[]): Set<string> {
-  const out = new Set<string>();
-  for (const i of issues) {
-    if (i.parent_id) out.add(i.parent_id);
-  }
-  return out;
-}
-
 function ProjectPropertiesDialog({
   open,
   onOpenChange,
@@ -1698,25 +1676,34 @@ export function WorkspaceClient({
   const [projectMsg, setProjectMsg] = useState<string | null>(null);
   const [organizationMsg, setOrganizationMsg] = useState<string | null>(null);
   const [memberMsg, setMemberMsg] = useState<string | null>(null);
-  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
-    () => new Set()
-  );
-  const [collapsedIssueIds, setCollapsedIssueIds] = useState<Set<string>>(() =>
-    parentIssueIdsWithChildren(shellIssues)
-  );
   const isBelowMd = useIsBelowMd();
   const [mobileChatKeyboardOpen, setMobileChatKeyboardOpen] = useState(false);
   const [mobileChatConversationOpen, setMobileChatConversationOpen] =
     useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [pinnedProjectIds, setPinnedProjectIds] = useState<string[]>([]);
+  const [recentProjectIds, setRecentProjectIds] = useState<string[]>([]);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [mobileScopePhase, setMobileScopePhase] = useState<MobileScopePhase | null>(
     null
   );
   const mobileScopeInitializedRef = useRef(false);
 
   useEffect(() => {
-    setIsSidebarCollapsed(isBelowMd);
+    setIsSidebarCollapsed(
+      isBelowMd ? true : loadWorkspaceSidebarCollapsed()
+    );
   }, [isBelowMd]);
+
+  useEffect(() => {
+    const prefs = loadScopePrefs();
+    setPinnedProjectIds(prefs.pinnedProjectIds);
+    setRecentProjectIds(prefs.recentProjectIds);
+  }, []);
+
+  useWorkspaceCommandPaletteShortcut(!isBelowMd, () =>
+    setCommandPaletteOpen(true)
+  );
 
   useEffect(() => {
     setLiveUserPresence(shellUserPresence);
@@ -1796,6 +1783,37 @@ export function WorkspaceClient({
 
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     projectIdFromSearchParams
+  );
+
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    recordRecentProject(selectedProjectId);
+    setRecentProjectIds(loadRecentProjectIds());
+  }, [selectedProjectId]);
+
+  const accessibleProjectIds = useMemo(
+    () => new Set(projects.map((p) => p.id)),
+    [projects]
+  );
+
+  const scopeProjectsForQuickAccess = useMemo(
+    () =>
+      projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        organization_id: p.organization_id,
+      })),
+    [projects]
+  );
+
+  const quickAccessProjectIds = useMemo(
+    () =>
+      buildQuickAccessProjectIds(
+        pinnedProjectIds,
+        recentProjectIds,
+        accessibleProjectIds
+      ),
+    [pinnedProjectIds, recentProjectIds, accessibleProjectIds]
   );
 
   const activeViewFromUrl = useMemo((): ViewId => {
@@ -1881,16 +1899,11 @@ export function WorkspaceClient({
     userPresence,
     virtualDashboardsByProjectId,
     fetchError,
-    loading: deferredPayloadLoading,
   } = deferredWorkspace;
 
   useEffect(() => {
     setLiveUserPresence(userPresence);
   }, [userPresence]);
-
-  useEffect(() => {
-    setCollapsedIssueIds(parentIssueIdsWithChildren(issues));
-  }, [issues, selectedProjectId]);
 
   const showMobileScopeWizard = isBelowMd && mobileScopePhase !== "workspace";
 
@@ -2025,13 +2038,18 @@ export function WorkspaceClient({
   }, [canonicalOrgId, selectedProjectId, isBelowMd]);
 
   const taskIdFromSearchParams = useMemo(() => {
+    const enabled = effectiveEnabledModuleCodes(
+      canonicalOrgId,
+      organizationModules
+    );
+    if (!enabled.has("plm")) return null;
     const q = searchParams.get("task");
     if (!q || !selectedProjectId) return null;
     const ok = issues.some(
       (i) => i.id === q && i.project_id === selectedProjectId
     );
     return ok ? q : null;
-  }, [searchParams, issues, selectedProjectId]);
+  }, [searchParams, issues, selectedProjectId, canonicalOrgId, organizationModules]);
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
     taskIdFromSearchParams
@@ -2092,19 +2110,6 @@ export function WorkspaceClient({
   }, [selectedProjectId, userId]);
 
   /** Saat pindah organisasi saja — jangan reset tiap router.refresh (issues array baru). */
-  useEffect(() => {
-    if (!canonicalOrgId) return;
-    const projectIdsInOrg = new Set(
-      projects
-        .filter((p) => p.organization_id === canonicalOrgId)
-        .map((p) => p.id)
-    );
-    setCollapsedProjectIds(new Set(projectIdsInOrg));
-    const issuesInOrg = issues.filter((i) => projectIdsInOrg.has(i.project_id));
-    setCollapsedIssueIds(parentIssueIdsWithChildren(issuesInOrg));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- hanya saat ganti org
-  }, [canonicalOrgId]);
-
   const selectedBerkasId = useMemo(() => {
     if (parseViewParam(searchParams.get("view")) !== "Berkas") return null;
     const q = searchParams.get("berkas");
@@ -2270,7 +2275,15 @@ export function WorkspaceClient({
       p.set("view", viewToParam(fallbackView));
       dirty = true;
     }
+    const enabled = effectiveEnabledModuleCodes(
+      canonicalOrgId,
+      organizationModules
+    );
     const tid = p.get("task");
+    if (tid && !enabled.has("plm")) {
+      p.delete("task");
+      dirty = true;
+    }
     if (tid && selectedProjectId) {
       const ids = issueIdsInSelectedProjectKey
         ? issueIdsInSelectedProjectKey.split(",")
@@ -2280,10 +2293,6 @@ export function WorkspaceClient({
         dirty = true;
       }
     }
-    const enabled = effectiveEnabledModuleCodes(
-      canonicalOrgId,
-      organizationModules
-    );
     const committed = committedViewRef.current;
     if (isViewAllowedForModules(committed, enabled)) {
       const viewInP = parseViewParam(p.get("view"));
@@ -3176,43 +3185,6 @@ export function WorkspaceClient({
       .sort((a, b) => a.sort_order - b.sort_order);
   }, [issues, selectedProjectId, selectedTaskId]);
 
-  const sidebarProjectTrees = useMemo(() => {
-    const result = new Map<
-      string,
-      {
-        treeRowsForSidebar: { issue: IssueRow; depth: number }[];
-        parentByIssueId: Map<string, string | null>;
-        sidebarParentIdsWithVisibleChildren: Set<string>;
-      }
-    >();
-    for (const p of projectsInOrg) {
-      const treeRows = flattenIssuesWithDepth(p.id, issues);
-      const projectIssues = issues.filter((i) => i.project_id === p.id);
-      const parentByIssueId = new Map(
-        projectIssues.map((i) => [i.id, i.parent_id])
-      );
-      const issueIdsWithChildren = new Set(
-        projectIssues.filter((i) => i.parent_id).map((i) => i.parent_id as string)
-      );
-      const treeRowsForSidebar = treeRows.filter(({ issue, depth }) => {
-        const hasChildren = issueIdsWithChildren.has(issue.id);
-        if (hasChildren) return true;
-        return depth < 2;
-      });
-      const sidebarParentIdsWithVisibleChildren = new Set(
-        treeRowsForSidebar
-          .map(({ issue }) => issue.parent_id)
-          .filter((id): id is string => Boolean(id))
-      );
-      result.set(p.id, {
-        treeRowsForSidebar,
-        parentByIssueId,
-        sidebarParentIdsWithVisibleChildren,
-      });
-    }
-    return result;
-  }, [projectsInOrg, issues]);
-
   const resolveProjectIdInParams = useCallback(
     (p: URLSearchParams) => {
       const orgParam = p.get("org");
@@ -3319,6 +3291,19 @@ export function WorkspaceClient({
       projects,
       startScopeNavTransition,
     ]
+  );
+
+  const handleQuickSelectProject = useCallback(
+    (projectId: string) => {
+      const proj = projects.find((p) => p.id === projectId);
+      if (!proj) return;
+      commitScopeInUrl((q) => {
+        q.set("org", proj.organization_id);
+        q.set("project", projectId);
+        q.delete("task");
+      }, { syncView: false });
+    },
+    [projects, commitScopeInUrl]
   );
 
   const handleActiveViewChange = useCallback(
@@ -3990,17 +3975,17 @@ export function WorkspaceClient({
           "relative flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden bg-sidebar/95 transition-[width] duration-300 ease-in-out motion-reduce:transition-none",
           isSidebarCollapsed
             ? "w-0 border-transparent"
-            : "w-80 border-r border-sidebar-border/90"
+            : "w-64 border-r border-sidebar-border/90"
         )}
       >
       <aside
-        className="flex min-h-0 h-full min-w-0 w-80 flex-1 basis-0 flex-col overflow-hidden font-sans text-sidebar-foreground"
+        className="flex min-h-0 h-full min-w-0 w-64 flex-1 basis-0 flex-col overflow-hidden font-sans text-sidebar-foreground"
         aria-hidden={isSidebarCollapsed}
         inert={isSidebarCollapsed ? true : undefined}
       >
         <ScrollArea className="min-h-0 flex-1" type="scroll">
-          <div className="px-5 pt-0 pb-5">
-        <div className="-mx-5 mb-4 flex h-[68px] items-center gap-3 px-5">
+          <div className="px-4 pt-0 pb-5">
+        <div className="-mx-4 mb-4 flex h-[68px] items-center gap-3 px-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-foreground text-background">
             ◫
           </div>
@@ -4009,562 +3994,88 @@ export function WorkspaceClient({
             <p className="mt-1 text-xs text-muted-foreground">v1.0.0</p>
           </div>
         </div>
-        <div className="mt-4 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium text-muted-foreground">
-              Organisasi
-            </p>
-            <div className="flex items-center gap-1">
-              {canonicalOrgId &&
-              hasOrgStaffAccess &&
-              userId &&
-              !isBelowMd ? (
-                <SidebarOrganizationChatButton
-                  mentionOptions={workspaceChatMentionOptions}
-                  disabled={workspaceActionPending}
-                />
-              ) : null}
-            <Dialog
-              open={organizationDialogOpen}
-              onOpenChange={(open) => {
-                setOrganizationDialogOpen(open);
-                if (open) setOrganizationMsg(null);
-              }}
-            >
-              <DialogTrigger render={<Button size="sm" variant="outline" />}>
-                + Organisasi
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Tambah organisasi baru</DialogTitle>
-                  <DialogDescription>
-                    Buat organisasi baru beserta project pertamanya. Anda akan
-                    otomatis menjadi owner di project tersebut.
-                  </DialogDescription>
-                </DialogHeader>
-                <form
-                  className="grid gap-3"
-                  action={(fd) => {
-                    setOrganizationMsg(null);
-                    startTaskTransition(async () => {
-                      const r = await createOrganizationProjectInlineAction(fd);
-                      if (r.error) {
-                        setOrganizationMsg(r.error);
-                        return;
-                      }
-                      if (r.organizationId && r.projectId) {
-                        commitScopeInUrl(
-                          (q) => {
-                            q.set("org", r.organizationId as string);
-                            q.set("project", r.projectId as string);
-                            q.delete("task");
-                          },
-                          { refresh: true, syncView: false }
-                        );
-                      }
-                      setOrganizationDialogOpen(false);
-                      router.refresh();
-                    });
-                  }}
-                >
-                  <div className="space-y-1">
-                    <Label>Nama organisasi *</Label>
-                    <Input
-                      name="organization_name"
-                      required
-                      placeholder="Contoh: KJSB Cirebon"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Slug organisasi (opsional)</Label>
-                    <Input name="organization_slug" placeholder="kjsb-cirebon" />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Nama {ruangKerjaLc} pertama *</Label>
-                    <Input
-                      name="project_name"
-                      required
-                      placeholder="Contoh: PLM Cirebon 2028"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Kode {ruangKerjaLc} (opsional)</Label>
-                    <Input name="project_key" placeholder="PLM28" />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Deskripsi {ruangKerjaLc} (opsional)</Label>
-                    <Textarea
-                      name="project_description"
-                      rows={3}
-                      placeholder={`Catatan singkat ${ruangKerjaLc}`}
-                    />
-                  </div>
-                  <Button type="submit" disabled={taskPending}>
-                    Buat organisasi & {ruangKerjaLc}
-                  </Button>
-                  {organizationMsg && (
-                    <p className="text-xs text-red-600" role="alert">
-                      {organizationMsg}
-                    </p>
-                  )}
-                </form>
-              </DialogContent>
-            </Dialog>
-            </div>
-          </div>
-          <div className="ml-2">
-            {orgsWithProjects.map((o) => {
-              const active = canonicalOrgId === o.id;
-              return (
-                <Button
-                  key={o.id}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={workspaceActionPending}
-                  onClick={() => {
-                    commitScopeInUrl(
-                      (q) => {
-                        q.set("org", o.id);
-                        const first = projects
-                          .filter((p) => p.organization_id === o.id)
-                          .sort((a, b) => a.name.localeCompare(b.name))[0];
-                        if (first) q.set("project", first.id);
-                        q.delete("task");
-                      },
-                      { refresh: true, syncView: false }
-                    );
-                  }}
-                  className={`mb-1 h-8 w-full justify-start rounded-md px-3 text-left text-[0.95rem] font-medium ${
-                    active
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
-                  }`}
-                >
-                  {o.name}
-                </Button>
+        <div className="mt-4">
+          <WorkspaceDesktopScopeSwitcher
+            organizations={orgsWithProjects}
+            projects={projectsInOrg}
+            selectedOrganizationId={canonicalOrgId}
+            selectedProjectId={selectedProjectId}
+            disabled={workspaceActionPending}
+            onSelectOrganization={(orgId) => {
+              commitScopeInUrl(
+                (q) => {
+                  q.set("org", orgId);
+                  const first = projects
+                    .filter((p) => p.organization_id === orgId)
+                    .sort((a, b) => a.name.localeCompare(b.name))[0];
+                  if (first) q.set("project", first.id);
+                  q.delete("task");
+                },
+                { refresh: true, syncView: false }
               );
-            })}
-          </div>
+            }}
+            onSelectProject={(projectId) => {
+              const proj = projectsInOrg.find((p) => p.id === projectId);
+              if (!proj) return;
+              commitScopeInUrl((q) => {
+                q.set("org", proj.organization_id);
+                q.set("project", projectId);
+                q.delete("task");
+              }, { syncView: false });
+            }}
+            showOrgChat={Boolean(
+              canonicalOrgId && hasOrgStaffAccess && userId && !isBelowMd
+            )}
+            canAddOrganization
+            canAddStaff={Boolean(canonicalOrgId && canManageOrgStaff)}
+            canAddMember={Boolean(
+              selectedProjectId && canManageSelectedProject
+            )}
+            canAddProject={Boolean(canonicalOrgId && hasOrgStaffAccess)}
+            mentionOptions={workspaceChatMentionOptions}
+            onAddOrganization={() => {
+              setOrganizationMsg(null);
+              setOrganizationDialogOpen(true);
+            }}
+            onAddStaff={() => {
+              setOrgStaffMsg(null);
+              setOrgStaffDialogOpen(true);
+            }}
+            onAddMember={() => {
+              setMemberMsg(null);
+              setMemberDialogOpen(true);
+            }}
+            onAddProject={() => {
+              setProjectMsg(null);
+              setProjectDialogOpen(true);
+            }}
+            canDeleteProject={Boolean(
+              selectedProjectId && canDeleteProject(selectedProjectId)
+            )}
+            onDeleteProject={
+              selectedProjectId && selectedProject
+                ? () => {
+                    setProjectMsg(null);
+                    setProjectDeleteConfirm({
+                      projectId: selectedProjectId,
+                      name: selectedProject.name,
+                    });
+                  }
+                : undefined
+            }
+            pinnedProjectIds={pinnedProjectIds}
+            recentProjectIds={recentProjectIds}
+            onPinnedChange={setPinnedProjectIds}
+          />
+          <WorkspaceScopeQuickAccess
+            projects={scopeProjectsForQuickAccess}
+            projectIds={quickAccessProjectIds}
+            pinnedIds={pinnedProjectIds}
+            selectedProjectId={selectedProjectId}
+            disabled={workspaceActionPending}
+            onSelectProject={handleQuickSelectProject}
+          />
         </div>
-        <div className="mt-6 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium text-muted-foreground">{RUANG_KERJA_LABEL}</p>
-            <div className="flex items-center gap-1">
-              {canonicalOrgId && canManageOrgStaff ? (
-                <Dialog
-                  open={orgStaffDialogOpen}
-                  onOpenChange={(open) => {
-                    setOrgStaffDialogOpen(open);
-                    if (open) setOrgStaffMsg(null);
-                  }}
-                >
-                  <DialogTrigger render={<Button size="sm" variant="outline" />}>
-                    + Tim inti
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Tambah tim inti organisasi</DialogTitle>
-                      <DialogDescription>
-                        Karyawan inti otomatis menjadi anggota{" "}
-                        <strong>member</strong> di semua {ruangKerjaLc} organisasi ini
-                        (bukan owner). Hire per {ruangKerjaLc} tetap lewat + Anggota
-                        pada {ruangKerjaLc} yang dipilih.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <form
-                      className="grid gap-3"
-                      action={(fd) => {
-                        if (!canonicalOrgId) return;
-                        setOrgStaffMsg(null);
-                        fd.set("organization_id", canonicalOrgId);
-                        startMemberTransition(async () => {
-                          const r = await addOrganizationStaffByEmailAction(fd);
-                          if (r.error) {
-                            setOrgStaffMsg(r.error);
-                            return;
-                          }
-                          setOrgStaffDialogOpen(false);
-                          router.refresh();
-                        });
-                      }}
-                    >
-                      <div className="space-y-1">
-                        <Label>Email user *</Label>
-                        <Input
-                          name="email"
-                          type="email"
-                          required
-                          placeholder="contoh: staff@domain.com"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label>Role organisasi</Label>
-                        <select
-                          name="role"
-                          defaultValue="staff"
-                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                        >
-                          <option value="staff">staff</option>
-                          <option value="admin">admin</option>
-                          <option value="owner">owner</option>
-                        </select>
-                      </div>
-                      <Button type="submit" disabled={memberPending}>
-                        Tambahkan ke organisasi
-                      </Button>
-                      {orgStaffMsg ? (
-                        <p className="text-xs text-red-600" role="alert">
-                          {orgStaffMsg}
-                        </p>
-                      ) : null}
-                    </form>
-                  </DialogContent>
-                </Dialog>
-              ) : null}
-              {selectedProjectId && canManageSelectedProject && (
-                <Dialog
-                  open={memberDialogOpen}
-                  onOpenChange={(open) => {
-                    setMemberDialogOpen(open);
-                    if (open) setMemberMsg(null);
-                  }}
-                >
-                  <DialogTrigger render={<Button size="sm" variant="outline" />}>
-                    + Anggota
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Tambah anggota {ruangKerjaLc}</DialogTitle>
-                      <DialogDescription>
-                        Tambahkan user ke {ruangKerjaLc}{" "}
-                        <span className="font-medium text-foreground">
-                          {selectedProject?.name ?? "aktif"}
-                        </span>{" "}
-                        berdasarkan email.{" "}
-                        {selectedProjectHasNoOwner ? (
-                          <>
-                            {RUANG_KERJA_LABEL} ini belum punya owner — Anda (anggota)
-                            dapat menambah anggota dan menetapkan role owner.
-                          </>
-                        ) : isOrgAdminOfCanonicalOrg ? (
-                          <>
-                            Sebagai admin organisasi Anda dapat mengelola anggota
-                            {ruangKerjaLc} ini.
-                          </>
-                        ) : (
-                          <>Hanya owner {ruangKerjaLc} atau admin organisasi yang dapat mengelola anggota.</>
-                        )}{" "}
-                        Email harus sudah punya akun di aplikasi (sudah daftar
-                        / login minimal sekali).
-                      </DialogDescription>
-                    </DialogHeader>
-                    <form
-                      className="grid gap-3"
-                      action={(fd) => {
-                        if (!selectedProjectId) return;
-                        setMemberMsg(null);
-                        fd.set("project_id", selectedProjectId);
-                        startMemberTransition(async () => {
-                          const r = await addProjectMemberByEmailAction(fd);
-                          if (r.error) {
-                            setMemberMsg(r.error);
-                            return;
-                          }
-                          setMemberDialogOpen(false);
-                          router.refresh();
-                        });
-                      }}
-                    >
-                      <div className="space-y-1">
-                        <Label>Email user *</Label>
-                        <Input
-                          name="email"
-                          type="email"
-                          required
-                          placeholder="contoh: user@domain.com"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label>Role</Label>
-                        <select
-                          name="role"
-                          defaultValue="member"
-                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                        >
-                          <option value="member">member</option>
-                          <option value="owner">owner</option>
-                        </select>
-                      </div>
-                      <Button type="submit" disabled={memberPending}>
-                        Tambahkan ke {ruangKerjaLc}
-                      </Button>
-                      {memberMsg && (
-                        <p className="text-xs text-red-600" role="alert">
-                          {memberMsg}
-                        </p>
-                      )}
-                    </form>
-                  </DialogContent>
-                </Dialog>
-              )}
-              {canonicalOrgId && hasOrgStaffAccess ? (
-                <Dialog
-                  open={projectDialogOpen}
-                  onOpenChange={(open) => {
-                    setProjectDialogOpen(open);
-                    if (open) setProjectMsg(null);
-                  }}
-                >
-                  <DialogTrigger render={<Button size="sm" variant="outline" />}>
-                    + {RUANG_KERJA_LABEL}
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Tambah {ruangKerjaLc}</DialogTitle>
-                      <DialogDescription>
-                        Buat {ruangKerjaLc} baru di organisasi aktif (Anda jadi owner).
-                        Ini bukan mengundang user: orang lain tidak otomatis
-                        masuk. Untuk menambahkan rekan ke {ruangKerjaLc} yang sudah ada,
-                        pilih {ruangKerjaLc} di sidebar lalu gunakan tombol + Anggota.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <form
-                      className="grid gap-3"
-                      action={(fd) => {
-                        if (!canonicalOrgId) return;
-                        setProjectMsg(null);
-                        fd.set("organization_id", canonicalOrgId);
-                        startTaskTransition(async () => {
-                          const r = await createProjectInOrganizationAction(fd);
-                          if (r.error) {
-                            setProjectMsg(r.error);
-                            return;
-                          }
-                          setProjectDialogOpen(false);
-                          router.refresh();
-                        });
-                      }}
-                    >
-                      <div className="space-y-1">
-                        <Label>Nama {ruangKerjaLc} *</Label>
-                        <Input name="project_name" required placeholder="Contoh: PLM Cirebon 2028" />
-                      </div>
-                      <div className="space-y-1">
-                        <Label>Kode {ruangKerjaLc} (opsional)</Label>
-                        <Input name="project_key" placeholder="PLM28" />
-                      </div>
-                      <div className="space-y-1">
-                        <Label>Deskripsi (opsional)</Label>
-                        <Textarea
-                          name="project_description"
-                          rows={3}
-                          placeholder={`Catatan singkat ${ruangKerjaLc}`}
-                        />
-                      </div>
-                      <Button type="submit" disabled={taskPending}>
-                        Buat {ruangKerjaLc}
-                      </Button>
-                      {projectMsg && (
-                        <p className="text-xs text-red-600" role="alert">
-                          {projectMsg}
-                        </p>
-                      )}
-                    </form>
-                  </DialogContent>
-                </Dialog>
-              ) : null}
-            </div>
-          </div>
-          {projectsInOrg.map((p) => {
-            const sidebarTree = sidebarProjectTrees.get(p.id);
-            if (!sidebarTree) return null;
-            const {
-              treeRowsForSidebar,
-              parentByIssueId,
-              sidebarParentIdsWithVisibleChildren,
-            } = sidebarTree;
-            const isSelectedProject =
-              selectedProjectId === p.id && !selectedTaskId;
-
-            return (
-              <div key={p.id} className="ml-2">
-                <div className="flex items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={workspaceActionPending}
-                    onClick={() => {
-                      if (p.id === selectedProjectId) {
-                        commitTaskSelection(null);
-                        return;
-                      }
-                      commitScopeInUrl((q) => {
-                        q.set("org", p.organization_id);
-                        q.set("project", p.id);
-                        q.delete("task");
-                      }, { syncView: false });
-                    }}
-                    className={`h-8 min-w-0 flex-1 justify-start gap-2 rounded-md px-3 text-left text-[0.95rem] font-medium ${
-                      isSelectedProject
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "bg-transparent text-sidebar-foreground hover:bg-sidebar-accent/70"
-                    }`}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                    <ProjectChatUnreadBadge projectId={p.id} />
-                  </Button>
-                  {userId && !isBelowMd ? (
-                    <SidebarProjectChatButton
-                      projectId={p.id}
-                      mentionOptions={workspaceChatMentionOptions}
-                      disabled={workspaceActionPending}
-                      onBeforeOpen={() => {
-                        if (p.id !== selectedProjectId) {
-                          commitScopeInUrl((q) => {
-                            q.set("org", p.organization_id);
-                            q.set("project", p.id);
-                            q.delete("task");
-                          }, { syncView: false });
-                        }
-                      }}
-                    />
-                  ) : null}
-                  {canDeleteProject(p.id) ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      className="h-8 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setProjectMsg(null);
-                        setProjectDeleteConfirm({
-                          projectId: p.id,
-                          name: p.name,
-                        });
-                      }}
-                      aria-label={`Hapus ${ruangKerjaLc} ${p.name}`}
-                      title={
-                        projectIdsWithOwner.has(p.id)
-                          ? `Hapus ${ruangKerjaLc} (owner)`
-                          : `Hapus ${ruangKerjaLc} (belum ada owner)`
-                      }
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="h-8 w-7 text-muted-foreground hover:bg-sidebar-accent"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setCollapsedProjectIds((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(p.id)) next.delete(p.id);
-                        else next.add(p.id);
-                        return next;
-                      });
-                    }}
-                    aria-label={collapsedProjectIds.has(p.id) ? `Expand ${ruangKerjaLc}` : `Collapse ${ruangKerjaLc}`}
-                  >
-                    <ChevronRight
-                      className={`h-3.5 w-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none ${
-                        collapsedProjectIds.has(p.id) ? "" : "rotate-90"
-                      }`}
-                    />
-                  </Button>
-                </div>
-                <div
-                  className={`overflow-hidden transition-[max-height] duration-300 ease-in-out motion-reduce:transition-none ${
-                    collapsedProjectIds.has(p.id) ? "max-h-0" : "max-h-[min(80vh,4000px)]"
-                  }`}
-                >
-                <ul className="ml-3 mt-1 flex flex-col gap-0 border-l border-sidebar-border/70 pl-2">
-                  {treeRowsForSidebar.map(({ issue: t, depth }) => {
-                    const isTask = selectedTaskId === t.id;
-                    const showChevron = sidebarParentIdsWithVisibleChildren.has(t.id);
-                    const isCollapsed = collapsedIssueIds.has(t.id);
-                    const rowExpanded = isSidebarIssueRowExpanded(
-                      t,
-                      parentByIssueId,
-                      collapsedIssueIds
-                    );
-                    return (
-                      <li
-                        key={t.id}
-                        style={{ paddingLeft: depth * 12 }}
-                        aria-hidden={!rowExpanded}
-                        className={`min-h-0 overflow-hidden transition-[max-height,opacity] duration-200 ease-out motion-reduce:transition-none ${
-                          rowExpanded
-                            ? "mb-0.5 max-h-40 opacity-100"
-                            : "pointer-events-none mb-0 max-h-0 opacity-0"
-                        }`}
-                      >
-                        <div className="flex items-center gap-1">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            disabled={workspaceActionPending}
-                            onClick={() => {
-                              if (p.id !== selectedProjectId) {
-                                commitScopeInUrl((q) => {
-                                  q.set("org", p.organization_id);
-                                  q.set("project", p.id);
-                                  q.set("task", t.id);
-                                }, { syncView: false });
-                              } else {
-                                commitTaskSelection(t.id);
-                              }
-                            }}
-                            className={`h-7 flex-1 justify-start rounded-md px-2 text-left text-[0.95rem] font-normal ${
-                              isTask
-                                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                                : "text-sidebar-foreground hover:bg-sidebar-accent/70"
-                            }`}
-                          >
-                            <span className="truncate">{t.title}</span>
-                          </Button>
-                          {showChevron ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              className="h-7 w-7 text-muted-foreground hover:bg-sidebar-accent"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setCollapsedIssueIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(t.id)) next.delete(t.id);
-                                  else next.add(t.id);
-                                  return next;
-                                });
-                              }}
-                              aria-label={isCollapsed ? "Expand" : "Collapse"}
-                            >
-                              <ChevronRight
-                                className={`h-3.5 w-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none ${
-                                  isCollapsed ? "" : "rotate-90"
-                                }`}
-                              />
-                            </Button>
-                          ) : null}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-                </div>
-              </div>
-            );
-          })}
           <Dialog
             open={projectDeleteConfirm !== null}
             onOpenChange={(open) => {
@@ -4622,88 +4133,305 @@ export function WorkspaceClient({
               )}
             </DialogContent>
           </Dialog>
-        </div>
-        {/* Panel pengaturan modul organisasi disembunyikan sementara saat fase pilot. */}
-
-        {/* --- Virtual (Custom) Tables: Organization Level --- */}
-        {canonicalOrgId && (
-          <div className="mt-4 border-t border-border pt-3">
-            <div className="mb-1 flex items-center justify-between px-1">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Tabel Organisasi
-              </p>
-              <button
-                type="button"
-                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => { setVtableCreateScope("organization"); setVtableCreateDialogOpen(true); }}
-                title="Buat tabel organisasi baru"
+          <Dialog
+            open={organizationDialogOpen}
+            onOpenChange={(open) => {
+              setOrganizationDialogOpen(open);
+              if (open) setOrganizationMsg(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Tambah organisasi baru</DialogTitle>
+                <DialogDescription>
+                  Buat organisasi baru beserta project pertamanya. Anda akan
+                  otomatis menjadi owner di project tersebut.
+                </DialogDescription>
+              </DialogHeader>
+              <form
+                className="grid gap-3"
+                action={(fd) => {
+                  setOrganizationMsg(null);
+                  startTaskTransition(async () => {
+                    const r = await createOrganizationProjectInlineAction(fd);
+                    if (r.error) {
+                      setOrganizationMsg(r.error);
+                      return;
+                    }
+                    if (r.organizationId && r.projectId) {
+                      commitScopeInUrl(
+                        (q) => {
+                          q.set("org", r.organizationId as string);
+                          q.set("project", r.projectId as string);
+                          q.delete("task");
+                        },
+                        { refresh: true, syncView: false }
+                      );
+                    }
+                    setOrganizationDialogOpen(false);
+                    router.refresh();
+                  });
+                }}
               >
-                + Baru
-              </button>
-            </div>
-            {vtablesForOrg.length === 0 ? (
-              <p className="px-1 text-xs text-muted-foreground italic">
-                Belum ada tabel organisasi.
-              </p>
-            ) : (
-              <ul className="space-y-0.5">
-                {vtablesForOrg.map((vt) => (
-                  <li key={vt.id}>
-                    <SidebarVirtualTableItem
-                      table={vt}
-                      activeVirtualTableSlug={
-                        isBelowMd ? activeVirtualTableSlug : tabelSelectedSlug
-                      }
-                      onSelect={() =>
-                        focusVirtualTable(vt.slug, { navigate: true })
-                      }
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {/* --- Virtual (Custom) Tables: Project Level --- */}
-        {selectedProjectId && (
-          <div className="mt-4 border-t border-border pt-3">
-            <div className="mb-1 flex items-center justify-between px-1">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Tabel {RUANG_KERJA_LABEL}
-              </p>
-              <button
-                type="button"
-                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => { setVtableCreateScope("project"); setVtableCreateDialogOpen(true); }}
-                title={`Buat tabel ${ruangKerjaLc} baru`}
+                <div className="space-y-1">
+                  <Label>Nama organisasi *</Label>
+                  <Input
+                    name="organization_name"
+                    required
+                    placeholder="Contoh: KJSB Cirebon"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Slug organisasi (opsional)</Label>
+                  <Input name="organization_slug" placeholder="kjsb-cirebon" />
+                </div>
+                <div className="space-y-1">
+                  <Label>Nama {ruangKerjaLc} pertama *</Label>
+                  <Input
+                    name="project_name"
+                    required
+                    placeholder="Contoh: PLM Cirebon 2028"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Kode {ruangKerjaLc} (opsional)</Label>
+                  <Input name="project_key" placeholder="PLM28" />
+                </div>
+                <div className="space-y-1">
+                  <Label>Deskripsi {ruangKerjaLc} (opsional)</Label>
+                  <Textarea
+                    name="project_description"
+                    rows={3}
+                    placeholder={`Catatan singkat ${ruangKerjaLc}`}
+                  />
+                </div>
+                <Button type="submit" disabled={taskPending}>
+                  Buat organisasi & {ruangKerjaLc}
+                </Button>
+                {organizationMsg && (
+                  <p className="text-xs text-red-600" role="alert">
+                    {organizationMsg}
+                  </p>
+                )}
+              </form>
+            </DialogContent>
+          </Dialog>
+          <Dialog
+            open={orgStaffDialogOpen}
+            onOpenChange={(open) => {
+              setOrgStaffDialogOpen(open);
+              if (open) setOrgStaffMsg(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Tambah tim inti organisasi</DialogTitle>
+                <DialogDescription>
+                  Karyawan inti otomatis menjadi anggota{" "}
+                  <strong>member</strong> di semua {ruangKerjaLc} organisasi ini
+                  (bukan owner). Hire per {ruangKerjaLc} tetap lewat menu
+                  tambah anggota pada {ruangKerjaLc} yang dipilih.
+                </DialogDescription>
+              </DialogHeader>
+              <form
+                className="grid gap-3"
+                action={(fd) => {
+                  if (!canonicalOrgId) return;
+                  setOrgStaffMsg(null);
+                  fd.set("organization_id", canonicalOrgId);
+                  startMemberTransition(async () => {
+                    const r = await addOrganizationStaffByEmailAction(fd);
+                    if (r.error) {
+                      setOrgStaffMsg(r.error);
+                      return;
+                    }
+                    setOrgStaffDialogOpen(false);
+                    router.refresh();
+                  });
+                }}
               >
-                + Baru
-              </button>
-            </div>
-            {vtablesForProject.length === 0 ? (
-              <p className="px-1 text-xs text-muted-foreground italic">
-                Belum ada tabel {ruangKerjaLc}.
-              </p>
-            ) : (
-              <ul className="space-y-0.5">
-                {vtablesForProject.map((vt) => (
-                  <li key={vt.id}>
-                    <SidebarVirtualTableItem
-                      table={vt}
-                      activeVirtualTableSlug={
-                        isBelowMd ? activeVirtualTableSlug : tabelSelectedSlug
-                      }
-                      onSelect={() =>
-                        focusVirtualTable(vt.slug, { navigate: true })
-                      }
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+                <div className="space-y-1">
+                  <Label>Email user *</Label>
+                  <Input
+                    name="email"
+                    type="email"
+                    required
+                    placeholder="contoh: staff@domain.com"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Role organisasi</Label>
+                  <select
+                    name="role"
+                    defaultValue="staff"
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  >
+                    <option value="staff">staff</option>
+                    <option value="admin">admin</option>
+                    <option value="owner">owner</option>
+                  </select>
+                </div>
+                <Button type="submit" disabled={memberPending}>
+                  Tambahkan ke organisasi
+                </Button>
+                {orgStaffMsg ? (
+                  <p className="text-xs text-red-600" role="alert">
+                    {orgStaffMsg}
+                  </p>
+                ) : null}
+              </form>
+            </DialogContent>
+          </Dialog>
+          <Dialog
+            open={memberDialogOpen}
+            onOpenChange={(open) => {
+              setMemberDialogOpen(open);
+              if (open) setMemberMsg(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Tambah anggota {ruangKerjaLc}</DialogTitle>
+                <DialogDescription>
+                  Tambahkan user ke {ruangKerjaLc}{" "}
+                  <span className="font-medium text-foreground">
+                    {selectedProject?.name ?? "aktif"}
+                  </span>{" "}
+                  berdasarkan email.{" "}
+                  {selectedProjectHasNoOwner ? (
+                    <>
+                      {RUANG_KERJA_LABEL} ini belum punya owner — Anda (anggota)
+                      dapat menambah anggota dan menetapkan role owner.
+                    </>
+                  ) : isOrgAdminOfCanonicalOrg ? (
+                    <>
+                      Sebagai admin organisasi Anda dapat mengelola anggota
+                      {ruangKerjaLc} ini.
+                    </>
+                  ) : (
+                    <>
+                      Hanya owner {ruangKerjaLc} atau admin organisasi yang
+                      dapat mengelola anggota.
+                    </>
+                  )}{" "}
+                  Email harus sudah punya akun di aplikasi (sudah daftar /
+                  login minimal sekali).
+                </DialogDescription>
+              </DialogHeader>
+              <form
+                className="grid gap-3"
+                action={(fd) => {
+                  if (!selectedProjectId) return;
+                  setMemberMsg(null);
+                  fd.set("project_id", selectedProjectId);
+                  startMemberTransition(async () => {
+                    const r = await addProjectMemberByEmailAction(fd);
+                    if (r.error) {
+                      setMemberMsg(r.error);
+                      return;
+                    }
+                    setMemberDialogOpen(false);
+                    router.refresh();
+                  });
+                }}
+              >
+                <div className="space-y-1">
+                  <Label>Email user *</Label>
+                  <Input
+                    name="email"
+                    type="email"
+                    required
+                    placeholder="contoh: user@domain.com"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Role</Label>
+                  <select
+                    name="role"
+                    defaultValue="member"
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  >
+                    <option value="member">member</option>
+                    <option value="owner">owner</option>
+                  </select>
+                </div>
+                <Button type="submit" disabled={memberPending}>
+                  Tambahkan ke {ruangKerjaLc}
+                </Button>
+                {memberMsg && (
+                  <p className="text-xs text-red-600" role="alert">
+                    {memberMsg}
+                  </p>
+                )}
+              </form>
+            </DialogContent>
+          </Dialog>
+          <Dialog
+            open={projectDialogOpen}
+            onOpenChange={(open) => {
+              setProjectDialogOpen(open);
+              if (open) setProjectMsg(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Tambah {ruangKerjaLc}</DialogTitle>
+                <DialogDescription>
+                  Buat {ruangKerjaLc} baru di organisasi aktif (Anda jadi owner).
+                  Ini bukan mengundang user: orang lain tidak otomatis masuk.
+                  Untuk menambahkan rekan ke {ruangKerjaLc} yang sudah ada,
+                  pilih {ruangKerjaLc} di sidebar lalu gunakan menu tambah
+                  anggota.
+                </DialogDescription>
+              </DialogHeader>
+              <form
+                className="grid gap-3"
+                action={(fd) => {
+                  if (!canonicalOrgId) return;
+                  setProjectMsg(null);
+                  fd.set("organization_id", canonicalOrgId);
+                  startTaskTransition(async () => {
+                    const r = await createProjectInOrganizationAction(fd);
+                    if (r.error) {
+                      setProjectMsg(r.error);
+                      return;
+                    }
+                    setProjectDialogOpen(false);
+                    router.refresh();
+                  });
+                }}
+              >
+                <div className="space-y-1">
+                  <Label>Nama {ruangKerjaLc} *</Label>
+                  <Input
+                    name="project_name"
+                    required
+                    placeholder="Contoh: PLM Cirebon 2028"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Kode {ruangKerjaLc} (opsional)</Label>
+                  <Input name="project_key" placeholder="PLM28" />
+                </div>
+                <div className="space-y-1">
+                  <Label>Deskripsi (opsional)</Label>
+                  <Textarea
+                    name="project_description"
+                    rows={3}
+                    placeholder={`Catatan singkat ${ruangKerjaLc}`}
+                  />
+                </div>
+                <Button type="submit" disabled={taskPending}>
+                  Buat {ruangKerjaLc}
+                </Button>
+                {projectMsg && (
+                  <p className="text-xs text-red-600" role="alert">
+                    {projectMsg}
+                  </p>
+                )}
+              </form>
+            </DialogContent>
+          </Dialog>
 
         <div className="mt-4 border-t border-border pt-3">
           <button
@@ -4758,7 +4486,13 @@ export function WorkspaceClient({
                   "inline-flex shrink-0 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted hover:opacity-100",
                   isBelowMd ? "h-11 w-11" : "h-5 w-5 hover:opacity-80"
                 )}
-                onClick={() => setIsSidebarCollapsed((v) => !v)}
+                onClick={() => {
+                  setIsSidebarCollapsed((v) => {
+                    const next = !v;
+                    if (!isBelowMd) saveWorkspaceSidebarCollapsed(next);
+                    return next;
+                  });
+                }}
                 title={isSidebarCollapsed ? "Buka sidebar" : "Tutup sidebar"}
                 aria-label={isSidebarCollapsed ? "Buka sidebar" : "Tutup sidebar"}
                 aria-expanded={!isSidebarCollapsed}
@@ -4998,11 +4732,6 @@ export function WorkspaceClient({
                     ? `${pilihRuangKerja()} dari menu scope di header untuk melihat dashboard.`
                     : `${pilihRuangKerja()} di sidebar untuk melihat dashboard.`}
                 </p>
-              ) : deferredPayloadLoading &&
-                viewNeedsDeferredPayload("Dashboard") ? (
-                <div className="mt-5 px-1" aria-busy aria-label="Memuat dashboard">
-                  <WorkspaceMobileListSkeleton count={5} variant="activity" />
-                </div>
               ) : (
                 <VirtualDashboardView
                   key={selectedProjectId}
@@ -5010,6 +4739,7 @@ export function WorkspaceClient({
                   projectName={selectedProject?.name ?? RUANG_KERJA_LABEL}
                   virtualTables={allAccessibleVtables}
                   virtualColumns={virtualColumns}
+                  memberNameByUserId={memberNameByUserId}
                   initialDashboard={
                     virtualDashboardsByProjectId[selectedProjectId] ?? null
                   }
@@ -5058,6 +4788,37 @@ export function WorkspaceClient({
               >
               {isBelowMd ? (
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pm-mobile-scroll">
+                  {(selectedProjectId ||
+                    (canonicalOrgId && hasOrgStaffAccess)) && (
+                    <div className="flex shrink-0 flex-wrap gap-2 border-b border-border px-3 py-2">
+                      {selectedProjectId ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setVtableCreateScope("project");
+                            setVtableCreateDialogOpen(true);
+                          }}
+                        >
+                          + Tabel {RUANG_KERJA_LABEL}
+                        </Button>
+                      ) : null}
+                      {canonicalOrgId && hasOrgStaffAccess ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setVtableCreateScope("organization");
+                            setVtableCreateDialogOpen(true);
+                          }}
+                        >
+                          + Tabel Organisasi
+                        </Button>
+                      ) : null}
+                    </div>
+                  )}
                   {canonicalOrgId && hasOrgStaffAccess && vtablesForOrg.length > 0 ? (
                     <VirtualTableMobileList
                       sectionTitle="Tabel Organisasi"
@@ -5078,15 +4839,13 @@ export function WorkspaceClient({
                     <p className="p-3 text-sm text-muted-foreground">
                       {!selectedProjectId && !canonicalOrgId
                         ? "Pilih organisasi dan ruang kerja untuk melihat tabel custom."
-                        : "Belum ada tabel custom pada scope ini."}
+                        : "Belum ada tabel custom pada scope ini. Gunakan tombol + di atas untuk membuat."}
                     </p>
                   ) : null}
                 </div>
-              ) : allAccessibleVtables.length === 0 ? (
+              ) : !canonicalOrgId && !selectedProjectId ? (
                 <p className="p-6 text-sm text-muted-foreground">
-                  {!selectedProjectId && !canonicalOrgId
-                    ? "Pilih organisasi dan ruang kerja untuk melihat tabel custom."
-                    : "Belum ada tabel custom pada scope ini."}
+                  Pilih organisasi dan ruang kerja untuk melihat tabel custom.
                 </p>
               ) : (
                 <WorkspaceTableBrowser
@@ -5108,6 +4867,16 @@ export function WorkspaceClient({
                   onSelectSlug={setTabelSelectedSlug}
                   onActivityChange={refreshActivityLogs}
                   entity360Profile={selectedEntity360Profile}
+                  canCreateProjectTable={Boolean(selectedProjectId)}
+                  canCreateOrgTable={Boolean(canonicalOrgId && hasOrgStaffAccess)}
+                  onCreateProjectTable={() => {
+                    setVtableCreateScope("project");
+                    setVtableCreateDialogOpen(true);
+                  }}
+                  onCreateOrgTable={() => {
+                    setVtableCreateScope("organization");
+                    setVtableCreateDialogOpen(true);
+                  }}
                 />
               )}
               </TabPanelKeepAlive>
@@ -5444,6 +5213,38 @@ export function WorkspaceClient({
         onOpenTable={handleActivitySheetOpenTable}
         onOpenRow={handleActivitySheetOpenRow}
         onOpenProject={handleActivitySheetOpenProject}
+      />
+
+      <WorkspaceCommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        organizations={orgsWithProjects}
+        projects={scopeProjectsForQuickAccess}
+        virtualTables={allAccessibleVtables}
+        onSelectOrganization={(orgId) => {
+          commitScopeInUrl(
+            (q) => {
+              q.set("org", orgId);
+              const first = projects
+                .filter((p) => p.organization_id === orgId)
+                .sort((a, b) => a.name.localeCompare(b.name))[0];
+              if (first) q.set("project", first.id);
+              else q.delete("project");
+              q.delete("task");
+            },
+            { refresh: true, syncView: false }
+          );
+        }}
+        onSelectProject={(projectId, organizationId) => {
+          commitScopeInUrl((q) => {
+            q.set("org", organizationId);
+            q.set("project", projectId);
+            q.delete("task");
+          }, { syncView: false });
+        }}
+        onSelectTable={(slug) => {
+          focusVirtualTable(slug, { navigate: true });
+        }}
       />
 
       {/* Create virtual table dialog */}

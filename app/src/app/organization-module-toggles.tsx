@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { setOrganizationModuleAction } from "./workspace-modules-actions";
 import type { ModuleRegistryRow, OrganizationModuleRow } from "./workspace-modules";
+import { moduleRegistryVisibleInUi } from "./workspace-modules";
+import { organizationHasLegacyModulesEnabled } from "@/lib/legacy-module-sunset";
 import { ruangKerjaLc } from "@/lib/product-labels";
 
 type Props = {
@@ -21,7 +23,18 @@ export function OrganizationModuleToggles({
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
 
-  const optional = moduleRegistry.filter((m) => !m.is_core);
+  const optional = moduleRegistry.filter((m) =>
+    moduleRegistryVisibleInUi(
+      m.module_code,
+      m.is_core,
+      organizationId,
+      organizationModules
+    )
+  );
+  const hasLegacyEnabled = organizationHasLegacyModulesEnabled(
+    organizationId,
+    organizationModules
+  );
 
   const isOn = (code: string) =>
     organizationModules.some(
@@ -47,7 +60,17 @@ export function OrganizationModuleToggles({
     });
   };
 
-  if (optional.length === 0) return null;
+  if (optional.length === 0) {
+    if (!hasLegacyEnabled) return null;
+    return (
+      <div className="mt-6 border-t border-slate-100 pt-4">
+        <p className="text-xs text-slate-500">
+          Modul legacy (Berkas, Keuangan) tidak tersedia untuk organisasi baru.
+          Gunakan tabel virtual di tab Data.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-6 border-t border-slate-100 pt-4">
@@ -55,9 +78,9 @@ export function OrganizationModuleToggles({
         Modul organisasi
       </p>
       <p className="mt-1 text-xs text-slate-500">
-        Anggota {ruangKerjaLc} di organisasi ini dapat mengaktifkan atau menonaktifkan
-        modul opsional (RPC aman — <code className="text-[11px]">core_pm</code>{" "}
-        tetap aktif).
+        Anggota {ruangKerjaLc} dapat mengaktifkan modul opsional (mis. Spasial).
+        Modul legacy (Berkas, Keuangan) hanya tampil jika sudah aktif — bisa
+        dimatikan, tidak bisa diaktifkan ulang.
       </p>
       <ul className="mt-2 space-y-2">
         {optional.map((m) => {
