@@ -87,26 +87,43 @@ export function WorkspaceRightPanel(props: Props) {
     );
   }
 
-  if (!panel) return null;
-
   const isDataKind =
-    panel.kind === "table-data" ||
-    panel.kind === "row-detail" ||
-    panel.kind === "entity-360";
+    panel != null &&
+    (panel.kind === "table-data" ||
+      panel.kind === "row-detail" ||
+      panel.kind === "entity-360");
   // Tab Obrolan (desktop): sembunyikan kind chat, hanya izinkan kind data.
-  if (props.chatTabActive && !isDataKind) return null;
+  const chatHidden = Boolean(props.chatTabActive && panel && !isDataKind);
+  const isOpen = panel != null && !chatHidden;
+
+  const widthClass =
+    panel?.kind === "table-data"
+      ? "w-[32rem] max-w-[46vw]"
+      : "w-[28rem] max-w-[40vw]";
 
   return (
-    <aside
+    <div
       className={cn(
-        "relative z-30 flex shrink-0 flex-col border-l border-border bg-card",
-        // Grid tabel butuh ruang lebih; detail baris + chat cukup w-96.
-        panel.kind === "table-data" ? "w-[32rem] max-w-[46vw]" : "w-[28rem] max-w-[40vw]"
+        "relative z-30 flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden bg-card transition-[width] duration-300 ease-in-out motion-reduce:transition-none",
+        isOpen ? cn(widthClass, "border-l border-border") : "w-0 border-transparent"
       )}
-      aria-label="Panel sisi kanan"
+      data-testid="workspace-right-panel"
+      data-panel-open={isOpen ? "true" : "false"}
     >
-      <WorkspaceRightPanelInner {...props} panel={panel} />
-    </aside>
+      <aside
+        className={cn(
+          "flex min-h-0 h-full min-w-0 flex-1 flex-col overflow-hidden",
+          widthClass
+        )}
+        aria-label="Panel sisi kanan"
+        aria-hidden={!isOpen}
+        inert={!isOpen ? true : undefined}
+      >
+        {panel && !chatHidden ? (
+          <WorkspaceRightPanelInner {...props} panel={panel} />
+        ) : null}
+      </aside>
+    </div>
   );
 }
 

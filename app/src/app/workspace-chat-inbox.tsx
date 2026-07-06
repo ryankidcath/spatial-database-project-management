@@ -43,7 +43,8 @@ import {
   resolveVirtualRowChatContextsBatchAction,
 } from "./chat-actions";
 import { ChatPanel } from "./chat-panel";
-import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
+import { WORKSPACE_TAB_LIST_HEADER_CLASS, WORKSPACE_RAIL_SECTION_LABEL_CLASS } from "./workspace-tab-list-header";
+import { WorkspaceRailListItem } from "./workspace-rail-list-item";
 import {
   useWorkspaceCollapsibleRail,
   WorkspaceCollapsibleRailShell,
@@ -114,6 +115,57 @@ function sortEntries(
     if (a.unreadCount !== b.unreadCount) return b.unreadCount - a.unreadCount;
     return a.title.localeCompare(b.title, "id");
   });
+}
+
+type ChatInboxSection = {
+  id: string;
+  label: string;
+  entries: ChatInboxEntry[];
+};
+
+const CHAT_INBOX_SECTIONS: {
+  id: string;
+  label: string;
+  match: (entry: ChatInboxEntry) => boolean;
+}[] = [
+  {
+    id: "organization",
+    label: "Organisasi",
+    match: (entry) => entry.kind === "organization",
+  },
+  {
+    id: "project",
+    label: RUANG_KERJA_LABEL,
+    match: (entry) => entry.kind === "project",
+  },
+  {
+    id: "table-project",
+    label: `Tabel ${RUANG_KERJA_LABEL}`,
+    match: (entry) =>
+      entry.kind === "virtual_table" && entry.projectId != null,
+  },
+  {
+    id: "table-org",
+    label: "Tabel Organisasi",
+    match: (entry) =>
+      entry.kind === "virtual_table" && entry.projectId == null,
+  },
+  {
+    id: "virtual_row",
+    label: "Baris data",
+    match: (entry) => entry.kind === "virtual_row",
+  },
+];
+
+function groupChatInboxEntries(
+  entries: ChatInboxEntry[],
+  mentionKeys: Set<string>
+): ChatInboxSection[] {
+  return CHAT_INBOX_SECTIONS.map((section) => ({
+    id: section.id,
+    label: section.label,
+    entries: sortEntries(entries.filter(section.match), mentionKeys),
+  })).filter((section) => section.entries.length > 0);
 }
 
 function entryMatchesRoomSearch(entry: ChatInboxEntry, query: string): boolean {
@@ -604,6 +656,14 @@ export function WorkspaceChatInbox({
     [entries, roomSearchQuery]
   );
 
+  const groupedSections = useMemo(
+    () => groupChatInboxEntries(filteredEntries, mentionKeys),
+    [filteredEntries, mentionKeys]
+  );
+
+  const showRowSectionLoading =
+    rowLoading && rowEntries.length === 0 && !roomSearchQuery.trim();
+
   const hasMoreRowEntries = rowEntries.length < rowTotalCount;
 
   const loadMoreRowEntries = useCallback(() => {
@@ -811,85 +871,94 @@ export function WorkspaceChatInbox({
     );
   }
 
-  const roomListItems = (
-    <>
-      {filteredEntries.map((entry) => {
-        const active = entry.key === selectedKey;
-        const hasUnreadMention = mentionKeys.has(entry.key);
-        const previewText =
-          formatInboxPreview(entry.lastMessagePreview) ?? "Belum ada pesan";
-        const previewLine = inboxPreviewLine(entry.lastMessagePreview);
-        const EntryIcon = inboxIconForKind(entry.kind);
-        return (
-          <li key={entry.key} className="min-w-0">
-            <button
-              type="button"
-              data-testid="chat-inbox-room"
-              onClick={() => selectEntry(entry)}
+  const renderInboxEntry = (entry: ChatInboxEntry) => {
+    const active = entry.key === selectedKey;
+    const hasUnreadMention = mentionKeys.has(entry.key);
+    const previewLine = inboxPreviewLine(entry.lastMessagePreview);
+    const EntryIcon = inboxIconForKind(entry.kind);
+    return (
+      <li key={entry.key} className="min-w-0">
+        <WorkspaceRailListItem
+          active={active}
+          onClick={() => selectEntry(entry)}
+          icon={
+            <EntryIcon
               className={cn(
-                "flex w-full min-h-[3.25rem] min-w-0 max-w-full items-start gap-3 overflow-hidden rounded-lg px-3 py-2.5 text-left transition-colors",
-                active ? "bg-primary/10" : "hover:bg-muted/60"
+                "size-4",
+                entry.unreadCount > 0
+                  ? "text-amber-600"
+                  : "text-muted-foreground"
               )}
-            >
-              <EntryIcon
-                className={cn(
-                  "mt-0.5 size-4 shrink-0",
-                  entry.unreadCount > 0
-                    ? "text-amber-600"
-                    : "text-muted-foreground"
-                )}
-                aria-hidden
-              />
-              <span className="min-w-0 flex-1 basis-0 overflow-hidden">
-                <span className="flex min-w-0 items-baseline justify-between gap-2 overflow-hidden">
-                  <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                    <span className="truncate text-sm font-medium text-foreground">
-                      {entry.title}
-                    </span>
-                    {hasUnreadMention ? (
-                      <span
-                        className="shrink-0 text-xs font-bold text-sky-600 dark:text-sky-400"
-                        aria-label="Anda disebut, belum dibaca"
-                        title="Anda disebut"
-                      >
-                        @
-                      </span>
-                    ) : null}
-                  </span>
-                  {entry.subtitle ? (
-                    <span className="max-w-[42%] shrink-0 truncate text-[11px] text-muted-foreground">
-                      {entry.subtitle}
-                    </span>
-                  ) : null}
-                </span>
-                <p
-                  className="mt-0.5 min-w-0 max-w-full truncate break-all text-xs text-muted-foreground"
-                  title={previewText}
-                >
-                  {previewLine}
-                </p>
+              aria-hidden
+            />
+          }
+          title={entry.title}
+          titleExtra={
+            hasUnreadMention ? (
+              <span
+                className="shrink-0 text-xs font-bold text-sky-600 dark:text-sky-400"
+                aria-label="Anda disebut, belum dibaca"
+                title="Anda disebut"
+              >
+                @
               </span>
-              {entry.unreadCount > 0 ? (
-                <span className="shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white tabular-nums">
-                  {entry.unreadCount > 99 ? "99+" : entry.unreadCount}
-                </span>
-              ) : null}
-            </button>
-          </li>
-        );
-      })}
-      {rowLoading && rowEntries.length === 0 ? (
-        <WorkspaceMobileListSkeleton count={5} variant="inbox" />
+            ) : null
+          }
+          meta={entry.subtitle}
+          subtitle={previewLine}
+          badge={
+            entry.unreadCount > 0 ? (
+              <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-white tabular-nums">
+                {entry.unreadCount > 99 ? "99+" : entry.unreadCount}
+              </span>
+            ) : null
+          }
+          testId="chat-inbox-room"
+        />
+      </li>
+    );
+  };
+
+  const roomListBody = (
+    <>
+      {groupedSections.map((section, sectionIndex) => (
+        <div key={section.id}>
+          <p
+            className={cn(
+              WORKSPACE_RAIL_SECTION_LABEL_CLASS,
+              sectionIndex > 0 && "pt-3"
+            )}
+          >
+            {section.label}
+          </p>
+          <ul className="min-w-0">{section.entries.map(renderInboxEntry)}</ul>
+        </div>
+      ))}
+
+      {showRowSectionLoading ? (
+        <div>
+          <p
+            className={cn(
+              WORKSPACE_RAIL_SECTION_LABEL_CLASS,
+              groupedSections.length > 0 && "pt-3"
+            )}
+          >
+            Baris data
+          </p>
+          <WorkspaceMobileListSkeleton count={5} variant="inbox" />
+        </div>
       ) : null}
+
       {!rowLoading && filteredEntries.length === 0 ? (
-        <li className="px-2 py-6 text-center text-sm text-muted-foreground">
+        <p className="px-2 py-6 text-center text-sm text-muted-foreground">
           {entries.length === 0
             ? "Belum ada room obrolan di scope ini."
             : "Tidak ada room yang cocok dengan pencarian."}
-        </li>
+        </p>
       ) : null}
+
       {hasMoreRowEntries && !roomSearchQuery.trim() ? (
-        <li className="px-2 py-2">
+        <div className="px-2 py-2">
           <button
             type="button"
             data-testid="chat-inbox-load-more"
@@ -911,7 +980,7 @@ export function WorkspaceChatInbox({
               `Muat lebih (${rowEntries.length} / ${rowTotalCount})`
             )}
           </button>
-        </li>
+        </div>
       ) : null}
     </>
   );
@@ -941,12 +1010,12 @@ export function WorkspaceChatInbox({
         </div>
       </div>
       {isBelowMd ? (
-        <ul className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
-          {roomListItems}
-        </ul>
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto pm-mobile-scroll p-2">
+          {roomListBody}
+        </div>
       ) : (
         <ScrollArea className="min-h-0 min-w-0 flex-1" type="scroll">
-          <ul className="min-w-0 p-2">{roomListItems}</ul>
+          <div className="p-2">{roomListBody}</div>
         </ScrollArea>
       )}
     </div>

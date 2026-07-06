@@ -44,6 +44,9 @@ import type { WorkspaceMapToolMode } from "@/lib/workspace-map-tool-types";
 export type SpatialLayerRow = {
   tableId: string;
   displayName: string;
+  /** Emoji ikon tabel virtual (selaras tab Data). */
+  tableIcon?: string | null;
+  description?: string | null;
   featureCount: number;
   totalFeatureCount?: number;
   filterActive?: boolean;
@@ -696,6 +699,8 @@ export function buildSpatialLayerRows(
     rows.push({
       tableId: vt.id,
       displayName: vt.display_name,
+      tableIcon: vt.icon ?? null,
+      description: vt.description ?? null,
       featureCount: shown,
       totalFeatureCount: total !== shown ? total : undefined,
       filterActive: filterActiveByTable[vt.id] ?? false,
@@ -714,6 +719,8 @@ export function buildSpatialLayerRows(
     rows.push({
       tableId: vt.id,
       displayName: vt.display_name,
+      tableIcon: vt.icon ?? null,
+      description: vt.description ?? null,
       featureCount: shown,
       totalFeatureCount: total !== shown ? total : undefined,
       filterActive: filterActiveByTable[vt.id] ?? false,

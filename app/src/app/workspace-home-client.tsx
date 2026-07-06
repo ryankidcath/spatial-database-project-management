@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { WorkspaceClient } from "./workspace-client";
 import { fetchWorkspaceShellAction } from "./fetch-workspace-shell-action";
 import {
@@ -8,6 +8,7 @@ import {
   setWorkspaceShellCache,
 } from "@/lib/workspace-shell-cache";
 import type { WorkspaceShellPayload } from "@/lib/workspace-shell-types";
+import { WorkspaceShellProvider } from "./workspace-shell-context";
 import RootLoading from "./loading";
 
 type Props = {
@@ -47,6 +48,23 @@ export function WorkspaceHomeClient({ joinError }: Props) {
     };
   }, []);
 
+  const refreshWorkspaceShell = useCallback(async () => {
+    setRevalidating(true);
+    try {
+      const res = await fetchWorkspaceShellAction();
+      if (res.data) {
+        setShell(res.data);
+        if (res.data.userId) {
+          setWorkspaceShellCache(res.data.userId, res.data);
+        }
+        return res.data;
+      }
+      return null;
+    } finally {
+      setRevalidating(false);
+    }
+  }, []);
+
   if (bootstrapping && !shell) {
     return <RootLoading />;
   }
@@ -68,7 +86,8 @@ export function WorkspaceHomeClient({ joinError }: Props) {
           </span>
         </div>
       ) : null}
-      <WorkspaceClient
+      <WorkspaceShellProvider refreshWorkspaceShell={refreshWorkspaceShell}>
+        <WorkspaceClient
         organizations={shell.organizations}
         projects={shell.projects}
         statuses={[]}
@@ -107,6 +126,7 @@ export function WorkspaceHomeClient({ joinError }: Props) {
         virtualDashboardsByProjectId={{}}
         joinError={joinError}
       />
+      </WorkspaceShellProvider>
     </>
   );
 }

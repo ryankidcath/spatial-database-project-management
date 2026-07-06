@@ -146,13 +146,37 @@ export function WorkspaceMapNorthArrow({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "pointer-events-none absolute top-2 z-[400] flex size-9 items-center justify-center rounded-md border border-border/80 bg-background/90 text-foreground shadow-sm backdrop-blur-sm",
+        "pointer-events-none absolute z-[400] flex size-10 items-center justify-center rounded-full border border-border/80 bg-background/95 shadow-sm backdrop-blur-sm",
         className
       )}
-      aria-hidden
+      role="img"
+      aria-label="Utara"
       title="Utara"
     >
-      <span className="text-xs font-bold leading-none">N</span>
+      <svg
+        viewBox="0 0 24 24"
+        className="size-7 text-foreground"
+        aria-hidden
+      >
+        <circle
+          cx="12"
+          cy="12"
+          r="10"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1"
+          className="text-border"
+        />
+        <path
+          d="M12 3 L14.8 13.5 L12 11.2 L9.2 13.5 Z"
+          className="fill-destructive"
+        />
+        <path
+          d="M12 21 L9.2 10.5 L12 12.8 L14.8 10.5 Z"
+          className="fill-muted-foreground/35"
+        />
+        <circle cx="12" cy="12" r="1.25" className="fill-foreground/80" />
+      </svg>
     </div>
   );
 }

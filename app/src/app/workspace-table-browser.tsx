@@ -12,12 +12,13 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { ruangKerjaLc } from "@/lib/product-labels";
-import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
+import { WORKSPACE_TAB_LIST_HEADER_CLASS, WORKSPACE_RAIL_SECTION_LABEL_CLASS } from "./workspace-tab-list-header";
 import {
   useWorkspaceCollapsibleRail,
   WorkspaceCollapsibleRailShell,
   WorkspaceRailToggleButton,
 } from "./workspace-collapsible-rail";
+import { WorkspaceRailListItem } from "./workspace-rail-list-item";
 import { VirtualTableView } from "./virtual-table-view";
 import type { VirtualColumnRow, VirtualTableRow } from "./virtual-table-types";
 import type { ProjectEntity360Profile } from "@/lib/project-entity-360-profile";
@@ -48,6 +49,7 @@ type Props = {
   canCreateOrgTable?: boolean;
   onCreateProjectTable?: () => void;
   onCreateOrgTable?: () => void;
+  onTableDeleted?: () => void | Promise<void>;
 };
 
 /**
@@ -76,6 +78,7 @@ export function WorkspaceTableBrowser({
   canCreateOrgTable = false,
   onCreateProjectTable,
   onCreateOrgTable,
+  onTableDeleted,
 }: Props) {
   const [search, setSearch] = useState("");
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
@@ -114,33 +117,20 @@ export function WorkspaceTableBrowser({
     const active = t.slug === effectiveSlug;
     return (
       <li key={t.id} className="min-w-0">
-        <button
-          type="button"
-          data-testid="table-browser-item"
+        <WorkspaceRailListItem
+          active={active}
           onClick={() => onSelectSlug(t.slug)}
-          className={cn(
-            "flex w-full min-w-0 items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-            active ? "bg-primary/10" : "hover:bg-muted/60"
-          )}
-        >
-          <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-            {t.icon ? (
+          icon={
+            t.icon ? (
               <span className="text-base leading-none">{t.icon}</span>
             ) : (
               <Table2 className="size-4" aria-hidden />
-            )}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium text-foreground">
-              {t.display_name}
-            </span>
-            {t.description ? (
-              <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                {t.description}
-              </span>
-            ) : null}
-          </span>
-        </button>
+            )
+          }
+          title={t.display_name}
+          subtitle={t.description}
+          testId="table-browser-item"
+        />
       </li>
     );
   };
@@ -217,7 +207,7 @@ export function WorkspaceTableBrowser({
         <div className="p-2">
           {filteredProject.length > 0 ? (
             <>
-              <p className="px-2 pb-1.5 pt-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <p className={WORKSPACE_RAIL_SECTION_LABEL_CLASS}>
                 Tabel {ruangKerjaLabel}
               </p>
               <ul className="min-w-0">{filteredProject.map(renderItem)}</ul>
@@ -225,7 +215,7 @@ export function WorkspaceTableBrowser({
           ) : null}
           {filteredOrg.length > 0 ? (
             <>
-              <p className="px-2 pb-1.5 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <p className={cn(WORKSPACE_RAIL_SECTION_LABEL_CLASS, "pt-3")}>
                 Tabel Organisasi
               </p>
               <ul className="min-w-0">{filteredOrg.map(renderItem)}</ul>
@@ -263,6 +253,7 @@ export function WorkspaceTableBrowser({
           virtualColumnsByTableId={virtualColumnsByTableId}
           fillHeight
           onActivityChange={onActivityChange}
+          onTableDeleted={onTableDeleted}
           entity360Profile={entity360Profile}
           headerLeading={
             rail.railEnabled ? (

@@ -204,7 +204,7 @@ type Props = {
   virtualColumnsByTableId?: Map<string, VirtualColumnRow[]>;
   /** Profil entitas 360° project (G-H4 / GQ-H5 find-on-map eksplisit). */
   entity360Profile?: ProjectEntity360Profile;
-  onTableDeleted?: () => void;
+  onTableDeleted?: () => void | Promise<void>;
   /** Setelah layer baru dari file (pindah ke tabel yang dibuat). */
   onLayerCreated?: (result: LayerUploadCreated) => void;
   /** `overlay` = sidebar full-screen; grid mengisi tinggi tanpa kotak max-h. */
@@ -1799,7 +1799,7 @@ export function VirtualTableView({
         toast.error(r.error);
       } else {
         setShowDeleteTable(false);
-        onTableDeleted?.();
+        await onTableDeleted?.();
         bumpActivity();
       }
       router.refresh();
@@ -5508,7 +5508,7 @@ type CreateDialogProps = {
   scope: "project" | "organization";
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated?: (tableId: string) => void;
+  onCreated?: (tableId: string) => void | Promise<void>;
 };
 
 export function VirtualTableCreateDialog({
@@ -5552,7 +5552,7 @@ export function VirtualTableCreateDialog({
         toast.error(r.error);
       } else {
         onOpenChange(false);
-        onCreated?.(r.tableId!);
+        await onCreated?.(r.tableId!);
         router.refresh();
       }
     });

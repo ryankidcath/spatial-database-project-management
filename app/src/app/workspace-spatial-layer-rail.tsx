@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { SpatialLayerGroup } from "@/lib/workspace-spatial-layer-layout-preference";
 import type { SpatialLayerSymbolStyle } from "@/lib/workspace-spatial-layer-style-preference";
-import { WORKSPACE_TAB_LIST_HEADER_CLASS } from "./workspace-tab-list-header";
+import { WORKSPACE_TAB_LIST_HEADER_CLASS, WORKSPACE_RAIL_SECTION_LABEL_CLASS } from "./workspace-tab-list-header";
 import { organizeSpatialLayerRows } from "./workspace-spatial-layer-organizer";
 import { WorkspaceSpatialLayerList } from "./workspace-spatial-layer-list";
 import type { SpatialLayerRow } from "./workspace-spatial-toolbar";
@@ -138,7 +138,8 @@ export function WorkspaceSpatialLayerRail({
           <Button
             type="button"
             variant="outline"
-            size="icon-sm"
+            size="icon"
+            className="size-10 shrink-0"
             onClick={onAddGroup}
             title="Grup lapisan baru"
             aria-label="Grup lapisan baru"
@@ -150,10 +151,11 @@ export function WorkspaceSpatialLayerRail({
       <ScrollArea className="min-h-0 min-w-0 flex-1" type="scroll">
         <div className="p-2">
           {layerRows.length > 0 || importPreviewCount > 0 ? (
-            <p className="px-2 pb-1.5 pt-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className={WORKSPACE_RAIL_SECTION_LABEL_CLASS}>
               Lapisan peta
               {query.length === 0 ? (
-                <span className="ml-1.5 font-normal normal-case tracking-normal">
+                <span className="font-normal normal-case tracking-normal text-muted-foreground">
+                  {" "}
                   · {visibleCount} aktif
                 </span>
               ) : null}
@@ -235,11 +237,12 @@ export function WorkspaceSpatialLayerRail({
 
           {onExternalLayerVisibilityChange && onExternalLayerOpacityChange ? (
             <>
-              <p className="px-2 pb-1.5 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <p className={cn(WORKSPACE_RAIL_SECTION_LABEL_CLASS, "pt-3")}>
                 Referensi eksternal
               </p>
               <WorkspaceSpatialExternalLayerList
                 layers={externalLayers}
+                variant="rail"
                 onVisibilityChange={onExternalLayerVisibilityChange}
                 onOpacityChange={onExternalLayerOpacityChange}
                 onZoomToLayer={onExternalLayerZoom}

@@ -158,6 +158,7 @@ import { WorkspaceMobileVirtualTableOverlay } from "./workspace-mobile-virtual-t
 import { WorkspaceMobileCompactHeader } from "./workspace-mobile-compact-header";
 import { WorkspaceChatInbox } from "./workspace-chat-inbox";
 import { WorkspaceTableBrowser } from "./workspace-table-browser";
+import { useWorkspaceShellRefresh } from "./workspace-shell-context";
 import { WorkspaceSpatialView } from "./workspace-spatial-view";
 import { WorkspaceSpatialDataSyncProvider } from "./workspace-spatial-data-sync-context";
 import {
@@ -2794,6 +2795,24 @@ export function WorkspaceClient({
     [vtablesForOrg, vtablesForProject]
   );
 
+  const refreshWorkspaceShell = useWorkspaceShellRefresh();
+
+  const pickDefaultTableSlug = useCallback(
+    (tables: VirtualTableRow[]) => {
+      const project = selectedProjectId
+        ? tables.filter((vt) => vt.project_id === selectedProjectId)
+        : [];
+      const org =
+        canonicalOrgId && hasOrgStaffAccess
+          ? tables.filter(
+              (vt) => vt.organization_id === canonicalOrgId && !vt.project_id
+            )
+          : [];
+      return [...project, ...org][0]?.slug ?? null;
+    },
+    [canonicalOrgId, selectedProjectId, hasOrgStaffAccess]
+  );
+
   useEffect(() => {
     if (!canonicalOrgId || !userId) return;
     if (projectsInOrg.length === 0 && !hasOrgStaffAccess) return;
@@ -3341,6 +3360,35 @@ export function WorkspaceClient({
     },
     [isBelowMd, handleActiveViewChange]
   );
+
+  const handleVirtualTableCreated = useCallback(
+    async (tableId: string) => {
+      const shell = await refreshWorkspaceShell();
+      const created = shell?.virtualTables.find((vt) => vt.id === tableId);
+      if (created) focusVirtualTable(created.slug, { navigate: true });
+    },
+    [refreshWorkspaceShell, focusVirtualTable]
+  );
+
+  const handleVirtualTableDeleted = useCallback(async () => {
+    const deletedSlug = tabelSelectedSlug ?? activeVirtualTableSlug;
+    const shell = await refreshWorkspaceShell();
+    const tables = shell?.virtualTables ?? [];
+    const nextSlug = pickDefaultTableSlug(tables);
+    setTabelSelectedSlug((prev) => {
+      const current = prev ?? deletedSlug;
+      if (current && tables.some((t) => t.slug === current)) return current;
+      return nextSlug;
+    });
+    if (deletedSlug && !tables.some((t) => t.slug === deletedSlug)) {
+      setActiveVirtualTableSlug(null);
+    }
+  }, [
+    tabelSelectedSlug,
+    activeVirtualTableSlug,
+    refreshWorkspaceShell,
+    pickDefaultTableSlug,
+  ]);
 
   useEffect(() => {
     if (Date.now() < viewChangeLockUntilRef.current) return;
@@ -4877,6 +4925,7 @@ export function WorkspaceClient({
                     setVtableCreateScope("organization");
                     setVtableCreateDialogOpen(true);
                   }}
+                  onTableDeleted={handleVirtualTableDeleted}
                 />
               )}
               </TabPanelKeepAlive>
@@ -5254,10 +5303,7 @@ export function WorkspaceClient({
         scope={vtableCreateScope}
         open={vtableCreateDialogOpen}
         onOpenChange={setVtableCreateDialogOpen}
-        onCreated={(tableId) => {
-          const created = virtualTables.find((vt) => vt.id === tableId);
-          if (created) focusVirtualTable(created.slug, { navigate: true });
-        }}
+        onCreated={handleVirtualTableCreated}
       />
       </div>
       )}

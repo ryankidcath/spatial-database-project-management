@@ -1402,7 +1402,8 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       <div
         ref={containerRef}
         className={cn(
-          "workspace-map-root h-full min-h-0 w-full min-w-0 rounded-md border border-slate-200 bg-slate-100",
+          "workspace-map-root h-full min-h-0 w-full min-w-0 border border-slate-200 bg-slate-100",
+          enableGisChrome ? "rounded-none" : "rounded-md",
           enableGisChrome && "workspace-map-root--gis",
           isBelowMd && "touch-manipulation"
         )}
