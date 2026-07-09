@@ -1,5 +1,7 @@
 import type { Geometry, Position } from "geojson";
+import type { LatLngPoint, LatLngSegment } from "@/lib/workspace-map-draw-bidang";
 import { asGeometry } from "@/lib/workspace-map-geo-utils";
+import { geometryKindFromStored } from "@/lib/workspace-map-translate-geom";
 
 export type MoveGeomVertexEdits = Record<
   number,
@@ -91,6 +93,29 @@ export function extractEditableVertexPositions(
   }
 
   return [];
+}
+
+/** Segmen sisi (poligon / LineString) dari geometri tersimpan. */
+export function extractEditableEdgeSegments(stored: unknown): LatLngSegment[] {
+  const kind = geometryKindFromStored(stored);
+  const verts = extractEditableVertexPositions(stored);
+  if (verts.length < 2) return [];
+  const out: LatLngSegment[] = [];
+  if (kind === "polygon") {
+    for (let i = 0; i < verts.length; i++) {
+      out.push({
+        a: verts[i]!,
+        b: verts[(i + 1) % verts.length]!,
+      });
+    }
+    return out;
+  }
+  if (kind === "linestring") {
+    for (let i = 0; i < verts.length - 1; i++) {
+      out.push({ a: verts[i]!, b: verts[i + 1]! });
+    }
+  }
+  return out;
 }
 
 export function supportsMoveGeomVertexEdit(stored: unknown): boolean {

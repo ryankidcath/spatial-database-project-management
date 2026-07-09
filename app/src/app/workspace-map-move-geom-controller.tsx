@@ -15,6 +15,10 @@ import {
   snapVertexToReferences,
 } from "@/lib/workspace-map-move-geom-snap";
 import {
+  drawMoveGeomSnapIndicators,
+  resolveMoveGeomSnapMatches,
+} from "@/lib/workspace-map-move-geom-snap-indicators";
+import {
   applyMoveGeomTransform,
   resolveRotationPivotOfStoredGeometry,
 } from "@/lib/workspace-map-transform-geom";
@@ -184,6 +188,7 @@ export function WorkspaceMapMoveGeomController({
 }: Props) {
   const previewGroupRef = useRef<L.LayerGroup | null>(null);
   const handlesGroupRef = useRef<L.LayerGroup | null>(null);
+  const snapIndicatorGroupRef = useRef<L.LayerGroup | null>(null);
   const translateDraggingRef = useRef(false);
   const rotateDraggingRef = useRef(false);
   const vertexDraggingRef = useRef(false);
@@ -476,15 +481,40 @@ export function WorkspaceMapMoveGeomController({
     }
   }, [map]);
 
+  const redrawSnapIndicators = useCallback(() => {
+    const group = snapIndicatorGroupRef.current;
+    const sel = selectionRef.current;
+    if (!group || !map || !sel || !snapEnabledRef.current) {
+      group?.clearLayers();
+      return;
+    }
+
+    const matches = resolveMoveGeomSnapMatches({
+      map,
+      selection: sel,
+      subMode: subModeRef.current,
+      deltaLng: deltaRef.current.dLng,
+      deltaLat: deltaRef.current.dLat,
+      rotationDeg: rotationRef.current,
+      rotationPivotVertexIndex: rotationPivotVertexIndexRef.current,
+      vertexEdits: vertexEditsRef.current,
+      referenceVertices: snapVertices(),
+      referenceSegments: snapSegments(),
+    });
+    drawMoveGeomSnapIndicators(group, matches);
+  }, [map, snapVertices, snapSegments]);
+
   const redrawAll = useCallback(() => {
     redrawPreview();
     redrawHandles();
-  }, [redrawPreview, redrawHandles]);
+    redrawSnapIndicators();
+  }, [redrawPreview, redrawHandles, redrawSnapIndicators]);
 
   useEffect(() => {
     if (!map || !active) {
       previewGroupRef.current?.clearLayers();
       handlesGroupRef.current?.clearLayers();
+      snapIndicatorGroupRef.current?.clearLayers();
       return;
     }
     if (!previewGroupRef.current) {
@@ -492,6 +522,9 @@ export function WorkspaceMapMoveGeomController({
     }
     if (!handlesGroupRef.current) {
       handlesGroupRef.current = L.layerGroup().addTo(map);
+    }
+    if (!snapIndicatorGroupRef.current) {
+      snapIndicatorGroupRef.current = L.layerGroup().addTo(map);
     }
     redrawAll();
   }, [
@@ -504,19 +537,20 @@ export function WorkspaceMapMoveGeomController({
     rotationPivotVertexIndex,
     vertexEdits,
     editSubMode,
+    snapEnabled,
     redrawAll,
   ]);
 
   useEffect(() => {
     if (!map || !active) return;
-    const onViewChange = () => redrawHandles();
+    const onViewChange = () => redrawAll();
     map.on("move", onViewChange);
     map.on("zoom", onViewChange);
     return () => {
       map.off("move", onViewChange);
       map.off("zoom", onViewChange);
     };
-  }, [map, active, redrawHandles]);
+  }, [map, active, redrawAll]);
 
   useEffect(() => {
     if (!map) return;
@@ -891,6 +925,10 @@ export function WorkspaceMapMoveGeomController({
       if (handlesGroupRef.current && map) {
         map.removeLayer(handlesGroupRef.current);
         handlesGroupRef.current = null;
+      }
+      if (snapIndicatorGroupRef.current && map) {
+        map.removeLayer(snapIndicatorGroupRef.current);
+        snapIndicatorGroupRef.current = null;
       }
     };
   }, [map, endDragSession]);
