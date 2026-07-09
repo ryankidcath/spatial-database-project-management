@@ -190,6 +190,12 @@ export function snapRotationDegToReferenceVertices(
   let bestDist = pixelTolerance;
 
   for (const mv of vertsAtProposed) {
+    if (
+      rotationPivotVertexIndex != null &&
+      mv.index === rotationPivotVertexIndex
+    ) {
+      continue;
+    }
     const mvPt = map.latLngToContainerPoint(L.latLng(mv.lat, mv.lng));
     for (const ref of referenceVertices) {
       const refPt = map.latLngToContainerPoint(L.latLng(ref.lat, ref.lng));
