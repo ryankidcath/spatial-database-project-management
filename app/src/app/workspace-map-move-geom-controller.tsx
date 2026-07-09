@@ -5,10 +5,13 @@ import L from "leaflet";
 import type { MapFootprint } from "./workspace-map";
 import {
   collectSnapVerticesFromFootprints,
-  DEFAULT_SNAP_PIXEL_TOLERANCE,
   type LatLngPoint,
 } from "@/lib/workspace-map-draw-bidang";
 import { pickVirtualTableFootprintAtPoint } from "@/lib/workspace-map-pick-footprint";
+import {
+  computeSnappedTranslateDelta,
+  snapVertexToReferences,
+} from "@/lib/workspace-map-move-geom-snap";
 import {
   applyMoveGeomTransform,
   centroidOfStoredGeometry,
@@ -58,26 +61,6 @@ type Props = {
   onDragStart?: () => void;
   onDragEnd?: () => void;
 };
-
-function snapLatLng(
-  map: L.Map,
-  latlng: L.LatLng,
-  vertices: LatLngPoint[]
-): L.LatLng {
-  if (vertices.length === 0) return latlng;
-  const clickPt = map.latLngToContainerPoint(latlng);
-  let best: LatLngPoint | null = null;
-  let bestDist = DEFAULT_SNAP_PIXEL_TOLERANCE;
-  for (const v of vertices) {
-    const pt = map.latLngToContainerPoint(L.latLng(v.lat, v.lng));
-    const d = Math.hypot(pt.x - clickPt.x, pt.y - clickPt.y);
-    if (d < bestDist) {
-      bestDist = d;
-      best = v;
-    }
-  }
-  return best ? L.latLng(best.lat, best.lng) : latlng;
-}
 
 function latLngFromClient(
   map: L.Map,
@@ -524,14 +507,16 @@ export function WorkspaceMapMoveGeomController({
     };
 
     const applyDragAtLatLng = (latlng: L.LatLng) => {
+      const refs = snapVertices();
+
       if (vertexDraggingRef.current) {
         const index = draggedVertexIndexRef.current;
         if (index == null) return;
-        let current = latlng;
+        let proposed: LatLngPoint = { lat: latlng.lat, lng: latlng.lng };
         if (snapEnabledRef.current) {
-          current = snapLatLng(map, current, snapVertices());
+          proposed = snapVertexToReferences(map, proposed, refs);
         }
-        onVertexEditChangeRef.current(index, current.lat, current.lng);
+        onVertexEditChangeRef.current(index, proposed.lat, proposed.lng);
         return;
       }
 
@@ -553,16 +538,32 @@ export function WorkspaceMapMoveGeomController({
       }
 
       if (!translateDraggingRef.current || !dragStartRef.current) return;
-      let current = latlng;
+      const sel = selectionRef.current;
+      if (!sel) return;
+
+      let dLat: number;
+      let dLng: number;
       if (snapEnabledRef.current) {
-        current = snapLatLng(map, current, snapVertices());
+        const snapped = computeSnappedTranslateDelta(
+          map,
+          sel,
+          sessionBaseRef.current,
+          dragStartRef.current,
+          latlng,
+          rotationRef.current,
+          vertexEditsRef.current,
+          refs
+        );
+        dLat = snapped.dLat;
+        dLng = snapped.dLng;
+      } else {
+        dLat =
+          sessionBaseRef.current.dLat +
+          (latlng.lat - dragStartRef.current.lat);
+        dLng =
+          sessionBaseRef.current.dLng +
+          (latlng.lng - dragStartRef.current.lng);
       }
-      const dLat =
-        sessionBaseRef.current.dLat +
-        (current.lat - dragStartRef.current.lat);
-      const dLng =
-        sessionBaseRef.current.dLng +
-        (current.lng - dragStartRef.current.lng);
       onDeltaChangeRef.current(dLat, dLng);
     };
 
