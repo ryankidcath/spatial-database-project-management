@@ -4,11 +4,13 @@ import { useCallback, useEffect, useRef } from "react";
 import L from "leaflet";
 import type { MapFootprint } from "./workspace-map";
 import {
+  collectSnapSegmentsFromFootprints,
   collectSnapVerticesFromFootprints,
   type LatLngPoint,
 } from "@/lib/workspace-map-draw-bidang";
 import { pickVirtualTableFootprintAtPoint } from "@/lib/workspace-map-pick-footprint";
 import {
+  computeSnappedRotationDeg,
   computeSnappedTranslateDelta,
   snapVertexToReferences,
 } from "@/lib/workspace-map-move-geom-snap";
@@ -330,6 +332,14 @@ export function WorkspaceMapMoveGeomController({
     return collectSnapVerticesFromFootprints(refs);
   }, []);
 
+  const snapSegments = useCallback(() => {
+    const excludeId = selectionRef.current?.footprintId;
+    const refs = snapFootprintsRef.current.filter(
+      (fp) => fp.id !== excludeId
+    );
+    return collectSnapSegmentsFromFootprints(refs);
+  }, []);
+
   const redrawPreview = useCallback(() => {
     const group = previewGroupRef.current;
     const sel = selectionRef.current;
@@ -632,11 +642,32 @@ export function WorkspaceMapMoveGeomController({
           rotationPivotVertexIndexRef.current
         );
         if (!pivot) return;
-        const currentAngle = angleDegFromPivot(map, pivot, latlng);
-        const deltaAngle = currentAngle - startAngleRef.current;
-        onRotationChangeRef.current(
-          sessionBaseRotationRef.current + deltaAngle
-        );
+
+        let rotationDeg: number;
+        if (snapEnabledRef.current) {
+          const geomAtSession = applyMoveGeomTransform(sel.originalGeojson, {
+            deltaLng: deltaRef.current.dLng,
+            deltaLat: deltaRef.current.dLat,
+            rotationDeg: sessionBaseRotationRef.current,
+            rotationPivotVertexIndex: rotationPivotVertexIndexRef.current,
+            vertexEdits: {},
+          });
+          rotationDeg = computeSnappedRotationDeg(
+            map,
+            { lat: pivot.lat, lng: pivot.lng },
+            { lat: latlng.lat, lng: latlng.lng },
+            sessionBaseRotationRef.current,
+            startAngleRef.current,
+            geomAtSession ?? sel.originalGeojson,
+            refs,
+            snapSegments()
+          );
+        } else {
+          const currentAngle = angleDegFromPivot(map, pivot, latlng);
+          const deltaAngle = currentAngle - startAngleRef.current;
+          rotationDeg = sessionBaseRotationRef.current + deltaAngle;
+        }
+        onRotationChangeRef.current(rotationDeg);
         return;
       }
 
@@ -801,7 +832,7 @@ export function WorkspaceMapMoveGeomController({
       endDragSession();
       map.getContainer().style.cursor = "";
     };
-  }, [map, active, beginDocumentDrag, endDragSession, snapVertices, selection, editSubMode]);
+  }, [map, active, beginDocumentDrag, endDragSession, snapVertices, snapSegments, selection, editSubMode]);
 
   useEffect(() => {
     return () => {
