@@ -4,20 +4,28 @@ import type { Geometry, Position } from "geojson";
 import { feature } from "@turf/helpers";
 import { asGeometry } from "@/lib/workspace-map-geo-utils";
 import {
+  applyVertexEditsToStored,
+  type MoveGeomVertexEdits,
+} from "@/lib/workspace-map-vertex-edit-geom";
+import {
   geometryKindFromStored,
   translateStoredGeometry,
 } from "@/lib/workspace-map-translate-geom";
+
+export type { MoveGeomVertexEdits };
 
 export type MoveGeomTransform = {
   deltaLng: number;
   deltaLat: number;
   rotationDeg: number;
+  vertexEdits: MoveGeomVertexEdits;
 };
 
 export const EMPTY_MOVE_GEOM_TRANSFORM: MoveGeomTransform = {
   deltaLng: 0,
   deltaLat: 0,
   rotationDeg: 0,
+  vertexEdits: {},
 };
 
 function storedToFeature(stored: unknown): GeoJSON.Feature | null {
@@ -90,12 +98,13 @@ export function applyMoveGeomTransform(
   stored: unknown,
   transform: MoveGeomTransform
 ): unknown | null {
-  const { deltaLng, deltaLat, rotationDeg } = transform;
+  const { deltaLng, deltaLat, rotationDeg, vertexEdits } = transform;
   const hasTranslate =
     Math.abs(deltaLng) > 1e-12 || Math.abs(deltaLat) > 1e-12;
   const hasRotate = Math.abs(rotationDeg) > 1e-12;
+  const hasVertexEdits = Object.keys(vertexEdits).length > 0;
 
-  if (!hasTranslate && !hasRotate) return stored;
+  if (!hasTranslate && !hasRotate && !hasVertexEdits) return stored;
 
   let current = stored;
   if (hasTranslate) {
@@ -103,12 +112,16 @@ export function applyMoveGeomTransform(
     if (!current) return null;
   }
 
-  if (!hasRotate) return current;
+  if (hasRotate) {
+    const pivot = centroidOfStoredGeometry(current);
+    if (!pivot) return current;
+    current = rotateStoredGeometry(current, rotationDeg, pivot);
+    if (!current) return null;
+  }
 
-  const pivot = centroidOfStoredGeometry(current);
-  if (!pivot) return current;
+  if (!hasVertexEdits) return current;
 
-  return rotateStoredGeometry(current, rotationDeg, pivot);
+  return applyVertexEditsToStored(current, vertexEdits);
 }
 
 /** Normalisasi sudut ke rentang (-180, 180]. */

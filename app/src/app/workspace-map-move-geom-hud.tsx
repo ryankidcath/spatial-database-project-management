@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { MoveGeomOverlapPreview } from "@/lib/workspace-map-move-geom-overlap";
 import { normalizeRotationDeg } from "@/lib/workspace-map-transform-geom";
 import { approximateTranslationMeters } from "@/lib/workspace-map-translate-geom";
+import { hasMoveGeomVertexEdits } from "@/lib/workspace-map-vertex-edit-geom";
 import type {
   MoveGeomDraftState,
   MoveGeomEditSubMode,
@@ -15,6 +16,7 @@ const OVERLAP_LIST_LIMIT = 3;
 type Props = {
   draft: MoveGeomDraftState;
   rotationSupported: boolean;
+  vertexEditSupported: boolean;
   overlapPreview: MoveGeomOverlapPreview;
   overlapRefreshing: boolean;
   snapEnabled: boolean;
@@ -31,6 +33,7 @@ type Props = {
 export function WorkspaceMapMoveGeomHud({
   draft,
   rotationSupported,
+  vertexEditSupported,
   overlapPreview,
   overlapRefreshing,
   snapEnabled,
@@ -43,16 +46,19 @@ export function WorkspaceMapMoveGeomHud({
   onSave,
   onCancel,
 }: Props) {
-  const { selection, deltaLat, deltaLng, rotationDeg, subMode } = draft;
+  const { selection, deltaLat, deltaLng, rotationDeg, vertexEdits, subMode } =
+    draft;
   const hasTranslate =
     Math.abs(deltaLat) > 1e-12 || Math.abs(deltaLng) > 1e-12;
   const hasRotation = Math.abs(rotationDeg) > 1e-12;
-  const hasChanges = hasTranslate || hasRotation;
+  const hasVertexEdits = hasMoveGeomVertexEdits(vertexEdits);
+  const hasChanges = hasTranslate || hasRotation || hasVertexEdits;
   const distM =
     selection && hasTranslate
       ? approximateTranslationMeters(deltaLat, deltaLng, atLat)
       : 0;
   const displayRotation = normalizeRotationDeg(rotationDeg);
+  const vertexEditCount = Object.keys(vertexEdits).length;
   const overlapHits = overlapPreview.hits;
   const extraOverlapCount = Math.max(0, overlapHits.length - OVERLAP_LIST_LIMIT);
 
@@ -64,8 +70,8 @@ export function WorkspaceMapMoveGeomHud({
       <p className="font-medium text-foreground">Edit geometri</p>
       {!selection ? (
         <p className="mt-1 text-xs text-muted-foreground">
-          Klik bidang, garis, atau titik di peta untuk memilih. Lalu geser atau
-          putar.
+          Klik bidang, garis, atau titik di peta. Lalu geser, putar, atau edit
+          sudut.
         </p>
       ) : (
         <>
@@ -105,6 +111,21 @@ export function WorkspaceMapMoveGeomHud({
             >
               Putar
             </button>
+            <button
+              type="button"
+              className={cn(
+                "flex-1 rounded px-2 py-1 text-xs transition-colors",
+                subMode === "vertex"
+                  ? "bg-muted font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+                !vertexEditSupported && "cursor-not-allowed opacity-50"
+              )}
+              disabled={!vertexEditSupported}
+              title="Geser satu vertex/sudut"
+              onClick={() => onSubModeChange("vertex")}
+            >
+              Sudut
+            </button>
           </div>
 
           {subMode === "translate" ? (
@@ -118,15 +139,31 @@ export function WorkspaceMapMoveGeomHud({
                 Drag fitur di peta untuk menggeser posisi.
               </p>
             )
-          ) : hasRotation ? (
+          ) : subMode === "rotate" ? (
+            hasRotation ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Putar {displayRotation.toFixed(1)}° — drag handle biru di peta.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Drag handle biru mengelilingi titik pusat untuk memutar.
+              </p>
+            )
+          ) : hasVertexEdits ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Putar {displayRotation.toFixed(1)}° — drag handle biru di peta.
+              {vertexEditCount} sudut disesuaikan — drag handle hijau di peta.
             </p>
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">
-              Drag handle biru mengelilingi titik pusat untuk memutar.
+              Drag handle hijau untuk menggeser satu sudut/vertex.
             </p>
           )}
+
+          {subMode === "translate" && hasVertexEdits ? (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Geser/putar mengatur ulang edit sudut.
+            </p>
+          ) : null}
 
           {overlapRefreshing ? (
             <p className="mt-2 text-xs text-muted-foreground">
@@ -179,7 +216,7 @@ export function WorkspaceMapMoveGeomHud({
         />
         Snap ke vertex lapisan referensi
         {subMode === "rotate" ? (
-          <span className="text-muted-foreground">(hanya mode Geser)</span>
+          <span className="text-muted-foreground">(hanya Geser/Sudut)</span>
         ) : null}
       </label>
 

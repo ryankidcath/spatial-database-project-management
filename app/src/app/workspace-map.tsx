@@ -956,11 +956,14 @@ export type WorkspaceMapProps = {
   moveGeomDeltaLat?: number;
   moveGeomDeltaLng?: number;
   moveGeomRotationDeg?: number;
+  moveGeomVertexEdits?: import("@/lib/workspace-map-vertex-edit-geom").MoveGeomVertexEdits;
   moveGeomRotationSupported?: boolean;
+  moveGeomVertexEditSupported?: boolean;
   moveGeomHideFootprintId?: string | null;
   onMoveGeomSelect?: (selection: MoveGeomSelection) => void;
   onMoveGeomDeltaChange?: (deltaLat: number, deltaLng: number) => void;
   onMoveGeomRotationChange?: (rotationDeg: number) => void;
+  onMoveGeomVertexEditChange?: (index: number, lat: number, lng: number) => void;
   onMoveGeomSubModeChange?: (mode: MoveGeomEditSubMode) => void;
   onMoveGeomDragStart?: () => void;
   onMoveGeomDragEnd?: () => void;
@@ -1023,11 +1026,14 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       moveGeomDeltaLat = 0,
       moveGeomDeltaLng = 0,
       moveGeomRotationDeg = 0,
+      moveGeomVertexEdits = {},
       moveGeomRotationSupported = false,
+      moveGeomVertexEditSupported = false,
       moveGeomHideFootprintId = null,
       onMoveGeomSelect,
       onMoveGeomDeltaChange,
       onMoveGeomRotationChange,
+      onMoveGeomVertexEditChange,
       onMoveGeomSubModeChange,
       onMoveGeomDragStart,
       onMoveGeomDragEnd,
@@ -1655,12 +1661,17 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           deltaLat={moveGeomDeltaLat}
           deltaLng={moveGeomDeltaLng}
           rotationDeg={moveGeomRotationDeg}
+          vertexEdits={moveGeomVertexEdits}
           rotationSupported={moveGeomRotationSupported}
+          vertexEditSupported={moveGeomVertexEditSupported}
           onSelect={onMoveGeomSelect ?? (() => {})}
           onDeltaChange={(dLat, dLng) =>
             onMoveGeomDeltaChange?.(dLat, dLng)
           }
           onRotationChange={(deg) => onMoveGeomRotationChange?.(deg)}
+          onVertexEditChange={(index, lat, lng) =>
+            onMoveGeomVertexEditChange?.(index, lat, lng)
+          }
           onDragStart={onMoveGeomDragStart}
           onDragEnd={onMoveGeomDragEnd}
         />
