@@ -161,7 +161,7 @@ Alur: scan → saran default (A+B) → UI mapping editable → pratinjau → bat
 
 - [x] Ekstrak POINT dari DXF (parser + mode impor POINT di dialog DXF virtual table)
 - [x] Ekstrak LineString terbuka dari DXF
-- [ ] Heuristik layer + geometri (alias nama layer)
+- [x] Heuristik layer + geometri (alias nama layer) — `dxf-layer-classification.ts`
 - [ ] UI mapping layer/geom → tabel target + pratinjau
 - [ ] Server action impor DXF split multi-tabel
 - [ ] Wizard Spasial «DXF → pisah layer»
@@ -201,4 +201,4 @@ Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 F
 
 ---
 
-*Terakhir diperbarui: Fase 8 dicatat (edit geom + referensi ATLAS/BPN); Fase 7 DXF split.*
+*Terakhir diperbarui: Fase 7 — heuristik klasifikasi layer CAD (`dxf-layer-classification.ts`); Fase 8 tetap rencana.*

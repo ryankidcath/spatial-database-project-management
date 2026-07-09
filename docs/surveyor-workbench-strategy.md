@@ -1,7 +1,7 @@
 # Strategi: Spatial PM sebagai satu-satunya workbench surveyor
 
 Dokumen keputusan produk & organisasi — **bukan** panduan teknis impor.  
-Diperbarui: 2026-07-08 (Fase 8 + referensi ATLAS/BPN dicatat).
+Diperbarui: 2026-07-09 (Fase 7: heuristik klasifikasi layer CAD).
 
 **Terkait:** `[spatial-import-roadmap.md](./spatial-import-roadmap.md)`, `[workspace-spatial-gis-roadmap.md](./workspace-spatial-gis-roadmap.md)` §11, `[spatial-import-user-guide.md](./spatial-import-user-guide.md)`.
 
@@ -288,7 +288,7 @@ Unggah DXF
 
 - [x] **Ekstrak POINT** dari DXF (parser + mode impor POINT di dialog DXF virtual table)
 - [x] **Ekstrak LineString** terbuka (garis yang tidak dipaksa jadi poligon)
-- [ ] **Heuristik klasifikasi** — alias nama layer + aturan topologi geometri
+- [x] **Heuristik klasifikasi** — alias nama layer + aturan topologi geometri (`dxf-layer-classification.ts`)
 - [ ] **UI mapping** — per baris layer (atau layer+geom): target = Bidang / Jalan / Saluran / Titik / lewati
 - [ ] **Pratinjau** — hitung entitas per kelompok; peta warna berbeda per tabel tujuan
 - [ ] **Kunci otomatis** — `no_bidang`, `no_garis`, label `T1…` (editable batch sebelum simpan)
@@ -303,11 +303,13 @@ Unggah DXF
 - **Jalan vs Saluran:** tidak bisa 100% otomatis — user pilih di mapping (heuristik bisa default «Jalan»).
 - **Tidak full-otomatis tanpa konfirmasi:** selalu ada langkah review mapping + pratinjau sebelum simpan.
 
-**Kode yang akan disentuh (indikatif):** `dxf-import-utils.ts` (POINT, LineString), `virtual-table-dxf-import.ts`, `bootstrapVirtualTableWorkbenchLayerAction`, wizard Spasial, action batch baru.
+**Kode yang akan disentuh (indikatif):** `dxf-import-utils.ts` (POINT, LineString), `dxf-layer-classification.ts` (heuristik A+B), `virtual-table-dxf-import.ts`, `bootstrapVirtualTableWorkbenchLayerAction`, wizard Spasial, action batch baru.
 
-**Status fase:** `[ ]` belum dimulai (2026-07-08).
+**Kode heuristik (selesai):** `classifyDxfDocument` / `classifyDxfLayer` / `matchDxfLayerAlias` / `scanDxfLayerGeometry` — saran target `bidang` | `jalan` | `saluran` | `titik` | `skip`; layer campuran → `splitGroups` per jenis geom; polygonize loop → Bidang + sisa garis → Jalan; konflik alias vs geom → ikuti geom + confidence rendah.
 
-**Estimasi MVP:** ~1,5–2 minggu dev (ekstrak geom + action batch + wizard mapping).
+**Status fase:** `[~]` berjalan (2026-07-09) — ekstrak POINT/LineString + heuristik klasifikasi selesai; UI mapping / wizard / batch impor belum.
+
+**Estimasi sisa MVP:** UI mapping + pratinjau + action batch + wizard (tanpa mengulang ekstrak/heuristik).
 
 ---
 
