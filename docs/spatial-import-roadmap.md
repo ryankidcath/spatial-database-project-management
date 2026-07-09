@@ -176,7 +176,7 @@ Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 F
 **8A — Edit geometri di peta**
 
 - [x] Alat geser (translasi) poligon/garis/titik + snap ke vertex lapisan aktif
-- [ ] Integrasi QC overlap saat koreksi
+- [x] Integrasi QC overlap saat koreksi — pratinjau + sorot lapisan referensi setelah lepas drag
 - [ ] (Opsional) rotasi / edit vertex
 
 **8B — Referensi persil BPN + ATLAS**
@@ -201,4 +201,4 @@ Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 F
 
 ---
 
-*Terakhir diperbarui: Fase 7 — heuristik klasifikasi layer CAD (`dxf-layer-classification.ts`); Fase 8 tetap rencana.*
+*Terakhir diperbarui: Fase 8A — geser geometri + pratinjau overlap QC; Fase 7 MVP selesai.*

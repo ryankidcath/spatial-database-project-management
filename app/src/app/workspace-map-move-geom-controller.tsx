@@ -26,6 +26,8 @@ type Props = {
   deltaLng: number;
   onSelect: (selection: MoveGeomSelection) => void;
   onDeltaChange: (deltaLat: number, deltaLng: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 };
 
 function snapLatLng(
@@ -77,6 +79,8 @@ export function WorkspaceMapMoveGeomController({
   deltaLng,
   onSelect,
   onDeltaChange,
+  onDragStart,
+  onDragEnd,
 }: Props) {
   const previewGroupRef = useRef<L.LayerGroup | null>(null);
   const draggingRef = useRef(false);
@@ -181,6 +185,7 @@ export function WorkspaceMapMoveGeomController({
       dragStartRef.current = e.latlng;
       sessionBaseRef.current = { ...deltaRef.current };
       map.dragging.disable();
+      onDragStart?.();
       L.DomEvent.stopPropagation(e);
     };
 
@@ -204,6 +209,7 @@ export function WorkspaceMapMoveGeomController({
       draggingRef.current = false;
       dragStartRef.current = null;
       map.dragging.enable();
+      onDragEnd?.();
     };
 
     map.on("click", onMapClick);
@@ -230,6 +236,8 @@ export function WorkspaceMapMoveGeomController({
     selection,
     onSelect,
     onDeltaChange,
+    onDragStart,
+    onDragEnd,
   ]);
 
   useEffect(() => {

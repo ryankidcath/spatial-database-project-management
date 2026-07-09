@@ -70,6 +70,10 @@ import { buildMapAttributeRows } from "@/lib/workspace-map-attribute-rows";
 import type { MapAttributeRow } from "@/lib/workspace-map-attribute-rows";
 import { filterFootprintsByTableId } from "@/lib/workspace-map-bounds";
 import { computeImportOverlapFootprintIds } from "@/lib/workspace-map-import-diff";
+import {
+  computeMoveGeomOverlapPreview,
+  type MoveGeomOverlapPreview,
+} from "@/lib/workspace-map-move-geom-overlap";
 import type { WorkspaceBasemapId } from "@/lib/workspace-map-basemaps";
 import type {
   CoordinateDisplayMode,
@@ -300,6 +304,14 @@ export function WorkspaceSpatialView({
   const [moveGeomSnap, setMoveGeomSnap] = useState(true);
   const [moveGeomSavePending, startMoveGeomSave] = useTransition();
   const [moveGeomMessage, setMoveGeomMessage] = useState<string | null>(null);
+  const [moveGeomDragging, setMoveGeomDragging] = useState(false);
+  const [moveGeomOverlapPreview, setMoveGeomOverlapPreview] =
+    useState<MoveGeomOverlapPreview>({
+      hits: [],
+      highlightFootprintIds: [],
+      isClean: true,
+      supportsAreaOverlap: false,
+    });
   const [leafletMap, setLeafletMap] = useState<LeafletMap | null>(null);
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [desktopPrefs, setDesktopPrefs] = useState<SpatialDesktopPrefs>(() =>
@@ -816,6 +828,14 @@ export function WorkspaceSpatialView({
     [analysisHighlightIds]
   );
 
+  const moveGeomOverlapFootprintIds = useMemo(
+    () =>
+      toolMode === "move-geom"
+        ? new Set(moveGeomOverlapPreview.highlightFootprintIds)
+        : new Set<string>(),
+    [toolMode, moveGeomOverlapPreview.highlightFootprintIds]
+  );
+
   const handleTableLayerVisibilityChange = useCallback(
     (tableId: string, visible: boolean) => {
       setTableLayerVisibility((prev) => {
@@ -1037,6 +1057,13 @@ export function WorkspaceSpatialView({
     if (mode !== "move-geom") {
       setMoveGeomDraft({ selection: null, deltaLat: 0, deltaLng: 0 });
       setMoveGeomMessage(null);
+      setMoveGeomDragging(false);
+      setMoveGeomOverlapPreview({
+        hits: [],
+        highlightFootprintIds: [],
+        isClean: true,
+        supportsAreaOverlap: false,
+      });
     }
     if (mode !== "draw-bidang" && mode !== "draw-garis") {
       setClearDrawSignal((n) => n + 1);
@@ -1061,6 +1088,38 @@ export function WorkspaceSpatialView({
 
   const handleMoveGeomResetDelta = useCallback(() => {
     setMoveGeomDraft((prev) => ({ ...prev, deltaLat: 0, deltaLng: 0 }));
+  }, []);
+
+  const refreshMoveGeomOverlapPreview = useCallback(() => {
+    setMoveGeomOverlapPreview(
+      computeMoveGeomOverlapPreview(
+        moveGeomDraft.selection,
+        moveGeomDraft.deltaLat,
+        moveGeomDraft.deltaLng,
+        visibleMapLayers
+      )
+    );
+  }, [moveGeomDraft, visibleMapLayers]);
+
+  useEffect(() => {
+    if (toolMode !== "move-geom" || moveGeomDragging) return;
+    refreshMoveGeomOverlapPreview();
+  }, [
+    toolMode,
+    moveGeomDragging,
+    moveGeomDraft.selection,
+    moveGeomDraft.deltaLat,
+    moveGeomDraft.deltaLng,
+    visibleMapLayers,
+    refreshMoveGeomOverlapPreview,
+  ]);
+
+  const handleMoveGeomDragStart = useCallback(() => {
+    setMoveGeomDragging(true);
+  }, []);
+
+  const handleMoveGeomDragEnd = useCallback(() => {
+    setMoveGeomDragging(false);
   }, []);
 
   const handleMoveGeomSave = useCallback(() => {
@@ -1763,6 +1822,7 @@ export function WorkspaceSpatialView({
               enableGisChrome
               toolMode={toolMode}
               importOverlapFootprintIds={importOverlapFootprintIds}
+              moveGeomOverlapFootprintIds={moveGeomOverlapFootprintIds}
               analysisHighlightFootprintIds={analysisHighlightFootprintIds}
               identifyFootprints={visibleMapLayers}
               onIdentifyResults={handleIdentifyResults}
@@ -1794,6 +1854,8 @@ export function WorkspaceSpatialView({
               moveGeomHideFootprintId={moveGeomDraft.selection?.footprintId ?? null}
               onMoveGeomSelect={handleMoveGeomSelect}
               onMoveGeomDeltaChange={handleMoveGeomDeltaChange}
+              onMoveGeomDragStart={handleMoveGeomDragStart}
+              onMoveGeomDragEnd={handleMoveGeomDragEnd}
               coordinateDisplay={coordinateDisplay}
               onCoordinateDisplayToggle={handleCoordinateDisplayToggle}
               onMapReady={handleMapReady}
@@ -1914,6 +1976,8 @@ export function WorkspaceSpatialView({
             {toolMode === "move-geom" ? (
               <WorkspaceMapMoveGeomHud
                 draft={moveGeomDraft}
+                overlapPreview={moveGeomOverlapPreview}
+                overlapRefreshing={moveGeomDragging}
                 snapEnabled={moveGeomSnap}
                 savePending={moveGeomSavePending}
                 atLat={mapStatusState.lat}

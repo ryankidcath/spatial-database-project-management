@@ -1,7 +1,7 @@
 # Strategi: Spatial PM sebagai satu-satunya workbench surveyor
 
 Dokumen keputusan produk & organisasi — **bukan** panduan teknis impor.  
-Diperbarui: 2026-07-09 (Fase 7: heuristik klasifikasi layer CAD).
+Diperbarui: 2026-07-09 (Fase 8A: pratinjau overlap saat geser geometri).
 
 **Terkait:** `[spatial-import-roadmap.md](./spatial-import-roadmap.md)`, `[workspace-spatial-gis-roadmap.md](./workspace-spatial-gis-roadmap.md)` §11, `[spatial-import-user-guide.md](./spatial-import-user-guide.md)`.
 
@@ -346,14 +346,14 @@ Bidang hasil ukur + lapisan «Persil BPN» aktif
 
 - [x] Mode alat **Geser geometri** — pilih baris/lapisan, drag translasi di peta (`move-geom`, `workspace-map-move-geom-controller.tsx`, `updateVirtualRowGeometryAction`)
 - [x] **Snap** ke vertex lapisan referensi aktif (termasuk titik lapangan) saat geser — opsi di HUD
-- [ ] **Pratinjau overlap** real-time (atau refresh setelah lepas drag)
+- [x] **Pratinjau overlap** — sorot lapisan referensi yang bertabrakan; refresh setelah lepas drag (`workspace-map-move-geom-overlap.ts`, HUD geser geometri)
 - [x] Simpan ke kolom `geom` tabel virtual (WGS84); `emitVirtualTableRowsMutated`
 - [ ] (Opsional v1.1) Rotasi handle; edit vertex satu per satu
 - [ ] Panduan: kapan geser di Portal vs tetap di CAD (busur presisi, layout cetak)
 
 **Kode yang akan disentuh (indikatif):** `workspace-map.tsx`, lib transform geometri (Turf `transformTranslate` / `transformRotate`), alat Spasial baru, server action update geom.
 
-**Status fase:** `[~]` berjalan (2026-07-09) — alat Geser geometri + persist; snap overlap QC & rotasi belum.
+**Status fase:** `[~]` berjalan (2026-07-09) — geser geometri + snap + pratinjau overlap; rotasi & panduan belum.
 
 #### Fase 8B — Referensi persil BPN (file unduhan + ATLAS)
 

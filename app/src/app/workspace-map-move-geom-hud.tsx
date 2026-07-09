@@ -2,10 +2,15 @@
 
 import { Button } from "@/components/ui/button";
 import { approximateTranslationMeters } from "@/lib/workspace-map-translate-geom";
+import type { MoveGeomOverlapPreview } from "@/lib/workspace-map-move-geom-overlap";
 import type { MoveGeomDraftState } from "@/lib/workspace-map-tool-types";
+
+const OVERLAP_LIST_LIMIT = 3;
 
 type Props = {
   draft: MoveGeomDraftState;
+  overlapPreview: MoveGeomOverlapPreview;
+  overlapRefreshing: boolean;
   snapEnabled: boolean;
   savePending: boolean;
   atLat: number;
@@ -18,6 +23,8 @@ type Props = {
 
 export function WorkspaceMapMoveGeomHud({
   draft,
+  overlapPreview,
+  overlapRefreshing,
   snapEnabled,
   savePending,
   atLat,
@@ -33,6 +40,8 @@ export function WorkspaceMapMoveGeomHud({
     selection && hasDelta
       ? approximateTranslationMeters(deltaLat, deltaLng, atLat)
       : 0;
+  const overlapHits = overlapPreview.hits;
+  const extraOverlapCount = Math.max(0, overlapHits.length - OVERLAP_LIST_LIMIT);
 
   return (
     <div
@@ -60,6 +69,45 @@ export function WorkspaceMapMoveGeomHud({
               Drag fitur di peta untuk menggeser posisi.
             </p>
           )}
+          {overlapRefreshing ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Memperbarui pratinjau overlap…
+            </p>
+          ) : selection ? (
+            <div className="mt-2 rounded-md border border-border/80 bg-muted/30 px-2 py-1.5">
+              {overlapPreview.isClean ? (
+                <p className="text-xs text-emerald-700 dark:text-emerald-400">
+                  Tidak ada overlap dengan lapisan lain.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs font-medium text-destructive">
+                    {overlapHits.length} overlap dengan lapisan lain
+                  </p>
+                  <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                    {overlapHits.slice(0, OVERLAP_LIST_LIMIT).map((hit) => (
+                      <li key={hit.footprintId} className="truncate">
+                        {hit.label}
+                        {hit.overlapAreaSqM != null
+                          ? ` · ~${hit.overlapAreaSqM.toFixed(1)} m²`
+                          : null}
+                      </li>
+                    ))}
+                  </ul>
+                  {extraOverlapCount > 0 ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      +{extraOverlapCount} lainnya (disorot di peta)
+                    </p>
+                  ) : null}
+                  {!overlapPreview.supportsAreaOverlap ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Garis/titik: deteksi irisan geometri saja (tanpa luas m²).
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
         </>
       )}
 
@@ -98,6 +146,11 @@ export function WorkspaceMapMoveGeomHud({
               size="sm"
               disabled={!hasDelta || savePending}
               onClick={onSave}
+              title={
+                !overlapPreview.isClean
+                  ? "Masih ada overlap — geser lagi atau simpan jika disengaja"
+                  : undefined
+              }
             >
               {savePending ? "Menyimpan…" : "Simpan"}
             </Button>

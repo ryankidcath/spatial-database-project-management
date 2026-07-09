@@ -795,10 +795,11 @@ function polygonStyle(
   highlightVirtualRowIds: ReadonlySet<string> | undefined,
   layerOpacity: number,
   isImportOverlap: boolean,
+  isMoveGeomOverlap: boolean,
   isAnalysisHighlight: boolean,
   customSymbol?: SpatialLayerSymbolStyle
 ): L.PathOptions {
-  if (isImportOverlap) {
+  if (isImportOverlap || isMoveGeomOverlap) {
     return {
       color: "#dc2626",
       fillColor: "#f87171",
@@ -927,6 +928,7 @@ export type WorkspaceMapProps = {
   enableGisChrome?: boolean;
   toolMode?: WorkspaceMapToolMode;
   importOverlapFootprintIds?: ReadonlySet<string>;
+  moveGeomOverlapFootprintIds?: ReadonlySet<string>;
   analysisHighlightFootprintIds?: ReadonlySet<string>;
   identifyFootprints?: MapFootprint[];
   onIdentifyResults?: (hits: MapIdentifyHit[], lat: number, lng: number) => void;
@@ -954,6 +956,8 @@ export type WorkspaceMapProps = {
   moveGeomHideFootprintId?: string | null;
   onMoveGeomSelect?: (selection: MoveGeomSelection) => void;
   onMoveGeomDeltaChange?: (deltaLat: number, deltaLng: number) => void;
+  onMoveGeomDragStart?: () => void;
+  onMoveGeomDragEnd?: () => void;
   coordinateDisplay?: CoordinateDisplayMode;
   onCoordinateDisplayToggle?: () => void;
   onMapReady?: (map: L.Map | null) => void;
@@ -986,6 +990,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       enableGisChrome = false,
       toolMode = "navigate",
       importOverlapFootprintIds,
+      moveGeomOverlapFootprintIds,
       analysisHighlightFootprintIds,
       identifyFootprints,
       onIdentifyResults,
@@ -1013,6 +1018,8 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       moveGeomHideFootprintId = null,
       onMoveGeomSelect,
       onMoveGeomDeltaChange,
+      onMoveGeomDragStart,
+      onMoveGeomDragEnd,
       coordinateDisplay = "latlng",
       onCoordinateDisplayToggle,
       onMapReady,
@@ -1399,6 +1406,8 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       );
       const isImportOverlap =
         importOverlapFootprintIds?.has(fp.id) ?? false;
+      const isMoveGeomOverlap =
+        moveGeomOverlapFootprintIds?.has(fp.id) ?? false;
       const isAnalysisHighlight =
         analysisHighlightFootprintIds?.has(fp.id) ?? false;
       const customSymbol =
@@ -1430,6 +1439,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
               highlightVirtualRowIds,
               fpOpacity,
               isImportOverlap,
+              isMoveGeomOverlap,
               isAnalysisHighlight,
               customSymbol
             ),
@@ -1534,6 +1544,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
     toolMode,
     moveGeomHideFootprintId,
     importOverlapFootprintIds,
+    moveGeomOverlapFootprintIds,
     analysisHighlightFootprintIds,
   ]);
 
@@ -1635,6 +1646,8 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           onDeltaChange={(dLat, dLng) =>
             onMoveGeomDeltaChange?.(dLat, dLng)
           }
+          onDragStart={onMoveGeomDragStart}
+          onDragEnd={onMoveGeomDragEnd}
         />
       ) : null}
       {mapInstance && enableGisChrome ? (
