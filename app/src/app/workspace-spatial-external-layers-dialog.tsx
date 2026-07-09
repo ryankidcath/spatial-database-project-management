@@ -279,11 +279,13 @@ export function WorkspaceSpatialExternalLayersDialog({
                   />
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  Contoh uji: URL{" "}
+                  Contoh uji (Indonesia): URL{" "}
                   <code className="rounded bg-muted px-1">
-                    demo.geo-solutions.it/geoserver/wms
+                    ows.terrestris.de/osm/service
                   </code>{" "}
-                  · layer <code className="rounded bg-muted px-1">topp:states</code>
+                  · layer <code className="rounded bg-muted px-1">OSM-WMS</code>
+                  . Server demo GeoServer publik sering memblokir permintaan
+                  (403).
                 </p>
               </>
             ) : null}

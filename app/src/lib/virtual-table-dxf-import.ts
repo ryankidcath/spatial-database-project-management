@@ -1,5 +1,9 @@
-import type { LinearRing } from "@/lib/dxf-import-utils";
-import { reprojectLinearRingTo4326 } from "@/lib/crs-reproject";
+import type { DxfLinePath, DxfPoint, LinearRing } from "@/lib/dxf-import-utils";
+import {
+  reprojectDxfLinePathTo4326,
+  reprojectDxfPointTo4326,
+  reprojectLinearRingTo4326,
+} from "@/lib/crs-reproject";
 
 /** Opsi SRID yang didukung pratinjau & impor DXF ke virtual table (WGS84 di payload). */
 export const VIRTUAL_TABLE_DXF_SOURCE_SRID_OPTIONS: Array<{
@@ -91,6 +95,96 @@ export function buildVirtualTableDxfFeatureCollection(
       geometry: {
         type: "Polygon",
         coordinates: [ll.map(([lng, lat]) => [lng, lat])],
+      },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/** FeatureCollection WGS84 untuk impor POINT DXF (satu point = satu feature). */
+export function buildVirtualTableDxfPointFeatureCollection(
+  points: DxfPoint[],
+  matchKeys: string[],
+  labels: (string | null)[],
+  matchColumnSlug: string,
+  layerName: string,
+  sourceEpsg: number
+): GeoJSON.FeatureCollection {
+  const slug = matchColumnSlug.trim();
+  if (!slug) {
+    throw new Error("match_column_slug kosong");
+  }
+  const features: GeoJSON.Feature[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const pt = points[i]!;
+    const matchKey = matchKeys[i]!.trim();
+    if (!matchKey) {
+      throw new Error(`Point #${i + 1}: kunci pencocokan kosong`);
+    }
+    const [lng, lat] = reprojectDxfPointTo4326(pt, sourceEpsg);
+    const customLabel = labels[i];
+    const displayLabel =
+      customLabel != null && customLabel.trim() !== ""
+        ? customLabel.trim()
+        : `DXF ${layerName} POINT #${i + 1}`;
+    const properties: Record<string, unknown> = {
+      [slug]: matchKey,
+      label: displayLabel,
+      source: "dxf",
+      dxf_layer: layerName,
+      dxf_point_index: i + 1,
+    };
+    features.push({
+      type: "Feature",
+      properties,
+      geometry: {
+        type: "Point",
+        coordinates: [lng, lat],
+      },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/** FeatureCollection WGS84 untuk impor LineString DXF (satu garis = satu feature). */
+export function buildVirtualTableDxfLineStringFeatureCollection(
+  paths: DxfLinePath[],
+  matchKeys: string[],
+  labels: (string | null)[],
+  matchColumnSlug: string,
+  layerName: string,
+  sourceEpsg: number
+): GeoJSON.FeatureCollection {
+  const slug = matchColumnSlug.trim();
+  if (!slug) {
+    throw new Error("match_column_slug kosong");
+  }
+  const features: GeoJSON.Feature[] = [];
+  for (let i = 0; i < paths.length; i++) {
+    const path = paths[i]!;
+    const matchKey = matchKeys[i]!.trim();
+    if (!matchKey) {
+      throw new Error(`Garis #${i + 1}: kunci pencocokan kosong`);
+    }
+    const ll = reprojectDxfLinePathTo4326(path, sourceEpsg);
+    const customLabel = labels[i];
+    const displayLabel =
+      customLabel != null && customLabel.trim() !== ""
+        ? customLabel.trim()
+        : `DXF ${layerName} LINE #${i + 1}`;
+    const properties: Record<string, unknown> = {
+      [slug]: matchKey,
+      label: displayLabel,
+      source: "dxf",
+      dxf_layer: layerName,
+      dxf_line_index: i + 1,
+    };
+    features.push({
+      type: "Feature",
+      properties,
+      geometry: {
+        type: "LineString",
+        coordinates: ll.map(([lng, lat]) => [lng, lat]),
       },
     });
   }

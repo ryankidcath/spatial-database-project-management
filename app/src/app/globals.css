@@ -208,6 +208,20 @@
   white-space: nowrap !important;
 }
 
+.workspace-map-survey-point-label {
+  background: color-mix(in srgb, #1d4ed8 92%, transparent) !important;
+  border: 1px solid #1e40af !important;
+  border-radius: 4px !important;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 18%) !important;
+  color: #fff !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  line-height: 1.1 !important;
+  padding: 2px 6px !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+}
+
 .workspace-map-relation-trace-tip {
   background: #fff7ed !important;
   border: 1px solid #fdba74 !important;
@@ -241,6 +255,20 @@
 
 .workspace-map-graticule-label--lng {
   transform: translate(-50%, -100%) translateY(-4px);
+}
+
+/* Indikator snap vertex (kotak seperti OSNAP CAD/GIS) saat gambar bidang. */
+.workspace-map-snap-indicator {
+  background: transparent !important;
+  border: none !important;
+}
+.workspace-map-snap-indicator__box {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #1d4ed8;
+  background: rgba(59, 130, 246, 0.22);
+  box-sizing: border-box;
+  box-shadow: 0 0 0 1px #fff;
 }
 
 /* Radix ScrollArea: scrollbar di atas isi viewport + fade opacity (hindari konflik utility). */

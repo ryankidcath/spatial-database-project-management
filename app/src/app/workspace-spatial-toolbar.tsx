@@ -15,8 +15,10 @@ import {
   Map as MapIcon,
   Maximize2,
   MoreHorizontal,
+  PencilLine,
   Pentagon,
   Ruler,
+  Spline,
   Tag,
   Upload,
   WifiOff,
@@ -83,6 +85,8 @@ type Props = {
   hasMapBookmark: boolean;
   toolMode: WorkspaceMapToolMode;
   onToolModeChange: (mode: WorkspaceMapToolMode) => void;
+  canDrawBidang?: boolean;
+  canDrawGaris?: boolean;
   onOpenGoToDialog: () => void;
   importOverlapCount?: number;
   filterSyncEnabled?: boolean;
@@ -134,6 +138,8 @@ export function WorkspaceSpatialToolbar({
   hasMapBookmark,
   toolMode,
   onToolModeChange,
+  canDrawBidang = true,
+  canDrawGaris = true,
   onOpenGoToDialog,
   importOverlapCount = 0,
   filterSyncEnabled = true,
@@ -394,7 +400,51 @@ export function WorkspaceSpatialToolbar({
             </button>
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted"
+              className={cn(
+                "flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm hover:bg-muted",
+                toolMode === "draw-bidang" && "bg-muted font-medium"
+              )}
+              disabled={!canDrawBidang}
+              title={
+                canDrawBidang
+                  ? undefined
+                  : "Buat tabel ber-geometri dulu untuk menyimpan bidang"
+              }
+              onClick={() => {
+                onToolModeChange(
+                  toolMode === "draw-bidang" ? "navigate" : "draw-bidang"
+                );
+                setToolsOpen(false);
+              }}
+            >
+              <PencilLine className="size-4 shrink-0" aria-hidden />
+              Gambar bidang
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm hover:bg-muted",
+                toolMode === "draw-garis" && "bg-muted font-medium"
+              )}
+              disabled={!canDrawGaris}
+              title={
+                canDrawGaris
+                  ? undefined
+                  : "Buat tabel ber-geometri dulu untuk menyimpan garis"
+              }
+              onClick={() => {
+                onToolModeChange(
+                  toolMode === "draw-garis" ? "navigate" : "draw-garis"
+                );
+                setToolsOpen(false);
+              }}
+            >
+              <Spline className="size-4 shrink-0" aria-hidden />
+              Gambar garis
+            </button>
+            <button
+              type="button"
+              className="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm hover:bg-muted"
               onClick={() => {
                 onOpenGoToDialog();
                 setToolsOpen(false);

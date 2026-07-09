@@ -4,7 +4,19 @@ export type WorkspaceMapToolMode =
   | "navigate"
   | "measure-line"
   | "measure-area"
-  | "identify";
+  | "identify"
+  | "draw-bidang"
+  | "draw-garis";
+
+export type DrawBidangDraftState = {
+  pointCount: number;
+  closed: boolean;
+};
+
+export type DrawLineDraftState = {
+  pointCount: number;
+  finished: boolean;
+};
 
 export type MapIdentifyHit = {
   footprintId: string;

@@ -4,6 +4,7 @@ import {
   pickMapRowTitle,
   type VirtualColumnForMapPopup,
 } from "@/lib/virtual-table-map-popup";
+import { SURVEY_POINT_NAMA_SLUG } from "@/lib/virtual-table-survey-points-bootstrap";
 import type { MapFootprint } from "@/app/workspace-map";
 import type {
   VirtualColumnRow,
@@ -47,12 +48,16 @@ export function buildVirtualTableRowFootprints(args: {
 
   for (const row of rows) {
     const payload = row.payload ?? {};
-    const rowTitle = pickMapRowTitle(
-      payload,
-      tableCols,
-      relationLabels,
-      row.id
-    );
+    const namaTitik = payload[SURVEY_POINT_NAMA_SLUG];
+    const rowTitle =
+      typeof namaTitik === "string" && namaTitik.trim()
+        ? namaTitik.trim()
+        : pickMapRowTitle(
+            payload,
+            tableCols,
+            relationLabels,
+            row.id
+          );
     const chatPathSegments = buildChatRowPathSegments({
       projectName,
       tableDisplayName: table.display_name,

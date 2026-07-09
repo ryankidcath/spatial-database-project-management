@@ -18,13 +18,21 @@ import { Spinner } from "@/components/ui/spinner";
 import { RelationTargetPickerDialog } from "@/components/relation-target-picker-dialog";
 import { cn } from "@/lib/utils";
 import {
-  extractClosedPolygonRingsFromDxfLayer,
+  buildDxfPolygonizeOptionsFromForm,
+  defaultSnapToleranceForSrid,
+  extractOpenLineStringsFromDxfLayer,
+  extractPointsFromDxfLayer,
+  extractPolygonRingsFromDxfLayer,
   featureKeysForDxfPolygons,
   listDxfLayerNames,
   parseDxfDocument,
+  type DxfGeometryExtractionMode,
+  type DxfLinePath,
   type LinearRing,
 } from "@/lib/dxf-import-utils";
 import {
+  dxfLinePathsToWgs84PreviewFeatureCollection,
+  dxfPointsToWgs84PreviewFeatureCollection,
   dxfRingsToWgs84PreviewFeatureCollection,
   isPreviewSourceSridSupported,
 } from "@/lib/crs-reproject";
@@ -98,7 +106,22 @@ export function VirtualTableDxfImportDialog({
   const [dxfLabels, setDxfLabels] = useState<string[]>([]);
   const [dxfBulkKeyText, setDxfBulkKeyText] = useState("");
   const [dxfBulkKeyHint, setDxfBulkKeyHint] = useState<string | null>(null);
+  const [dxfGeometryType, setDxfGeometryType] = useState<
+    "polygon" | "point" | "linestring"
+  >("polygon");
+  const [dxfGeometryMode, setDxfGeometryMode] =
+    useState<DxfGeometryExtractionMode>("polygonize");
+  const [dxfSnapTolerance, setDxfSnapTolerance] = useState("");
+  const [dxfPolygonizeHint, setDxfPolygonizeHint] = useState<string | null>(
+    null
+  );
   const [dxfPreviewRings, setDxfPreviewRings] = useState<LinearRing[]>([]);
+  const [dxfPreviewPoints, setDxfPreviewPoints] = useState<[number, number][]>(
+    []
+  );
+  const [dxfPreviewLinePaths, setDxfPreviewLinePaths] = useState<DxfLinePath[]>(
+    []
+  );
   const [dxfHighlightRow, setDxfHighlightRow] = useState<number | null>(null);
   const [dxfError, setDxfError] = useState<string | null>(null);
   const [sourceSrid, setSourceSrid] = useState("4326");
@@ -197,7 +220,13 @@ export function VirtualTableDxfImportDialog({
     setDxfLabels([]);
     setDxfBulkKeyText("");
     setDxfBulkKeyHint(null);
+    setDxfGeometryType("polygon");
+    setDxfGeometryMode("polygonize");
+    setDxfSnapTolerance("");
+    setDxfPolygonizeHint(null);
     setDxfPreviewRings([]);
+    setDxfPreviewPoints([]);
+    setDxfPreviewLinePaths([]);
     setDxfHighlightRow(null);
     setDxfError(null);
     setSourceSrid("4326");
@@ -231,7 +260,13 @@ export function VirtualTableDxfImportDialog({
   }, [dxfPolygonCount, dxfLayer, dxfKeyPrefix]);
 
   const dxfPreviewFeatureCollection = useMemo(() => {
-    if (dxfPreviewRings.length === 0) {
+    if (dxfGeometryType === "polygon" && dxfPreviewRings.length === 0) {
+      return { fc: null as GeoJSON.FeatureCollection | null, err: null as string | null };
+    }
+    if (dxfGeometryType === "point" && dxfPreviewPoints.length === 0) {
+      return { fc: null as GeoJSON.FeatureCollection | null, err: null as string | null };
+    }
+    if (dxfGeometryType === "linestring" && dxfPreviewLinePaths.length === 0) {
       return { fc: null as GeoJSON.FeatureCollection | null, err: null as string | null };
     }
     const srid = Number.parseInt(sourceSrid.trim(), 10);
@@ -242,7 +277,15 @@ export function VirtualTableDxfImportDialog({
       };
     }
     try {
-      const fc = dxfRingsToWgs84PreviewFeatureCollection(dxfPreviewRings, srid);
+      const fc =
+        dxfGeometryType === "point"
+          ? dxfPointsToWgs84PreviewFeatureCollection(dxfPreviewPoints, srid)
+          : dxfGeometryType === "linestring"
+            ? dxfLinePathsToWgs84PreviewFeatureCollection(
+                dxfPreviewLinePaths,
+                srid
+              )
+            : dxfRingsToWgs84PreviewFeatureCollection(dxfPreviewRings, srid);
       return { fc, err: null };
     } catch (e) {
       return {
@@ -253,7 +296,90 @@ export function VirtualTableDxfImportDialog({
             : "Gagal memproyeksikan koordinat untuk pratinjau.",
       };
     }
-  }, [dxfPreviewRings, sourceSrid]);
+  }, [dxfGeometryType, dxfPreviewPoints, dxfPreviewLinePaths, dxfPreviewRings, sourceSrid]);
+
+  const applyDxfLayerExtraction = useCallback(
+    (dxf: IDxf, layer: string, raw: string, mode: DxfGeometryExtractionMode) => {
+      if (dxfGeometryType === "point") {
+        const points = extractPointsFromDxfLayer(dxf, layer);
+        setDxfPolygonCount(points.length);
+        setDxfPreviewPoints(points);
+        setDxfPreviewRings([]);
+        setDxfPreviewLinePaths([]);
+        setDxfPolygonizeHint(null);
+        return [];
+      }
+      if (dxfGeometryType === "linestring") {
+        const paths = extractOpenLineStringsFromDxfLayer(dxf, layer);
+        setDxfPolygonCount(paths.length);
+        setDxfPreviewLinePaths(paths);
+        setDxfPreviewRings([]);
+        setDxfPreviewPoints([]);
+        setDxfPolygonizeHint(null);
+        return [];
+      }
+      const srid = Number.parseInt(sourceSrid.trim(), 10);
+      const polygonizeOpts =
+        mode === "polygonize" && Number.isFinite(srid)
+          ? buildDxfPolygonizeOptionsFromForm(
+              srid,
+              dxfSnapTolerance || undefined
+            )
+          : undefined;
+      const { rings, polygonizeMeta } = extractPolygonRingsFromDxfLayer(
+        dxf,
+        layer,
+        raw,
+        mode,
+        polygonizeOpts
+      );
+      setDxfPolygonCount(rings.length);
+      setDxfPreviewRings(rings);
+      setDxfPreviewPoints([]);
+      setDxfPreviewLinePaths([]);
+      if (mode === "polygonize" && polygonizeMeta) {
+        const parts: string[] = [];
+        if (polygonizeMeta.segmentCount > 0) {
+          parts.push(
+            `${polygonizeMeta.segmentCount} segmen → ${polygonizeMeta.nodedSegmentCount} setelah noding → ${polygonizeMeta.polygonCountBeforeFilter} poligon mentah`
+          );
+        }
+        if (polygonizeMeta.warnings.length > 0) {
+          parts.push(polygonizeMeta.warnings.join(" "));
+        }
+        setDxfPolygonizeHint(parts.length > 0 ? parts.join(" · ") : null);
+      } else {
+        setDxfPolygonizeHint(null);
+      }
+      return rings;
+    },
+    [dxfGeometryType, sourceSrid, dxfSnapTolerance]
+  );
+
+  useEffect(() => {
+    const dxf = dxfParsedRef.current;
+    if (!dxf || !dxfLayer.trim() || !dxfRawText.trim()) return;
+    try {
+      applyDxfLayerExtraction(dxf, dxfLayer, dxfRawText, dxfGeometryMode);
+      setDxfError(null);
+    } catch (err) {
+      setDxfPolygonCount(0);
+      setDxfPreviewRings([]);
+      setDxfPreviewPoints([]);
+      setDxfPreviewLinePaths([]);
+      setDxfPolygonizeHint(null);
+      setDxfError(
+        err instanceof Error ? err.message : "Gagal menganalisis layer."
+      );
+    }
+  }, [
+    dxfGeometryMode,
+    dxfGeometryType,
+    dxfSnapTolerance,
+    dxfLayer,
+    dxfRawText,
+    applyDxfLayerExtraction,
+  ]);
 
   useEffect(() => {
     setDxfHighlightRow(null);
@@ -272,8 +398,11 @@ export function VirtualTableDxfImportDialog({
       setDxfLayer("");
       setDxfPolygonCount(0);
       setDxfPreviewRings([]);
+      setDxfPreviewPoints([]);
+      setDxfPreviewLinePaths([]);
       dxfParsedRef.current = null;
       setDxfError(null);
+      setDxfPolygonizeHint(null);
       return;
     }
     setImportMsg(null);
@@ -287,6 +416,8 @@ export function VirtualTableDxfImportDialog({
         setDxfLayer("");
         setDxfPolygonCount(0);
         setDxfPreviewRings([]);
+        setDxfPreviewPoints([]);
+        setDxfPreviewLinePaths([]);
         dxfParsedRef.current = null;
         setDxfError(spatialGeometryTextTooLargeMessage("DXF"));
         return;
@@ -299,17 +430,15 @@ export function VirtualTableDxfImportDialog({
         setDxfLayers(layers);
         const first = layers[0] ?? "";
         setDxfLayer(first);
-        const rings = first
-          ? extractClosedPolygonRingsFromDxfLayer(dxf, first, raw)
-          : [];
-        setDxfPolygonCount(rings.length);
-        setDxfPreviewRings(rings);
+        applyDxfLayerExtraction(dxf, first, raw, dxfGeometryMode);
       } catch (err) {
         dxfParsedRef.current = null;
         setDxfLayers([]);
         setDxfLayer("");
         setDxfPolygonCount(0);
         setDxfPreviewRings([]);
+        setDxfPreviewPoints([]);
+        setDxfPreviewLinePaths([]);
         setDxfError(
           err instanceof Error ? err.message : "Gagal membaca DXF."
         );
@@ -317,11 +446,17 @@ export function VirtualTableDxfImportDialog({
     };
     reader.onerror = () => setDxfError("Gagal membaca file DXF.");
     reader.readAsText(file);
-  }, []);
+  }, [applyDxfLayerExtraction, dxfGeometryMode]);
 
   const runImport = useCallback(() => {
     if (!dxfRawText.trim() || !dxfLayer.trim() || dxfPolygonCount === 0) {
-      setImportMsg("Pilih file DXF dan layer dengan poligon tertutup.");
+      setImportMsg(
+        dxfGeometryType === "point"
+          ? "Pilih file DXF dan layer yang punya entitas POINT."
+          : dxfGeometryType === "linestring"
+            ? "Pilih file DXF dan layer yang punya garis terbuka (LINE/LWPOLYLINE)."
+            : "Pilih file DXF dan layer dengan poligon tertutup."
+      );
       return;
     }
     if (!geometrySlug || !matchSlug) {
@@ -347,6 +482,15 @@ export function VirtualTableDxfImportDialog({
     fd.set("dxf_text", dxfRawText);
     fd.set("layer_name", dxfLayer);
     fd.set("source_srid", sourceSrid);
+    fd.set("dxf_geometry_type", dxfGeometryType);
+    fd.set("geometry_mode", dxfGeometryMode);
+    if (
+      dxfGeometryType === "polygon" &&
+      dxfGeometryMode === "polygonize" &&
+      dxfSnapTolerance.trim()
+    ) {
+      fd.set("polygonize_snap_tolerance", dxfSnapTolerance.trim());
+    }
     fd.set("geometry_column_slug", geometrySlug);
     fd.set("match_column_slug", matchSlug);
     fd.set("upsert_mode", upsertMode);
@@ -397,6 +541,9 @@ export function VirtualTableDxfImportDialog({
     dxfMatchKeys,
     dxfLabels,
     sourceSrid,
+    dxfGeometryMode,
+    dxfGeometryType,
+    dxfSnapTolerance,
     table.id,
     onImported,
   ]);
@@ -418,8 +565,12 @@ export function VirtualTableDxfImportDialog({
       title={`Impor DXF ke ${table.display_name}`}
       description={
         <>
-          Satu poligon tertutup di layer DXF → satu baris. Kunci upsert memakai
-          kolom <span className="font-mono">{matchSlug || "…"}</span>
+          Satu geometri DXF → satu baris. <strong>Disarankan:</strong> mode{" "}
+          <strong>bangun dari garis</strong> untuk gambar CAD (LINE / polyline
+          terbuka). Mode <strong>poligon tertutup</strong> untuk LW/PL/HATCH.
+          Mode <strong>POINT</strong> untuk entitas titik pada layer. Kunci
+          upsert:{" "}
+          <span className="font-mono">{matchSlug || "…"}</span>
           {desaRelationSlug ? (
             <>
               {" "}
@@ -444,7 +595,11 @@ export function VirtualTableDxfImportDialog({
               }}
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              LWPOLYLINE / POLYLINE tertutup, INSERT blok, atau HATCH. Batas teks ~
+              <strong>Bangun dari garis</strong> (disarankan): LINE + polyline
+              terbuka → polygonize di Portal. <strong>Poligon tertutup</strong>
+              (legacy): LW/PL tertutup, INSERT blok, atau HATCH.{" "}
+              <strong>POINT</strong>: ambil entitas titik (termasuk point dalam
+              blok INSERT). Batas teks ~
               {MAX_SPATIAL_GEOMETRY_TEXT_MB} MB.
             </p>
           </div>
@@ -467,13 +622,7 @@ export function VirtualTableDxfImportDialog({
                   const dxf = dxfParsedRef.current;
                   if (!dxf) return;
                   try {
-                    const rings = extractClosedPolygonRingsFromDxfLayer(
-                      dxf,
-                      v,
-                      dxfRawText
-                    );
-                    setDxfPolygonCount(rings.length);
-                    setDxfPreviewRings(rings);
+                    applyDxfLayerExtraction(dxf, v, dxfRawText, dxfGeometryMode);
                     setDxfError(null);
                   } catch (err) {
                     setDxfPolygonCount(0);
@@ -584,6 +733,74 @@ export function VirtualTableDxfImportDialog({
 
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
+              <Label htmlFor="dxf-vt-geom-type">Jenis geometri yang diimpor</Label>
+              <select
+                id="dxf-vt-geom-type"
+                value={dxfGeometryType}
+                onChange={(e) =>
+                  setDxfGeometryType(
+                    e.target.value as "polygon" | "point" | "linestring"
+                  )
+                }
+                className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                disabled={importPending}
+              >
+                <option value="polygon">Poligon</option>
+                <option value="linestring">LineString (garis terbuka)</option>
+                <option value="point">POINT</option>
+              </select>
+            </div>
+            <div>
+              <Label htmlFor="dxf-vt-geom-mode">Cara baca geometri DXF</Label>
+              <select
+                id="dxf-vt-geom-mode"
+                value={dxfGeometryMode}
+                onChange={(e) =>
+                  setDxfGeometryMode(
+                    e.target.value as DxfGeometryExtractionMode
+                  )
+                }
+                className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                disabled={importPending || dxfGeometryType !== "polygon"}
+              >
+                <option value="polygonize">Bangun dari garis (disarankan)</option>
+                <option value="closed">Poligon tertutup di file (legacy)</option>
+              </select>
+            </div>
+            {dxfGeometryType === "polygon" && dxfGeometryMode === "polygonize" ? (
+              <div>
+                <Label htmlFor="dxf-vt-snap">Toleransi snap (meter)</Label>
+                <Input
+                  id="dxf-vt-snap"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={dxfSnapTolerance}
+                  onChange={(e) => setDxfSnapTolerance(e.target.value)}
+                  placeholder={String(
+                    defaultSnapToleranceForSrid(
+                      Number.parseInt(sourceSrid, 10) || 32748
+                    )
+                  )}
+                  className="mt-1 font-mono text-sm"
+                  disabled={importPending}
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Ujung garis dalam jarak ini disatukan sebelum polygonize.
+                  Default sesuai EPSG (meter untuk UTM/TM-3).
+                </p>
+              </div>
+            ) : null}
+          </div>
+
+          {dxfPolygonizeHint ? (
+            <p className="text-xs text-muted-foreground" role="status">
+              {dxfPolygonizeHint}
+            </p>
+          ) : null}
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
               <Label htmlFor="dxf-vt-srid">EPSG/SRID sumber</Label>
               <select
                 id="dxf-vt-srid"
@@ -638,7 +855,12 @@ export function VirtualTableDxfImportDialog({
           {dxfPolygonCount > 0 && dxfLayer ? (
             <div className="space-y-2 rounded-md border border-border p-3">
               <p className="text-xs font-medium">
-                Mapping {matchColumnLabel} ({dxfPolygonCount} poligon)
+                Mapping {matchColumnLabel} ({dxfPolygonCount}{" "}
+                {dxfGeometryType === "point"
+                  ? "titik"
+                  : dxfGeometryType === "linestring"
+                    ? "garis"
+                    : "poligon"})
               </p>
               {dxfPreviewFeatureCollection.err ? (
                 <p className="text-xs text-amber-700" role="status">

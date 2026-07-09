@@ -37,13 +37,18 @@ import {
   type MapStatusState,
 } from "./workspace-map-gis-chrome";
 import { WorkspaceMapToolController } from "./workspace-map-tool-controller";
+import { WorkspaceMapDrawBidangController } from "./workspace-map-draw-bidang-controller";
+import type { DrawBidangControllerState } from "./workspace-map-draw-bidang-controller";
+import { WorkspaceMapDrawLineController } from "./workspace-map-draw-line-controller";
+import type { DrawLineControllerState } from "./workspace-map-draw-line-controller";
+import type { MeasureDraftState } from "./workspace-map-tool-controller";
 import { WorkspaceMapRelationTraceLayer } from "./workspace-map-relation-trace-layer";
 import type {
   MapIdentifyHit,
   MapMeasureResult,
   WorkspaceMapToolMode,
 } from "@/lib/workspace-map-tool-types";
-import type { MeasureDraftState } from "./workspace-map-tool-controller";
+import type { LatLngPoint } from "@/lib/workspace-map-draw-bidang";
 import type { CoordinateDisplayMode } from "@/lib/workspace-map-tool-types";
 import { createCachedBasemapLayer } from "@/lib/workspace-map-cached-tile-layer";
 import type { ResolvedExternalMapLayer } from "@/lib/workspace-spatial-external-layers";
@@ -100,6 +105,7 @@ export type WorkspaceMapHandle = {
   fitAllFootprints: () => void;
   fitFootprints: (footprints: MapFootprint[]) => void;
   fitBounds: (bounds: L.LatLngBounds) => void;
+  fitBoundsTuple: (bounds: LatLngBoundsTuple) => void;
   getLeafletMap: () => L.Map | null;
   getView: () => MapExtentBookmark | null;
   setView: (view: MapExtentBookmark) => void;
@@ -108,6 +114,7 @@ export type WorkspaceMapHandle = {
 };
 
 const FEATURE_LABEL_MIN_ZOOM = 14;
+const SURVEY_POINT_LABEL_MIN_ZOOM = 12;
 
 const DEFAULT_CENTER: L.LatLngExpression = [-6.74, 108.55];
 const DEFAULT_ZOOM = 12;
@@ -730,6 +737,54 @@ function bindFeatureLabel(
   });
 }
 
+/** Label T1,T2… pada titik lapangan (cocok sketsa kertas). */
+function surveyPointDisplayLabel(feature: GeoJSON.Feature): string | null {
+  const props = feature.properties;
+  if (!props || typeof props !== "object") return null;
+  const src = props.source;
+  const namaTitik = props.nama_titik;
+  if (typeof namaTitik === "string" && namaTitik.trim()) {
+    return namaTitik.trim();
+  }
+  const raw = props.label;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const text = raw.trim();
+  if (src === "field_points" || src === "survey_points_archive") return text;
+  if (/^T\d+$/i.test(text)) return text;
+  const m = text.match(/\bT\d+\b/i);
+  if (m) return m[0]!.toUpperCase();
+  return null;
+}
+
+function bindSurveyPointMapLabel(
+  featureLayer: L.Layer,
+  feature: GeoJSON.Feature,
+  map: L.Map
+): void {
+  const text = surveyPointDisplayLabel(feature);
+  if (!text || !("bindTooltip" in featureLayer)) return;
+  featureLayer.bindTooltip(text, {
+    permanent: true,
+    direction: "top",
+    offset: L.point(0, -7),
+    className: "workspace-map-survey-point-label",
+    opacity: 1,
+  });
+  const updateVisibility = () => {
+    const tip = featureLayer.getTooltip?.();
+    const el = tip?.getElement?.();
+    if (el) {
+      el.style.display =
+        map.getZoom() >= SURVEY_POINT_LABEL_MIN_ZOOM ? "" : "none";
+    }
+  };
+  updateVisibility();
+  map.on("zoomend", updateVisibility);
+  featureLayer.on("remove", () => {
+    map.off("zoomend", updateVisibility);
+  });
+}
+
 function polygonStyle(
   feature: GeoJSON.Feature | undefined,
   layerKind: MapFootprintLayerKind,
@@ -831,6 +886,28 @@ function polygonStyle(
   };
 }
 
+function pointMarkerStyle(
+  layerKind: MapFootprintLayerKind,
+  layerOpacity: number,
+  customSymbol?: SpatialLayerSymbolStyle
+): L.CircleMarkerOptions {
+  const stroke =
+    customSymbol?.strokeColor ??
+    (layerKind === "virtual_table" ? "#1d4ed8" : "#2563eb");
+  const fill =
+    customSymbol?.fillColor ??
+    (layerKind === "virtual_table" ? "#3b82f6" : "#60a5fa");
+  const opacity = Math.min(1, Math.max(0.1, layerOpacity));
+  return {
+    radius: 5,
+    color: stroke,
+    fillColor: fill,
+    fillOpacity: 0.88 * opacity,
+    opacity,
+    weight: 2,
+  };
+}
+
 export type WorkspaceMapProps = {
   footprints: MapFootprint[];
   /** Semua footprint (termasuk lapisan off) untuk zoom ke lapisan. */
@@ -855,6 +932,17 @@ export type WorkspaceMapProps = {
   onMeasureFinished?: (result: MapMeasureResult) => void;
   finishMeasureSignal?: number;
   clearMeasureSignal?: number;
+  drawBidangSnapEnabled?: boolean;
+  drawSnapFootprints?: MapFootprint[];
+  onDrawBidangDraftChange?: (draft: DrawBidangControllerState) => void;
+  onDrawRingClosed?: (ring: LatLngPoint[]) => void;
+  closeDrawRingSignal?: number;
+  undoDrawPointSignal?: number;
+  clearDrawSignal?: number;
+  drawGarisSnapEnabled?: boolean;
+  onDrawLineDraftChange?: (draft: DrawLineControllerState) => void;
+  onDrawLineFinished?: (line: LatLngPoint[]) => void;
+  finishDrawLineSignal?: number;
   coordinateDisplay?: CoordinateDisplayMode;
   onCoordinateDisplayToggle?: () => void;
   onMapReady?: (map: L.Map | null) => void;
@@ -894,6 +982,17 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       onMeasureFinished,
       finishMeasureSignal = 0,
       clearMeasureSignal = 0,
+      drawBidangSnapEnabled = true,
+      drawSnapFootprints = [],
+      onDrawBidangDraftChange,
+      onDrawRingClosed,
+      closeDrawRingSignal = 0,
+      undoDrawPointSignal = 0,
+      clearDrawSignal = 0,
+      drawGarisSnapEnabled = true,
+      onDrawLineDraftChange,
+      onDrawLineFinished,
+      finishDrawLineSignal = 0,
       coordinateDisplay = "latlng",
       onCoordinateDisplayToggle,
       onMapReady,
@@ -981,6 +1080,12 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           [bounds.getSouth(), bounds.getWest()],
           [bounds.getNorth(), bounds.getEast()],
         ]);
+        userAdjustedViewRef.current = true;
+      },
+      fitBoundsTuple: (bounds: LatLngBoundsTuple) => {
+        const map = mapRef.current;
+        if (!map) return;
+        fitMapToBounds(map, bounds);
         userAdjustedViewRef.current = true;
       },
       getView: () => {
@@ -1079,6 +1184,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       mapRef.current = null;
       setMapInstance(null);
       layerGroupRef.current = null;
+      externalLayersGroupRef.current = null;
       basemapLayerRef.current = null;
       compareBasemapLayerRef.current = null;
       lastAutoFitBoundsKeyRef.current = null;
@@ -1118,6 +1224,10 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
     if (!map) return;
     ensureExternalReferencePane(map);
 
+    const existing = externalLayersGroupRef.current;
+    if (existing && !map.hasLayer(existing)) {
+      externalLayersGroupRef.current = null;
+    }
     if (!externalLayersGroupRef.current) {
       externalLayersGroupRef.current = L.layerGroup().addTo(map);
     }
@@ -1127,7 +1237,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       const leafletLayer = createExternalLeafletLayer(layer);
       if (leafletLayer) group.addLayer(leafletLayer);
     }
-  }, [externalLayers]);
+  }, [externalLayers, mapInstance]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1249,10 +1359,11 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
         highlightBerkasId != null &&
         highlightBerkasId !== "" &&
         fp.berkasId === highlightBerkasId;
-      const useVirtualRowClick =
-        layerKind === "virtual_table" &&
-        onVirtualRowSelect != null &&
-        toolMode === "navigate";
+        const useVirtualRowClick =
+          layerKind === "virtual_table" &&
+          onVirtualRowSelect != null &&
+          toolMode === "navigate";
+        const layerInteractive = toolMode === "navigate";
       const fpOpacity = resolveFootprintOpacity(
         fp,
         layerOpacityByTableId,
@@ -1276,6 +1387,12 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           (geojsonObject.type === "Feature" ||
             geojsonObject.type === "FeatureCollection");
         const layer = L.geoJSON(fp.geojson as GeoJSON.GeoJsonObject, {
+          interactive: layerInteractive,
+          pointToLayer: (feature, latlng) =>
+            L.circleMarker(
+              latlng,
+              pointMarkerStyle(layerKind, fpOpacity, customSymbol)
+            ),
           style: (feat) =>
             polygonStyle(
               feat as GeoJSON.Feature | undefined,
@@ -1292,6 +1409,13 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
             if (layerKind === "virtual_table") {
               ensureVirtualTableFeatureProperties(feature, fp);
             }
+            if (feature.geometry?.type === "Point") {
+              bindSurveyPointMapLabel(
+                featureLayer,
+                feature as GeoJSON.Feature,
+                map
+              );
+            }
             bindFeatureLabel(featureLayer, fp, map, showFeatureLabels);
             if (useVirtualRowClick) {
               wireVirtualTableFeatureClick(
@@ -1300,7 +1424,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
                 feature,
                 onVirtualRowSelect
               );
-            } else {
+            } else if (layerInteractive) {
               featureLayer.bindPopup(
                 popupHtmlWithGeoJson(fp, feature),
                 POPUP_OPTIONS
@@ -1320,9 +1444,9 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
         });
         // Fallback jika source bukan Feature/FeatureCollection.
         if (!isFeatureSource) {
-          if (!useVirtualRowClick) {
+          if (!useVirtualRowClick && layerInteractive) {
             layer.bindPopup(popupHtmlWithGeoJson(fp, fp.geojson), POPUP_OPTIONS);
-          } else {
+          } else if (useVirtualRowClick) {
             const select = buildVirtualRowSelect(fp);
             if (select) {
               layer.on("click", (e: L.LeafletMouseEvent) => {
@@ -1395,6 +1519,14 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
     };
   }, [onMapBackgroundClick, toolMode]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (toolMode !== "navigate") {
+      map.closePopup();
+    }
+  }, [toolMode]);
+
   const northClass = isBelowMd ? "right-12 top-2" : "right-2 top-2";
 
   return (
@@ -1432,6 +1564,32 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           onMeasureFinished={onMeasureFinished ?? (() => {})}
           finishMeasureSignal={finishMeasureSignal}
           clearMeasureSignal={clearMeasureSignal}
+        />
+      ) : null}
+      {mapInstance && enableGisChrome ? (
+        <WorkspaceMapDrawBidangController
+          map={mapInstance}
+          active={toolMode === "draw-bidang"}
+          snapEnabled={drawBidangSnapEnabled}
+          snapFootprints={drawSnapFootprints}
+          onDraftChange={onDrawBidangDraftChange ?? (() => {})}
+          onRingClosed={onDrawRingClosed ?? (() => {})}
+          closeRingSignal={closeDrawRingSignal}
+          undoPointSignal={undoDrawPointSignal}
+          clearDrawSignal={clearDrawSignal}
+        />
+      ) : null}
+      {mapInstance && enableGisChrome ? (
+        <WorkspaceMapDrawLineController
+          map={mapInstance}
+          active={toolMode === "draw-garis"}
+          snapEnabled={drawGarisSnapEnabled}
+          snapFootprints={drawSnapFootprints}
+          onDraftChange={onDrawLineDraftChange ?? (() => {})}
+          onLineFinished={onDrawLineFinished ?? (() => {})}
+          finishLineSignal={finishDrawLineSignal}
+          undoPointSignal={undoDrawPointSignal}
+          clearDrawSignal={clearDrawSignal}
         />
       ) : null}
       {mapInstance && enableGisChrome ? (

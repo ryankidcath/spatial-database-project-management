@@ -172,7 +172,11 @@ export function WorkspaceMapToolController({
     const el = map.getContainer();
     if (toolMode === "navigate") {
       el.style.cursor = "";
-    } else if (toolMode === "identify") {
+    } else if (
+      toolMode === "identify" ||
+      toolMode === "draw-bidang" ||
+      toolMode === "draw-garis"
+    ) {
       el.style.cursor = "crosshair";
     } else {
       el.style.cursor = "cell";

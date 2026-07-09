@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,11 +22,26 @@ import {
   VirtualTableDxfImportDialog,
   VirtualTableGeoJsonImportDialog,
   VirtualTableLayerUploadDialog,
+  VirtualTablePointsImportDialog,
+  VirtualTableSurveyPointsArchiveDialog,
+  VirtualTableRegeneratePolygonDialog,
+  VirtualTableFieldPointsImportDialog,
+  VirtualTableWorkbenchLayerBootstrapDialog,
   type LayerUploadCreated,
 } from "./virtual-table-view";
 
-export type SpatialImportTarget = "existing" | "new_layer";
-export type SpatialImportFormat = "geojson" | "dxf";
+export type SpatialImportTarget =
+  | "existing"
+  | "new_layer"
+  | "new_field_points"
+  | "new_workbench_layer";
+export type SpatialImportFormat =
+  | "geojson"
+  | "dxf"
+  | "points"
+  | "field_points"
+  | "survey_points_archive"
+  | "regenerate_polygon";
 
 type WizardStep = "target" | "configure" | "import";
 
@@ -82,7 +98,7 @@ export function WorkspaceSpatialImportWizard({
         ? defaultTableId
         : (vtablesWithGeometry[0]?.id ?? "")
     );
-    setFormat("geojson");
+    setFormat("field_points");
   }, [open, defaultTableId, hasExistingTables, vtablesWithGeometry]);
 
   useEffect(() => {
@@ -113,11 +129,22 @@ export function WorkspaceSpatialImportWizard({
 
   const stepIndex =
     step === "target" ? 1 : step === "configure" ? 2 : 3;
-  const stepTotal = target === "new_layer" ? 2 : 3;
+  const stepTotal =
+    target === "new_layer" ||
+    target === "new_field_points" ||
+    target === "new_workbench_layer"
+      ? 2
+      : 3;
 
   const goBack = useCallback(() => {
     if (step === "import") {
-      setStep(target === "new_layer" ? "target" : "configure");
+      setStep(
+        target === "new_layer" ||
+          target === "new_field_points" ||
+          target === "new_workbench_layer"
+          ? "target"
+          : "configure"
+      );
       onPreviewChange?.(null);
       return;
     }
@@ -127,7 +154,11 @@ export function WorkspaceSpatialImportWizard({
   }, [step, target, onPreviewChange]);
 
   const continueFromTarget = () => {
-    if (target === "new_layer") {
+    if (
+      target === "new_layer" ||
+      target === "new_field_points" ||
+      target === "new_workbench_layer"
+    ) {
       setStep("import");
       return;
     }
@@ -143,9 +174,23 @@ export function WorkspaceSpatialImportWizard({
   };
 
   const summaryLine = useMemo(() => {
+    if (target === "new_field_points") return "Titik lapangan → tabel baru";
+    if (target === "new_workbench_layer") return "Buat tabel layer kosong";
     if (target === "new_layer") return "Tabel virtual baru dari file";
     const name = selectedTable?.display_name ?? "tabel";
-    return `${name} · ${format === "geojson" ? "GeoJSON" : "DXF"}`;
+    return `${name} · ${
+      format === "geojson"
+        ? "GeoJSON"
+        : format === "dxf"
+          ? "DXF (poligon/point)"
+          : format === "points"
+            ? "Bidang dari titik"
+            : format === "field_points"
+              ? "Titik lapangan mentah"
+            : format === "survey_points_archive"
+              ? "Arsip titik ukur"
+              : "Buat ulang poligon"
+    }`;
   }, [target, selectedTable, format]);
 
   return (
@@ -162,14 +207,22 @@ export function WorkspaceSpatialImportWizard({
             <DialogHeader>
               <DialogTitle>Impor spasial</DialogTitle>
               <DialogDescription>
-                Satu alur untuk mengisi tabel virtual ber-geometry atau membuat
-                tabel baru dari file GeoJSON/DXF. Pratinjau poligon tampil di
-                peta sebelum disimpan.
+                Produksi bidang di Portal — titik CSV, arsip titik, DXF
+                polygonize, atau file poligon legacy. Pratinjau di peta sebelum
+                simpan.{" "}
+                <Link
+                  href="/help/spatial-import"
+                  className="font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  Panduan lengkap
+                </Link>
               </DialogDescription>
             </DialogHeader>
 
             <ol className="flex gap-2 text-xs text-muted-foreground">
-              {(target === "new_layer"
+              {(target === "new_layer" ||
+              target === "new_field_points" ||
+              target === "new_workbench_layer"
                 ? (["target", "import"] as WizardStep[])
                 : (["target", "configure", "import"] as WizardStep[])
               ).map((s, i) => (
@@ -223,6 +276,56 @@ export function WorkspaceSpatialImportWizard({
                   <label
                     className={cn(
                       "flex cursor-pointer gap-3 rounded-lg border px-3 py-3 transition-colors",
+                      target === "new_field_points"
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-border hover:bg-muted/40"
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="spatial-import-target"
+                      className="mt-1"
+                      checked={target === "new_field_points"}
+                      onChange={() => setTarget("new_field_points")}
+                    />
+                    <span>
+                      <span className="block font-medium text-foreground">
+                        Titik lapangan → tabel baru (disarankan)
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        Satu file CSV koordinat dari TS/GPS — tanpa no_bidang.
+                        Label T1, T2… untuk cocokkan sketsa kertas.
+                      </span>
+                    </span>
+                  </label>
+                  <label
+                    className={cn(
+                      "flex cursor-pointer gap-3 rounded-lg border px-3 py-3 transition-colors",
+                      target === "new_workbench_layer"
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-border hover:bg-muted/40"
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="spatial-import-target"
+                      className="mt-1"
+                      checked={target === "new_workbench_layer"}
+                      onChange={() => setTarget("new_workbench_layer")}
+                    />
+                    <span>
+                      <span className="block font-medium text-foreground">
+                        Buat tabel layer kosong (Bidang / Jalan / Saluran)
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        Siapkan tabel untuk digitasi di peta — tanpa file. Cocok
+                        setelah titik lapangan diimpor.
+                      </span>
+                    </span>
+                  </label>
+                  <label
+                    className={cn(
+                      "flex cursor-pointer gap-3 rounded-lg border px-3 py-3 transition-colors",
                       target === "new_layer"
                         ? "border-primary/40 bg-primary/5"
                         : "border-border hover:bg-muted/40"
@@ -240,8 +343,9 @@ export function WorkspaceSpatialImportWizard({
                         Buat tabel baru dari file
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        Untuk surveyor: unggah geometri → sistem membuat tabel
-                        virtual baru.
+                        Untuk file CAD/GeoJSON poligon yang sudah jadi. Untuk
+                        titik lapangan atau CAD garis, gunakan format workbench
+                        di atas.
                       </span>
                     </span>
                   </label>
@@ -280,11 +384,15 @@ export function WorkspaceSpatialImportWizard({
                   <p className="mb-2 text-xs font-medium text-muted-foreground">
                     Format file
                   </p>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {(
                       [
-                        ["geojson", "GeoJSON"],
-                        ["dxf", "DXF"],
+                        ["field_points", "Titik lapangan mentah (x, y)"],
+                        ["points", "Bidang dari titik (no_bidang)"],
+                        ["survey_points_archive", "Arsip titik (no_bidang)"],
+                        ["regenerate_polygon", "Buat ulang poligon"],
+                        ["geojson", "GeoJSON / shapefile"],
+                        ["dxf", "DXF (poligon, LineString, atau POINT)"],
                       ] as const
                     ).map(([value, label]) => (
                       <button
@@ -340,7 +448,47 @@ export function WorkspaceSpatialImportWizard({
               </div>
             </div>
 
-            {target === "new_layer" ? (
+            {target === "new_field_points" ? (
+              <VirtualTableFieldPointsImportDialog
+                embedded
+                open
+                bootstrapMode
+                projectId={projectId}
+                onOpenChange={(next) => {
+                  if (!next) goBack();
+                }}
+                onImported={onImported}
+                onCreated={(result) => {
+                  onLayerCreated({
+                    tableId: result.tableId,
+                    tableSlug: result.tableSlug,
+                    displayName: result.displayName,
+                    inserted: result.inserted,
+                  });
+                  handleClose(false);
+                }}
+                cancelLabel="Kembali"
+              />
+            ) : target === "new_workbench_layer" ? (
+              <VirtualTableWorkbenchLayerBootstrapDialog
+                embedded
+                open
+                projectId={projectId}
+                onOpenChange={(next) => {
+                  if (!next) goBack();
+                }}
+                onCreated={(result) => {
+                  onLayerCreated({
+                    tableId: result.tableId,
+                    tableSlug: result.tableSlug,
+                    displayName: result.displayName,
+                    inserted: 0,
+                  });
+                  handleClose(false);
+                }}
+                cancelLabel="Kembali"
+              />
+            ) : target === "new_layer" ? (
               <VirtualTableLayerUploadDialog
                 embedded
                 open
@@ -391,6 +539,69 @@ export function WorkspaceSpatialImportWizard({
                   handleClose(false);
                 }}
                 cancelLabel="Kembali"
+              />
+            ) : format === "points" && selectedTable ? (
+              <VirtualTablePointsImportDialog
+                embedded
+                open
+                onOpenChange={(next) => {
+                  if (!next) goBack();
+                }}
+                table={selectedTable}
+                columns={selectedColumns}
+                allVirtualTables={allAccessibleVtables}
+                rows={importTableRows}
+                onImported={() => {
+                  onImported();
+                  handleClose(false);
+                }}
+                cancelLabel="Kembali"
+              />
+            ) : format === "field_points" && selectedTable ? (
+              <VirtualTableFieldPointsImportDialog
+                embedded
+                open
+                onOpenChange={(next) => {
+                  if (!next) goBack();
+                }}
+                table={selectedTable}
+                columns={selectedColumns}
+                onImported={() => {
+                  onImported();
+                  handleClose(false);
+                }}
+                cancelLabel="Kembali"
+              />
+            ) : format === "survey_points_archive" && selectedTable ? (
+              <VirtualTableSurveyPointsArchiveDialog
+                embedded
+                open
+                onOpenChange={(next) => {
+                  if (!next) goBack();
+                }}
+                table={selectedTable}
+                columns={selectedColumns}
+                onImported={() => {
+                  onImported();
+                  handleClose(false);
+                }}
+                cancelLabel="Kembali"
+              />
+            ) : format === "regenerate_polygon" && selectedTable ? (
+              <VirtualTableRegeneratePolygonDialog
+                embedded
+                open
+                onOpenChange={(next) => {
+                  if (!next) goBack();
+                }}
+                bidangTable={selectedTable}
+                bidangColumns={selectedColumns}
+                allVirtualTables={allAccessibleVtables}
+                allVirtualColumns={virtualColumns}
+                onRegenerated={() => {
+                  onImported();
+                  handleClose(false);
+                }}
               />
             ) : null}
           </div>

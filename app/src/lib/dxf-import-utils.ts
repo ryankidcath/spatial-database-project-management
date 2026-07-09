@@ -3,9 +3,31 @@ import type {
   IDxf,
   IEntity,
   IInsertEntity,
+  ILineEntity,
   ILwpolylineEntity,
   IPolylineEntity,
 } from "dxf-parser";
+import {
+  defaultMinAreaForSrid,
+  defaultSnapToleranceForSrid,
+  DEFAULT_DXF_POLYGONIZE_SNAP_METERS,
+  polygonizeLineSegments,
+  type DxfPolygonizeOptions,
+  type DxfPolygonizeResult,
+  type LineSegment,
+} from "@/lib/dxf-line-polygonize";
+
+export type { DxfPolygonizeOptions, DxfPolygonizeResult, LineSegment };
+export {
+  defaultMinAreaForSrid,
+  defaultSnapToleranceForSrid,
+  DEFAULT_DXF_POLYGONIZE_SNAP_METERS,
+} from "@/lib/dxf-line-polygonize";
+
+export type DxfGeometryExtractionMode = "closed" | "polygonize";
+export type DxfPoint = [number, number];
+/** Jalur garis terbuka (≥2 vertex) dalam koordinat sumber DXF. */
+export type DxfLinePath = [number, number][];
 
 export type LinearRing = [number, number][];
 type PolygonCoords = LinearRing[];
@@ -69,6 +91,15 @@ function transformInsertLocalToWorldXY(
   const px = ins.position?.x ?? 0;
   const py = ins.position?.y ?? 0;
   return [rx + px, ry + py];
+}
+
+function pointFromPointEntity(ent: IEntity): DxfPoint | null {
+  if (ent.type !== "POINT") return null;
+  const pos = (ent as { position?: { x?: number; y?: number } }).position;
+  const x = pos?.x;
+  const y = pos?.y;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return [Number(x), Number(y)];
 }
 
 function closedRingFromLwpolyline(lw: ILwpolylineEntity): LinearRing | null {
@@ -572,6 +603,437 @@ export function extractClosedHatchRingsFromDxfSource(
     }
   }
   return rings;
+}
+
+function isLwPlClosed(
+  vertices: Array<{ x: number; y: number }>,
+  shape?: boolean
+): boolean {
+  if (vertices.length < 2) return false;
+  const first = vertices[0]!;
+  const last = vertices[vertices.length - 1]!;
+  return Boolean(shape) || (first.x === last.x && first.y === last.y);
+}
+
+function segmentsFromFlattenedPath(pts: XY[]): LineSegment[] {
+  const out: LineSegment[] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]!;
+    const b = pts[i + 1]!;
+    out.push([
+      [a.x, a.y],
+      [b.x, b.y],
+    ]);
+  }
+  return out;
+}
+
+function openSegmentsFromLwpolyline(lw: ILwpolylineEntity): LineSegment[] {
+  if (!lw.vertices || lw.vertices.length < 2) return [];
+  if (isLwPlClosed(lw.vertices, lw.shape)) return [];
+  const flat = flattenLwPolylineVertices(
+    lw.vertices.map((v) => ({ x: v.x, y: v.y, bulge: v.bulge })),
+    false
+  );
+  return segmentsFromFlattenedPath(flat);
+}
+
+function openSegmentsFromPolyline(pl: IPolylineEntity): LineSegment[] {
+  if (pl.isPolyfaceMesh) return [];
+  if (!pl.vertices || pl.vertices.length < 2) return [];
+  if (isLwPlClosed(pl.vertices, pl.shape)) return [];
+  const flat = flattenLwPolylineVertices(
+    pl.vertices.map((v) => ({ x: v.x, y: v.y, bulge: v.bulge })),
+    false
+  );
+  return segmentsFromFlattenedPath(flat);
+}
+
+function closedLwPlToBoundarySegments(
+  lw: ILwpolylineEntity | IPolylineEntity
+): LineSegment[] {
+  const verts = lw.vertices;
+  if (!verts || verts.length < 2) return [];
+  const isClosed = isLwPlClosed(
+    verts,
+    (lw as ILwpolylineEntity).shape ?? (lw as IPolylineEntity).shape
+  );
+  if (!isClosed) return [];
+  const explicitDupClose =
+    verts.length >= 2 &&
+    verts[0]!.x === verts[verts.length - 1]!.x &&
+    verts[0]!.y === verts[verts.length - 1]!.y;
+  const closedForFlatten = Boolean(
+    (lw as ILwpolylineEntity).shape ?? (lw as IPolylineEntity).shape
+  ) && !explicitDupClose;
+  const flat = flattenLwPolylineVertices(
+    verts.map((v) => ({ x: v.x, y: v.y, bulge: v.bulge })),
+    closedForFlatten
+  );
+  return segmentsFromFlattenedPath(flat);
+}
+
+function segmentFromLine(line: ILineEntity): LineSegment | null {
+  const v = line.vertices;
+  if (!v || v.length < 2) return null;
+  const a = v[0]!;
+  const b = v[v.length - 1]!;
+  return [
+    [a.x, a.y],
+    [b.x, b.y],
+  ];
+}
+
+/** LINE + LW/PL terbuka (+ boundary LW/PL tertutup sebagai segmen) pada layer. */
+function collectLineSegmentsFromEntities(
+  entities: IEntity[],
+  filterLayer?: string
+): LineSegment[] {
+  const out: LineSegment[] = [];
+  const useFilter =
+    filterLayer != null && String(filterLayer).trim().length > 0;
+  const layer = filterLayer?.trim() ?? "";
+
+  for (const ent of entities) {
+    const base = ent as IEntity;
+    if (base.visible === false) continue;
+    if (useFilter && !layerMatches(base, layer)) continue;
+
+    if (ent.type === "LINE") {
+      const seg = segmentFromLine(ent as ILineEntity);
+      if (seg) out.push(seg);
+    } else if (ent.type === "LWPOLYLINE") {
+      const lw = ent as ILwpolylineEntity;
+      out.push(...openSegmentsFromLwpolyline(lw));
+      out.push(...closedLwPlToBoundarySegments(lw));
+    } else if (ent.type === "POLYLINE") {
+      const pl = ent as IPolylineEntity;
+      out.push(...openSegmentsFromPolyline(pl));
+      out.push(...closedLwPlToBoundarySegments(pl));
+    }
+  }
+  return out;
+}
+
+function expandInsertToWorldSegments(
+  dxf: IDxf,
+  ins: IInsertEntity
+): LineSegment[] {
+  const blk = dxf.blocks?.[ins.name];
+  if (!blk?.entities?.length) return [];
+  const localSegs = collectLineSegmentsFromEntities(blk.entities);
+  const cols = Math.max(1, Math.floor(Number(ins.columnCount)) || 1);
+  const rows = Math.max(1, Math.floor(Number(ins.rowCount)) || 1);
+  const cs = Number(ins.columnSpacing) || 0;
+  const rs = Number(ins.rowSpacing) || 0;
+  const out: LineSegment[] = [];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      for (const [[x0, y0], [x1, y1]] of localSegs) {
+        const a = transformInsertLocalToWorldXY(ins, x0 + c * cs, y0 + r * rs);
+        const b = transformInsertLocalToWorldXY(ins, x1 + c * cs, y1 + r * rs);
+        out.push([a, b]);
+      }
+    }
+  }
+  return out;
+}
+
+function collectPointsFromEntities(
+  entities: IEntity[],
+  filterLayer?: string
+): DxfPoint[] {
+  const out: DxfPoint[] = [];
+  const useFilter =
+    filterLayer != null && String(filterLayer).trim().length > 0;
+  const layer = filterLayer?.trim() ?? "";
+  for (const ent of entities) {
+    const base = ent as IEntity;
+    if (base.visible === false) continue;
+    if (useFilter && !layerMatches(base, layer)) continue;
+    const point = pointFromPointEntity(base);
+    if (point) out.push(point);
+  }
+  return out;
+}
+
+function expandInsertToWorldPoints(dxf: IDxf, ins: IInsertEntity): DxfPoint[] {
+  const blk = dxf.blocks?.[ins.name];
+  if (!blk?.entities?.length) return [];
+  const localPoints = collectPointsFromEntities(blk.entities);
+  const cols = Math.max(1, Math.floor(Number(ins.columnCount)) || 1);
+  const rows = Math.max(1, Math.floor(Number(ins.rowCount)) || 1);
+  const cs = Number(ins.columnSpacing) || 0;
+  const rs = Number(ins.rowSpacing) || 0;
+  const out: DxfPoint[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      for (const [x, y] of localPoints) {
+        out.push(transformInsertLocalToWorldXY(ins, x + c * cs, y + r * rs));
+      }
+    }
+  }
+  return out;
+}
+
+function linePathFromLine(line: ILineEntity): DxfLinePath | null {
+  const v = line.vertices;
+  if (!v || v.length < 2) return null;
+  const a = v[0]!;
+  const b = v[v.length - 1]!;
+  return [
+    [a.x, a.y],
+    [b.x, b.y],
+  ];
+}
+
+function openPathFromLwpolyline(lw: ILwpolylineEntity): DxfLinePath | null {
+  if (!lw.vertices || lw.vertices.length < 2) return null;
+  if (isLwPlClosed(lw.vertices, lw.shape)) return null;
+  const flat = flattenLwPolylineVertices(
+    lw.vertices.map((v) => ({ x: v.x, y: v.y, bulge: v.bulge })),
+    false
+  );
+  if (flat.length < 2) return null;
+  return flat.map((p) => [p.x, p.y]);
+}
+
+function openPathFromPolyline(pl: IPolylineEntity): DxfLinePath | null {
+  if (pl.isPolyfaceMesh) return null;
+  if (!pl.vertices || pl.vertices.length < 2) return null;
+  if (isLwPlClosed(pl.vertices, pl.shape)) return null;
+  const flat = flattenLwPolylineVertices(
+    pl.vertices.map((v) => ({ x: v.x, y: v.y, bulge: v.bulge })),
+    false
+  );
+  if (flat.length < 2) return null;
+  return flat.map((p) => [p.x, p.y]);
+}
+
+function collectOpenLinePathsFromEntities(
+  entities: IEntity[],
+  filterLayer?: string
+): DxfLinePath[] {
+  const out: DxfLinePath[] = [];
+  const useFilter =
+    filterLayer != null && String(filterLayer).trim().length > 0;
+  const layer = filterLayer?.trim() ?? "";
+
+  for (const ent of entities) {
+    const base = ent as IEntity;
+    if (base.visible === false) continue;
+    if (useFilter && !layerMatches(base, layer)) continue;
+
+    if (ent.type === "LINE") {
+      const path = linePathFromLine(ent as ILineEntity);
+      if (path) out.push(path);
+    } else if (ent.type === "LWPOLYLINE") {
+      const path = openPathFromLwpolyline(ent as ILwpolylineEntity);
+      if (path) out.push(path);
+    } else if (ent.type === "POLYLINE") {
+      const path = openPathFromPolyline(ent as IPolylineEntity);
+      if (path) out.push(path);
+    }
+  }
+  return out;
+}
+
+function transformLinePathInsertOffset(
+  ins: IInsertEntity,
+  path: DxfLinePath,
+  colOffset: number,
+  rowOffset: number
+): DxfLinePath {
+  return path.map(([x, y]) =>
+    transformInsertLocalToWorldXY(ins, x + colOffset, y + rowOffset)
+  );
+}
+
+function expandInsertToWorldLinePaths(
+  dxf: IDxf,
+  ins: IInsertEntity
+): DxfLinePath[] {
+  const blk = dxf.blocks?.[ins.name];
+  if (!blk?.entities?.length) return [];
+  const localPaths = collectOpenLinePathsFromEntities(blk.entities);
+  const cols = Math.max(1, Math.floor(Number(ins.columnCount)) || 1);
+  const rows = Math.max(1, Math.floor(Number(ins.rowCount)) || 1);
+  const cs = Number(ins.columnSpacing) || 0;
+  const rs = Number(ins.rowSpacing) || 0;
+  const out: DxfLinePath[] = [];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      for (const path of localPaths) {
+        out.push(transformLinePathInsertOffset(ins, path, c * cs, r * rs));
+      }
+    }
+  }
+  return out;
+}
+
+/** Ekstrak POINT dari layer DXF (termasuk POINT dalam blok INSERT pada layer itu). */
+export function extractPointsFromDxfLayer(
+  dxf: IDxf,
+  layerName: string
+): DxfPoint[] {
+  const name = layerName.trim();
+  if (!name) return [];
+  const points: DxfPoint[] = [];
+  for (const ent of dxf.entities) {
+    const base = ent as IEntity;
+    if (base.visible === false) continue;
+    if (ent.type === "INSERT") {
+      const ins = ent as IInsertEntity;
+      if (!layerMatches(base, name)) continue;
+      points.push(...expandInsertToWorldPoints(dxf, ins));
+      continue;
+    }
+    if (!layerMatches(base, name)) continue;
+    const point = pointFromPointEntity(base);
+    if (point) points.push(point);
+  }
+  return points;
+}
+
+/**
+ * Ekstrak garis terbuka dari layer DXF: `LINE`, LW/PL tidak tertutup,
+ * dan garis dalam blok INSERT (bukan boundary poligon tertutup).
+ */
+export function extractOpenLineStringsFromDxfLayer(
+  dxf: IDxf,
+  layerName: string
+): DxfLinePath[] {
+  const name = layerName.trim();
+  if (!name) return [];
+  const paths: DxfLinePath[] = [];
+  for (const ent of dxf.entities) {
+    const base = ent as IEntity;
+    if (base.visible === false) continue;
+
+    if (ent.type === "INSERT") {
+      const ins = ent as IInsertEntity;
+      if (!layerMatches(base, name)) continue;
+      paths.push(...expandInsertToWorldLinePaths(dxf, ins));
+      continue;
+    }
+
+    if (!layerMatches(base, name)) continue;
+    if (ent.type === "LINE") {
+      const path = linePathFromLine(ent as ILineEntity);
+      if (path) paths.push(path);
+    } else if (ent.type === "LWPOLYLINE") {
+      const path = openPathFromLwpolyline(ent as ILwpolylineEntity);
+      if (path) paths.push(path);
+    } else if (ent.type === "POLYLINE") {
+      const path = openPathFromPolyline(ent as IPolylineEntity);
+      if (path) paths.push(path);
+    }
+  }
+  return paths;
+}
+
+/**
+ * Ekstrak segmen garis dari layer DXF untuk mode polygonize:
+ * `LINE`, LW/PL terbuka, boundary LW/PL tertutup (sebagai segmen), dan INSERT blok.
+ */
+export function extractLineSegmentsFromDxfLayer(
+  dxf: IDxf,
+  layerName: string
+): LineSegment[] {
+  const name = layerName.trim();
+  if (!name) return [];
+
+  const segments: LineSegment[] = [];
+  for (const ent of dxf.entities) {
+    const base = ent as IEntity;
+    if (base.visible === false) continue;
+
+    if (ent.type === "INSERT") {
+      const ins = ent as IInsertEntity;
+      if (!layerMatches(base, name)) continue;
+      segments.push(...expandInsertToWorldSegments(dxf, ins));
+      continue;
+    }
+
+    if (!layerMatches(base, name)) continue;
+    if (ent.type === "LINE") {
+      const seg = segmentFromLine(ent as ILineEntity);
+      if (seg) segments.push(seg);
+    } else if (ent.type === "LWPOLYLINE") {
+      const lw = ent as ILwpolylineEntity;
+      segments.push(...openSegmentsFromLwpolyline(lw));
+      segments.push(...closedLwPlToBoundarySegments(lw));
+    } else if (ent.type === "POLYLINE") {
+      const pl = ent as IPolylineEntity;
+      segments.push(...openSegmentsFromPolyline(pl));
+      segments.push(...closedLwPlToBoundarySegments(pl));
+    }
+  }
+  return segments;
+}
+
+/** Polygonize garis layer DXF → ring poligon (CRS sumber). */
+export function polygonizeDxfLayerToRings(
+  dxf: IDxf,
+  layerName: string,
+  options: DxfPolygonizeOptions
+): DxfPolygonizeResult {
+  const segments = extractLineSegmentsFromDxfLayer(dxf, layerName);
+  return polygonizeLineSegments(segments, options);
+}
+
+export function extractPolygonRingsFromDxfLayer(
+  dxf: IDxf,
+  layerName: string,
+  dxfSource: string | undefined,
+  mode: DxfGeometryExtractionMode,
+  polygonizeOptions?: DxfPolygonizeOptions
+): { rings: LinearRing[]; polygonizeMeta?: DxfPolygonizeResult } {
+  if (mode === "closed") {
+    return {
+      rings: extractClosedPolygonRingsFromDxfLayer(dxf, layerName, dxfSource),
+    };
+  }
+  const result = polygonizeDxfLayerToRings(
+    dxf,
+    layerName,
+    polygonizeOptions ?? {
+      snapTolerance: DEFAULT_DXF_POLYGONIZE_SNAP_METERS,
+    }
+  );
+  return { rings: result.rings, polygonizeMeta: result };
+}
+
+export function parseDxfGeometryMode(
+  raw: string
+): DxfGeometryExtractionMode {
+  const v = raw.trim().toLowerCase();
+  if (v === "polygonize" || v === "lines" || v === "from_lines") {
+    return "polygonize";
+  }
+  return "closed";
+}
+
+export function buildDxfPolygonizeOptionsFromForm(
+  sourceSrid: number,
+  snapToleranceRaw?: string,
+  minAreaRaw?: string
+): DxfPolygonizeOptions {
+  const snapParsed = snapToleranceRaw?.trim();
+  let snapTolerance = defaultSnapToleranceForSrid(sourceSrid);
+  if (snapParsed) {
+    const n = Number(snapParsed);
+    if (Number.isFinite(n) && n > 0) snapTolerance = n;
+  }
+  const minParsed = minAreaRaw?.trim();
+  let minArea = defaultMinAreaForSrid(sourceSrid);
+  if (minParsed) {
+    const n = Number(minParsed);
+    if (Number.isFinite(n) && n >= 0) minArea = n;
+  }
+  return { snapTolerance, minArea, dropLargestFace: true };
 }
 
 /**

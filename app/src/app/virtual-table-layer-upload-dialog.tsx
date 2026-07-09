@@ -18,13 +18,18 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
   extractClosedPolygonRingsFromDxfLayer,
+  extractOpenLineStringsFromDxfLayer,
+  extractPointsFromDxfLayer,
   featureKeysForDxfPolygons,
   listDxfLayerNames,
   parseDxfDocument,
+  type DxfLinePath,
   type LinearRing,
 } from "@/lib/dxf-import-utils";
 import {
+  dxfLinePathsToWgs84PreviewFeatureCollection,
   dxfRingsToWgs84PreviewFeatureCollection,
+  dxfPointsToWgs84PreviewFeatureCollection,
   isPreviewSourceSridSupported,
 } from "@/lib/crs-reproject";
 import {
@@ -94,10 +99,19 @@ export function VirtualTableLayerUploadDialog({
   const [dxfLayers, setDxfLayers] = useState<string[]>([]);
   const [dxfLayer, setDxfLayer] = useState("");
   const [dxfPolygonCount, setDxfPolygonCount] = useState(0);
+  const [dxfGeometryType, setDxfGeometryType] = useState<
+    "polygon" | "point" | "linestring"
+  >("polygon");
   const [dxfMatchKeys, setDxfMatchKeys] = useState<string[]>([]);
   const [dxfLabels, setDxfLabels] = useState<string[]>([]);
   const [dxfBulkKeyText, setDxfBulkKeyText] = useState("");
   const [dxfPreviewRings, setDxfPreviewRings] = useState<LinearRing[]>([]);
+  const [dxfPreviewPoints, setDxfPreviewPoints] = useState<[number, number][]>(
+    []
+  );
+  const [dxfPreviewLinePaths, setDxfPreviewLinePaths] = useState<DxfLinePath[]>(
+    []
+  );
   const [dxfHighlightRow, setDxfHighlightRow] = useState<number | null>(null);
   const [dxfError, setDxfError] = useState<string | null>(null);
   const [sourceSrid, setSourceSrid] = useState("4326");
@@ -160,10 +174,13 @@ export function VirtualTableLayerUploadDialog({
     setDxfLayers([]);
     setDxfLayer("");
     setDxfPolygonCount(0);
+    setDxfGeometryType("polygon");
     setDxfMatchKeys([]);
     setDxfLabels([]);
     setDxfBulkKeyText("");
     setDxfPreviewRings([]);
+    setDxfPreviewPoints([]);
+    setDxfPreviewLinePaths([]);
     setDxfHighlightRow(null);
     setDxfError(null);
     setSourceSrid("4326");
@@ -187,25 +204,52 @@ export function VirtualTableLayerUploadDialog({
   }, [dxfPolygonCount, dxfLayer, keyPrefix]);
 
   const dxfPreviewFc = useMemo(() => {
-    if (dxfPreviewRings.length === 0) {
-      return { fc: null as GeoJSON.FeatureCollection | null, err: null as string | null };
-    }
     const srid = Number.parseInt(sourceSrid.trim(), 10);
     if (!Number.isFinite(srid) || !isPreviewSourceSridSupported(srid)) {
       return { fc: null, err: "SRID tidak didukung untuk pratinjau." };
     }
-    try {
+    if (dxfGeometryType === "point" && dxfPreviewPoints.length === 0) {
       return {
-        fc: dxfRingsToWgs84PreviewFeatureCollection(dxfPreviewRings, srid),
-        err: null,
+        fc: null as GeoJSON.FeatureCollection | null,
+        err: null as string | null,
       };
+    }
+    if (dxfGeometryType === "linestring" && dxfPreviewLinePaths.length === 0) {
+      return {
+        fc: null as GeoJSON.FeatureCollection | null,
+        err: null as string | null,
+      };
+    }
+    if (dxfGeometryType === "polygon" && dxfPreviewRings.length === 0) {
+      return {
+        fc: null as GeoJSON.FeatureCollection | null,
+        err: null as string | null,
+      };
+    }
+    try {
+      const fc =
+        dxfGeometryType === "point"
+          ? dxfPointsToWgs84PreviewFeatureCollection(dxfPreviewPoints, srid)
+          : dxfGeometryType === "linestring"
+            ? dxfLinePathsToWgs84PreviewFeatureCollection(
+                dxfPreviewLinePaths,
+                srid
+              )
+          : dxfRingsToWgs84PreviewFeatureCollection(dxfPreviewRings, srid);
+      return { fc, err: null };
     } catch (e) {
       return {
         fc: null,
         err: e instanceof Error ? e.message : "Gagal proyeksi pratinjau.",
       };
     }
-  }, [dxfPreviewRings, sourceSrid]);
+  }, [
+    dxfGeometryType,
+    dxfPreviewPoints,
+    dxfPreviewLinePaths,
+    dxfPreviewRings,
+    sourceSrid,
+  ]);
 
   const handleGeojsonFile = useCallback((file: File | undefined) => {
     if (!file) return;
@@ -252,17 +296,44 @@ export function VirtualTableLayerUploadDialog({
           setDxfLayers(layers);
           const first = layers[0] ?? "";
           setDxfLayer(first);
-          const rings = first
-            ? extractClosedPolygonRingsFromDxfLayer(dxf, first, raw)
-            : [];
-          setDxfPolygonCount(rings.length);
-          setDxfPreviewRings(rings);
+          if (first) {
+            if (dxfGeometryType === "point") {
+              const points = extractPointsFromDxfLayer(dxf, first);
+              setDxfPolygonCount(points.length);
+              setDxfPreviewPoints(points);
+              setDxfPreviewRings([]);
+              setDxfPreviewLinePaths([]);
+            } else if (dxfGeometryType === "linestring") {
+              const paths = extractOpenLineStringsFromDxfLayer(dxf, first);
+              setDxfPolygonCount(paths.length);
+              setDxfPreviewLinePaths(paths);
+              setDxfPreviewRings([]);
+              setDxfPreviewPoints([]);
+            } else {
+              const rings = extractClosedPolygonRingsFromDxfLayer(
+                dxf,
+                first,
+                raw
+              );
+              setDxfPolygonCount(rings.length);
+              setDxfPreviewRings(rings);
+              setDxfPreviewPoints([]);
+              setDxfPreviewLinePaths([]);
+            }
+          } else {
+            setDxfPolygonCount(0);
+            setDxfPreviewRings([]);
+            setDxfPreviewPoints([]);
+            setDxfPreviewLinePaths([]);
+          }
         } catch (err) {
           dxfParsedRef.current = null;
           setDxfLayers([]);
           setDxfLayer("");
           setDxfPolygonCount(0);
           setDxfPreviewRings([]);
+          setDxfPreviewPoints([]);
+          setDxfPreviewLinePaths([]);
           setDxfError(
             err instanceof Error ? err.message : "Gagal membaca DXF."
           );
@@ -270,7 +341,7 @@ export function VirtualTableLayerUploadDialog({
       };
       reader.readAsText(file);
     },
-    [displayName]
+    [displayName, dxfGeometryType]
   );
 
   const canSubmit = useMemo(() => {
@@ -319,6 +390,7 @@ export function VirtualTableLayerUploadDialog({
       fd.set("dxf_text", dxfRawText);
       fd.set("layer_name", dxfLayer);
       fd.set("source_srid", sourceSrid);
+      fd.set("dxf_geometry_type", dxfGeometryType);
       fd.set(
         "match_keys_json",
         JSON.stringify(dxfMatchKeys.map((k) => k.trim()))
@@ -337,10 +409,16 @@ export function VirtualTableLayerUploadDialog({
       }
       const failText =
         r.failed > 0
-          ? ` (${r.failed} poligon gagal)`
+          ? ` (${r.failed} gagal)`
           : "";
+      const geomLabel =
+        dxfGeometryType === "point"
+          ? "titik"
+          : dxfGeometryType === "linestring"
+            ? "garis"
+            : "bidang";
       setImportMsg(
-        `Layer "${r.displayName}" dibuat: ${r.inserted} bidang.${failText}`
+        `Layer "${r.displayName}" dibuat: ${r.inserted} ${geomLabel}.${failText}`
       );
       onPreviewChange?.(null);
       onCreated({
@@ -360,6 +438,7 @@ export function VirtualTableLayerUploadDialog({
     geojsonText,
     dxfRawText,
     dxfLayer,
+    dxfGeometryType,
     sourceSrid,
     dxfMatchKeys,
     dxfLabels,
@@ -376,11 +455,11 @@ export function VirtualTableLayerUploadDialog({
       title="Layer baru dari file"
       description={
         <>
-          Untuk surveyor: unggah geometri dulu — sistem membuat tabel baru
-          dengan kolom <span className="font-mono">no_bidang</span>,{" "}
+          Untuk file CAD/GeoJSON poligon yang sudah jadi — sistem membuat tabel
+          baru dengan kolom <span className="font-mono">no_bidang</span>,{" "}
           <span className="font-mono">geom</span>, dan{" "}
-          <span className="font-mono">title</span>. Admin dapat menambah kolom
-          atau impor CSV nanti.
+          <span className="font-mono">title</span>. Untuk titik lapangan atau
+          digitasi, gunakan Impor Spasial (Bidang dari titik / Gambar bidang).
         </>
       }
     >
@@ -489,6 +568,19 @@ export function VirtualTableLayerUploadDialog({
                       const dxf = dxfParsedRef.current;
                       if (!dxf) return;
                       try {
+                      if (dxfGeometryType === "point") {
+                        const points = extractPointsFromDxfLayer(dxf, v);
+                        setDxfPolygonCount(points.length);
+                        setDxfPreviewPoints(points);
+                        setDxfPreviewRings([]);
+                        setDxfPreviewLinePaths([]);
+                      } else if (dxfGeometryType === "linestring") {
+                        const paths = extractOpenLineStringsFromDxfLayer(dxf, v);
+                        setDxfPolygonCount(paths.length);
+                        setDxfPreviewLinePaths(paths);
+                        setDxfPreviewRings([]);
+                        setDxfPreviewPoints([]);
+                      } else {
                         const rings = extractClosedPolygonRingsFromDxfLayer(
                           dxf,
                           v,
@@ -496,10 +588,15 @@ export function VirtualTableLayerUploadDialog({
                         );
                         setDxfPolygonCount(rings.length);
                         setDxfPreviewRings(rings);
+                        setDxfPreviewPoints([]);
+                        setDxfPreviewLinePaths([]);
+                      }
                         setDxfError(null);
                       } catch (err) {
                         setDxfPolygonCount(0);
                         setDxfPreviewRings([]);
+                        setDxfPreviewPoints([]);
+                        setDxfPreviewLinePaths([]);
                         setDxfError(
                           err instanceof Error
                             ? err.message
@@ -517,10 +614,82 @@ export function VirtualTableLayerUploadDialog({
                     ))}
                   </select>
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    {dxfPolygonCount} poligon tertutup
+                    {dxfGeometryType === "point"
+                      ? `${dxfPolygonCount} titik POINT`
+                      : dxfGeometryType === "linestring"
+                        ? `${dxfPolygonCount} garis terbuka`
+                        : `${dxfPolygonCount} poligon tertutup`}
                   </p>
                 </div>
               ) : null}
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="layer-dxf-geom-type">
+                    Jenis geometri DXF
+                  </Label>
+                  <select
+                    id="layer-dxf-geom-type"
+                    value={dxfGeometryType}
+                    onChange={(e) => {
+                      const next = e.target.value as
+                        | "polygon"
+                        | "point"
+                        | "linestring";
+                      setDxfGeometryType(next);
+                      const dxf = dxfParsedRef.current;
+                      if (!dxf || !dxfLayer.trim()) return;
+                      try {
+                        if (next === "point") {
+                          const points = extractPointsFromDxfLayer(
+                            dxf,
+                            dxfLayer
+                          );
+                          setDxfPolygonCount(points.length);
+                          setDxfPreviewPoints(points);
+                          setDxfPreviewRings([]);
+                          setDxfPreviewLinePaths([]);
+                        } else if (next === "linestring") {
+                          const paths = extractOpenLineStringsFromDxfLayer(
+                            dxf,
+                            dxfLayer
+                          );
+                          setDxfPolygonCount(paths.length);
+                          setDxfPreviewLinePaths(paths);
+                          setDxfPreviewRings([]);
+                          setDxfPreviewPoints([]);
+                        } else {
+                          const rings = extractClosedPolygonRingsFromDxfLayer(
+                            dxf,
+                            dxfLayer,
+                            dxfRawText
+                          );
+                          setDxfPolygonCount(rings.length);
+                          setDxfPreviewRings(rings);
+                          setDxfPreviewPoints([]);
+                          setDxfPreviewLinePaths([]);
+                        }
+                        setDxfError(null);
+                      } catch (err) {
+                        setDxfPolygonCount(0);
+                        setDxfPreviewRings([]);
+                        setDxfPreviewPoints([]);
+                        setDxfPreviewLinePaths([]);
+                        setDxfError(
+                          err instanceof Error
+                            ? err.message
+                            : "Gagal menganalisis geometri DXF."
+                        );
+                      }
+                    }}
+                    className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                    disabled={pending || dxfLayers.length === 0}
+                  >
+                    <option value="polygon">Poligon tertutup</option>
+                    <option value="linestring">LineString (garis terbuka)</option>
+                    <option value="point">POINT (titik)</option>
+                  </select>
+                </div>
+              </div>
               <div>
                 <Label htmlFor="layer-dxf-srid">EPSG/SRID sumber</Label>
                 <select
@@ -540,7 +709,13 @@ export function VirtualTableLayerUploadDialog({
               {dxfPolygonCount > 0 ? (
                 <div className="space-y-2 rounded-md border border-border p-3">
                   <p className="text-xs font-medium">
-                    No. bidang per poligon ({dxfPolygonCount})
+                    No. bidang per{" "}
+                    {dxfGeometryType === "point"
+                      ? "titik"
+                      : dxfGeometryType === "linestring"
+                        ? "garis"
+                        : "poligon"}{" "}
+                    ({dxfPolygonCount})
                   </p>
                   {dxfPreviewFc.err ? (
                     <p className="text-xs text-amber-700">{dxfPreviewFc.err}</p>

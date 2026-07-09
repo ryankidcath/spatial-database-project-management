@@ -112,8 +112,84 @@ Centang `[ ]` → `[x]` saat fase selesai; tambahkan tanggal di baris bawah jika
 
 - [x] Dokumentasi user-facing: **`docs/spatial-import-user-guide.md`** (CRS, key, format) + petunjuk ringkas di dialog Map (`<details>`).
 - [x] Halaman bantuan **di dalam aplikasi**: route **`/help/spatial-import`** (`help/spatial-import/page.tsx`), publik lewat middleware (`/help/`).
-- [ ] **CMS / penyuntingan** konten bantuan oleh non-developer (opsional).
+- [x] Catatan strategi **workbench surveyor / satu aplikasi**: [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md).
 - [x] Batas ukuran & pesan error yang konsisten antar format (~12 MB teks; `spatialGeometryTextTooLargeMessage`; cek ukuran saat baca file GeoJSON/DXF di klien).
+
+### 4.5 Workbench surveyor — satu aplikasi (keputusan PM 2026-07)
+
+**Dokumen strategi lengkap:** [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md)
+
+Target: surveyor tidak wajib menutup poligon di AutoCAD/QGIS; portal menjadi workbench produksi (polygonize DXF, titik→poligon, digitasi). Prioritas backlog impor:
+
+- [x] **Fase 1** — DXF mode «bangun poligon dari garis» (polygonize): `LINE` + LW/PL terbuka, snap/noding, `@turf/polygonize`, dialog virtual table
+- [x] **Fase 2** — Wizard «bidang dari titik» (CSV no_bidang/x/y, urutan, pratinjau, self-intersect, upsert)
+- [x] **Fase 3** — Digitasi bidang di peta (Alat → Gambar bidang, snap vertex, simpan no_bidang)
+- [x] **Fase 4** — Simpan titik ukur mentah + relasi ke bidang
+- [x] **Fase 5** — Dokumentasi alur resmi (`spatial-import-user-guide.md`, `/help/spatial-import`); UI wizard/DXF kurangi promosi poligon tertutup; default DXF polygonize
+
+### 4.5.1 Fase 5 (selesai) — sunset promosi jalur lama
+
+- [x] Panduan pengguna §0: alur workbench tabel virtual (`no_bidang`) sebagai jalur resmi
+- [x] Halaman `/help/spatial-import` diselaraskan dengan panduan
+- [x] Wizard Impor Spasial: format workbench di urutan pertama; default «Bidang dari titik»; tautan panduan
+- [x] Dialog DXF: default mode **bangun dari garis**; opsi poligon tertutup dilabeli legacy
+- [x] Checklist evaluasi lisensi CAD (organisasi) di panduan §3
+
+### 4.7 Fase 6 (rencana) — satu file titik lapangan → digitasi per layer
+
+Pola lapangan: **semua titik dalam satu file**, tanpa kode jenis; surveyor membedakan lewat **sketsa kertas**; di CAD titik diimpor lalu digambar per layer dengan snap. Portal meniru: titik = referensi, digitasi bidang/garis = deliverable per tabel virtual.
+
+- [x] Impor titik mentah CSV **`x`,`y` saja** (tanpa wajib `no_bidang`); label `T1`, `T2`, …
+- [x] Bootstrap **tabel titik lapangan** dari UI (wizard Spasial)
+- [x] Bootstrap tabel layer (Bidang / Jalan / Saluran)
+- [x] Snap **Gambar bidang** ke Point referensi + label T1… di peta
+- [x] Alat peta **Gambar garis** + simpan LineString
+- [x] Panduan & training: sketsa kertas + digitasi layer
+
+Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 Fase 6.
+
+### 4.8 Fase 7 (rencana) — DXF satu file → pisah ke beberapa tabel
+
+Satu unggah DXF berisi campuran bidang, garis, titik → Portal mendeteksi dan mengimpor ke **tabel virtual terpisah** (Bidang / Jalan / Saluran / Titik lapangan).
+
+**Keputusan:** Dua pendekatan **keduanya** diimplementasikan, digabung:
+
+- **[A] Mapping layer CAD** — layer `BIDANG`, `JALAN`, `TITIK`, dll. → jenis tabel; user konfirmasi/ubah.
+- **[B] Heuristik geometri** — poligon tertutup → Bidang; garis terbuka → LineString; POINT → titik; polygonize loop + sisa garis; pecah layer campuran.
+
+Alur: scan → saran default (A+B) → UI mapping editable → pratinjau → batch simpan (bootstrap tabel 6D bila perlu).
+
+- [x] Ekstrak POINT dari DXF (parser + mode impor POINT di dialog DXF virtual table)
+- [x] Ekstrak LineString terbuka dari DXF
+- [ ] Heuristik layer + geometri (alias nama layer)
+- [ ] UI mapping layer/geom → tabel target + pratinjau
+- [ ] Server action impor DXF split multi-tabel
+- [ ] Wizard Spasial «DXF → pisah layer»
+- [ ] Panduan: Fase 7 untuk migrasi CAD vs Fase 6 untuk proyek baru
+
+Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 Fase 7.
+
+### 4.9 Fase 8 (rencana) — koreksi geometri + referensi persil BPN
+
+**Konteks surveyor:** setelah gambar bidang, overlay persil unduhan BPN → geser bidang jika overlap → baru «beres». Portal: overlap ✅ (G-D1), impor persil file ✅; geser geometri ❌.
+
+**8A — Edit geometri di peta**
+
+- [ ] Alat geser (translasi) poligon/garis + snap ke referensi
+- [ ] Integrasi QC overlap saat koreksi
+- [ ] (Opsional) rotasi / edit vertex
+
+**8B — Referensi persil BPN + ATLAS**
+
+- [ ] Jalur utama: unduh DXF/SHP dari BHUMI → tabel referensi (sudah ada)
+- [x] Spike WMS [ATLAS GeoServer](https://atlas.atrbpn.go.id/developer/) di lapisan eksternal (G-G1): teknis load OK untuk layer publik tertentu; belum preset.
+- [ ] Panduan admin layer name / GetCapabilities
+
+Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 Fase 8.
+
+### 4.6 CMS / penyuntingan konten bantuan
+
+- [ ] **CMS / penyuntingan** konten bantuan oleh non-developer (opsional).
 
 ---
 
@@ -125,4 +201,4 @@ Centang `[ ]` → `[x]` saat fase selesai; tambahkan tanggal di baris bawah jika
 
 ---
 
-*Terakhir diperbarui: tabel mapping key/label untuk batch GeoJSON (FeatureCollection); sesuaikan lagi saat fase berikutnya selesai.*
+*Terakhir diperbarui: Fase 8 dicatat (edit geom + referensi ATLAS/BPN); Fase 7 DXF split.*

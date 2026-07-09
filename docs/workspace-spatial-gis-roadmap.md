@@ -616,7 +616,15 @@ Penyambung: `**no_bidang**` (atau kolom kunci upsert), bukan `feature_key` legac
 
 Pola **B** didukung di model data **dan** UX navigasi (**G-H**). Spike dev: project **`GHDEMO`** (`0074`, `0077`); produksi: replikasi skema + uji §10.8.
 
-### 11.6 Mulai dari mana (urutan disarankan)
+### 11.7 Workbench surveyor — arah produk (2026-07)
+
+Keputusan PM: **Spatial PM = satu workbench** untuk produksi geometri bidang (bukan hanya sinkronisasi setelah AutoCAD). Mengurangi lisensi CAD/GIS; training internal oleh pemilik produk.
+
+**Roadmap fitur:** [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) — polygonize DXF, titik→poligon, digitasi, titik mentah.
+
+Alur pilot §11.2 tetap valid untuk **fase transisi** (impor poligon tertutup); akan digantikan bertahap oleh jalur di dokumen strategi.
+
+### 11.8 Mulai dari mana (urutan disarankan)
 
 **Tanpa kode dulu — nilai pilot segera**
 

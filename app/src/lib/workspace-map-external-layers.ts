@@ -57,17 +57,3 @@ export function createExternalLeafletLayer(
 
   return null;
 }
-
-export function externalLayerBounds(
-  layer: ResolvedExternalMapLayer
-): L.LatLngBounds | null {
-  if (layer.kind !== "geojson" || !layer.geojsonData) return null;
-  try {
-    const gj = L.geoJSON(layer.geojsonData);
-    const bounds = gj.getBounds();
-    gj.remove();
-    return bounds.isValid() ? bounds : null;
-  } catch {
-    return null;
-  }
-}

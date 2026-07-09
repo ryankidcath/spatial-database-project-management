@@ -2,6 +2,8 @@ import { extractMultiPolygonFromGeoJSON } from "@/lib/geojson-multipolygon";
 import {
   defaultGeoJsonBatchFeatureKey,
   defaultGeoJsonBatchLabel,
+  listGeoJsonBatchLineRows,
+  listGeoJsonBatchPointRows,
   listGeoJsonBatchPolygonRows,
   type GeoJsonFeatureCollectionForBatch,
 } from "@/lib/geojson-batch-mapping-utils";
@@ -119,6 +121,51 @@ export function featureToStoredGeometry(
   };
 }
 
+/** Satu Feature Point per baris (kolom geometry titik di virtual_rows.payload). */
+export function featureToStoredPointGeometry(
+  geometry: unknown,
+  properties: Record<string, unknown>
+): GeoJsonFeatureForStorage | null {
+  if (!geometry || typeof geometry !== "object") return null;
+  const g = geometry as { type?: string; coordinates?: unknown };
+  if (g.type !== "Point" || !Array.isArray(g.coordinates) || g.coordinates.length < 2) {
+    return null;
+  }
+  const lng = Number(g.coordinates[0]);
+  const lat = Number(g.coordinates[1]);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  return {
+    type: "Feature",
+    properties: { ...properties },
+    geometry: { type: "Point", coordinates: [lng, lat] },
+  };
+}
+
+/** Satu Feature LineString per baris. */
+export function featureToStoredLineGeometry(
+  geometry: unknown,
+  properties: Record<string, unknown>
+): GeoJsonFeatureForStorage | null {
+  if (!geometry || typeof geometry !== "object") return null;
+  const g = geometry as { type?: string; coordinates?: unknown };
+  if (g.type !== "LineString" || !Array.isArray(g.coordinates)) return null;
+  if (g.coordinates.length < 2) return null;
+  for (const c of g.coordinates) {
+    if (!Array.isArray(c) || c.length < 2) return null;
+    const lng = Number(c[0]);
+    const lat = Number(c[1]);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  }
+  return {
+    type: "Feature",
+    properties: { ...properties },
+    geometry: {
+      type: "LineString",
+      coordinates: g.coordinates as [number, number][],
+    },
+  };
+}
+
 export type VirtualColumnForGeoJsonMap = {
   slug: string;
   data_type: string;
@@ -205,6 +252,102 @@ export function parseFeatureCollectionForVirtualImport(
     };
   }
   return { ok: true, fc, rows };
+}
+
+export function parseFeatureCollectionForPointImport(
+  raw: string
+):
+  | { ok: true; fc: GeoJsonFeatureCollectionForBatch; rows: ReturnType<typeof listGeoJsonBatchPointRows> }
+  | { ok: false; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "GeoJSON tidak valid (bukan JSON)." };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return { ok: false, error: "GeoJSON harus berupa objek JSON." };
+  }
+  const obj = parsed as { type?: string; features?: unknown[] };
+  if (obj.type !== "FeatureCollection" || !Array.isArray(obj.features)) {
+    return {
+      ok: false,
+      error: "File harus GeoJSON FeatureCollection (satu feature per titik).",
+    };
+  }
+  const fc = parsed as GeoJsonFeatureCollectionForBatch;
+  const rows = listGeoJsonBatchPointRows(fc);
+  if (rows.length === 0) {
+    return {
+      ok: false,
+      error: "Tidak ada titik valid (Point) di file.",
+    };
+  }
+  if (rows.length > MAX_VIRTUAL_TABLE_GEOJSON_FEATURES) {
+    return {
+      ok: false,
+      error: `Terlalu banyak titik (${rows.length}). Maks. ${MAX_VIRTUAL_TABLE_GEOJSON_FEATURES} per impor.`,
+    };
+  }
+  return { ok: true, fc, rows };
+}
+
+export function parseFeatureCollectionForLineImport(
+  raw: string
+):
+  | { ok: true; fc: GeoJsonFeatureCollectionForBatch; rows: ReturnType<typeof listGeoJsonBatchLineRows> }
+  | { ok: false; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "GeoJSON tidak valid (bukan JSON)." };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return { ok: false, error: "GeoJSON harus berupa objek JSON." };
+  }
+  const obj = parsed as { type?: string; features?: unknown[] };
+  if (obj.type !== "FeatureCollection" || !Array.isArray(obj.features)) {
+    return {
+      ok: false,
+      error: "File harus GeoJSON FeatureCollection (satu feature garis per baris).",
+    };
+  }
+  const fc = parsed as GeoJsonFeatureCollectionForBatch;
+  const rows = listGeoJsonBatchLineRows(fc);
+  if (rows.length === 0) {
+    return {
+      ok: false,
+      error: "Tidak ada garis valid (LineString) di file.",
+    };
+  }
+  if (rows.length > MAX_VIRTUAL_TABLE_GEOJSON_FEATURES) {
+    return {
+      ok: false,
+      error: `Terlalu banyak garis (${rows.length}). Maks. ${MAX_VIRTUAL_TABLE_GEOJSON_FEATURES} per impor.`,
+    };
+  }
+  return { ok: true, fc, rows };
+}
+
+export function pickDefaultVirtualTableLineMatchColumn(
+  columns: VirtualTableMatchColumnPick[]
+): VirtualTableMatchColumnPick | undefined {
+  if (columns.length === 0) return undefined;
+  const preferSlugs = [
+    "no_garis",
+    "kode_garis",
+    "no_jalan",
+    "kode_jalan",
+    "title",
+    "judul",
+    "no_bidang",
+  ];
+  for (const slug of preferSlugs) {
+    const hit = columns.find((c) => c.slug === slug);
+    if (hit) return hit;
+  }
+  return pickDefaultVirtualTableMatchColumn(columns);
 }
 
 export function defaultTitleFromFeature(

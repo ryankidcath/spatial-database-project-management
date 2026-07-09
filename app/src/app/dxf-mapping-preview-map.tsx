@@ -28,6 +28,17 @@ function styleForIndex(
   };
 }
 
+/** Titik (Point) — hindari ikon PNG default Leaflet yang rusak di bundler Next.js. */
+function previewPointMarkerStyle(): L.CircleMarkerOptions {
+  return {
+    radius: 6,
+    color: "#1d4ed8",
+    fillColor: "#3b82f6",
+    fillOpacity: 0.88,
+    weight: 2,
+  };
+}
+
 type Props = {
   featureCollection: GeoJSON.FeatureCollection | null;
   highlightIndex: number | null;
@@ -102,6 +113,8 @@ export function DxfMappingPreviewMap({
           ?.dxfPolygonIndex;
         return styleForIndex(idx, highlightRef.current);
       },
+      pointToLayer: (_feature, latlng) =>
+        L.circleMarker(latlng, previewPointMarkerStyle()),
       onEachFeature: (feature, lyr) => {
         const idx = (feature.properties as { dxfPolygonIndex?: number } | undefined)
           ?.dxfPolygonIndex;

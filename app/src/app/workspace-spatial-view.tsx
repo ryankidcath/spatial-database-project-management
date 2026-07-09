@@ -59,7 +59,7 @@ import {
   externalLayersResolveKey,
   resolveExternalMapLayers,
 } from "@/lib/workspace-spatial-resolve-external-layers";
-import { externalLayerBounds } from "@/lib/workspace-map-external-layers";
+import { geoJsonLatLngBoundsTuple } from "@/lib/geojson-latlng-bounds";
 import {
   loadOfflineTilePrefs,
   type OfflineTilePrefs,
@@ -95,7 +95,12 @@ import {
   type MapStatusState,
 } from "./workspace-map-gis-chrome";
 import { WorkspaceMapToolHud } from "./workspace-map-tool-hud";
+import { WorkspaceMapDrawBidangHud } from "./workspace-map-draw-bidang-hud";
+import { WorkspaceMapDrawLineHud } from "./workspace-map-draw-line-hud";
+import { WorkspaceSpatialDrawBidangSaveDialog } from "./workspace-spatial-draw-bidang-save-dialog";
+import { WorkspaceSpatialDrawLineSaveDialog } from "./workspace-spatial-draw-line-save-dialog";
 import type { MeasureDraftState } from "./workspace-map-tool-controller";
+import type { LatLngPoint } from "@/lib/workspace-map-draw-bidang";
 import { WorkspaceSpatialGoToDialog } from "./workspace-spatial-go-to-dialog";
 import { WorkspaceSpatialAnalysisDialog } from "./workspace-spatial-analysis-dialog";
 import { WorkspaceSpatialExternalLayersDialog } from "./workspace-spatial-external-layers-dialog";
@@ -134,11 +139,14 @@ import {
   buildSpatialGeometryLayersCacheKey,
   getSpatialGeometryLayersCache,
   hydrateSpatialGeometryLayersCache,
+  invalidateSpatialGeometryLayersCache,
   setSpatialGeometryLayersCache,
   totalCountsMapToRecord,
   totalCountsRecordToMap,
 } from "@/lib/workspace-spatial-geometry-layers-cache";
-import { VIRTUAL_TABLE_ROWS_MUTATED } from "@/lib/workspace-virtual-table-mutations";
+import { VIRTUAL_TABLE_ROWS_MUTATED, emitVirtualTableRowsMutated } from "@/lib/workspace-virtual-table-mutations";
+import { invalidateVirtualTableRowsCache } from "@/lib/virtual-table-rows-cache";
+import { useWorkspaceShellRefresh } from "./workspace-shell-context";
 import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
 import {
@@ -208,6 +216,7 @@ export function WorkspaceSpatialView({
   entity360Profile,
 }: WorkspaceSpatialViewProps) {
   const router = useRouter();
+  const refreshWorkspaceShell = useWorkspaceShellRefresh();
   const mapHandleRef = useRef<WorkspaceMapHandle>(null);
   const mapBottomChromeRef = useRef<HTMLDivElement>(null);
   const rail = useWorkspaceCollapsibleRail("Map");
@@ -255,6 +264,28 @@ export function WorkspaceSpatialView({
   );
   const [finishMeasureSignal, setFinishMeasureSignal] = useState(0);
   const [clearMeasureSignal, setClearMeasureSignal] = useState(0);
+  const [drawBidangDraft, setDrawBidangDraft] = useState({
+    pointCount: 0,
+    closed: false,
+  });
+  const [drawBidangRing, setDrawBidangRing] = useState<LatLngPoint[] | null>(
+    null
+  );
+  const [drawBidangSnap, setDrawBidangSnap] = useState(true);
+  const [drawLineDraft, setDrawLineDraft] = useState({
+    pointCount: 0,
+    finished: false,
+  });
+  const [drawLinePoints, setDrawLinePoints] = useState<LatLngPoint[] | null>(
+    null
+  );
+  const [drawLineSnap, setDrawLineSnap] = useState(true);
+  const [closeDrawRingSignal, setCloseDrawRingSignal] = useState(0);
+  const [finishDrawLineSignal, setFinishDrawLineSignal] = useState(0);
+  const [undoDrawPointSignal, setUndoDrawPointSignal] = useState(0);
+  const [clearDrawSignal, setClearDrawSignal] = useState(0);
+  const [drawSaveOpen, setDrawSaveOpen] = useState(false);
+  const [drawLineSaveOpen, setDrawLineSaveOpen] = useState(false);
   const [leafletMap, setLeafletMap] = useState<LeafletMap | null>(null);
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [desktopPrefs, setDesktopPrefs] = useState<SpatialDesktopPrefs>(() =>
@@ -405,10 +436,12 @@ export function WorkspaceSpatialView({
   const handleExternalLayerZoom = useCallback(
     (id: string) => {
       const resolved = resolvedExternalLayers.find((l) => l.id === id);
-      if (!resolved) return;
-      const bounds = externalLayerBounds(resolved);
+      if (!resolved || resolved.kind !== "geojson" || !resolved.geojsonData) {
+        return;
+      }
+      const bounds = geoJsonLatLngBoundsTuple(resolved.geojsonData);
       if (bounds) {
-        mapHandleRef.current?.fitBounds(bounds);
+        mapHandleRef.current?.fitBoundsTuple(bounds);
       }
     },
     [resolvedExternalLayers]
@@ -975,6 +1008,21 @@ export function WorkspaceSpatialView({
       setMeasureFinished(null);
       setClearMeasureSignal((n) => n + 1);
     }
+    if (mode !== "draw-bidang") {
+      setDrawBidangRing(null);
+      setDrawBidangDraft({ pointCount: 0, closed: false });
+      setDrawSaveOpen(false);
+      setCloseDrawRingSignal((n) => n + 1);
+    }
+    if (mode !== "draw-garis") {
+      setDrawLinePoints(null);
+      setDrawLineDraft({ pointCount: 0, finished: false });
+      setDrawLineSaveOpen(false);
+      setFinishDrawLineSignal((n) => n + 1);
+    }
+    if (mode !== "draw-bidang" && mode !== "draw-garis") {
+      setClearDrawSignal((n) => n + 1);
+    }
   }, []);
 
   const handleIdentifyResults = useCallback(
@@ -1082,9 +1130,14 @@ export function WorkspaceSpatialView({
   const handleMapGeoImported = useCallback(() => {
     setMapImportPreviewLayers([]);
     setSpatialImportWizardOpen(false);
+    if (selectedProjectId) {
+      invalidateSpatialGeometryLayersCache(selectedProjectId);
+    } else {
+      invalidateSpatialGeometryLayersCache();
+    }
     setMapTabEpoch((n) => n + 1);
     router.refresh();
-  }, [router]);
+  }, [router, selectedProjectId]);
 
   const handleMapDxfImported = useCallback(() => {
     setSpatialImportWizardOpen(false);
@@ -1093,15 +1146,23 @@ export function WorkspaceSpatialView({
   }, [router]);
 
   const handleMapLayerCreated = useCallback(
-    (result: LayerUploadCreated) => {
+    async (result: LayerUploadCreated) => {
       setMapImportPreviewLayers([]);
       setSpatialImportWizardOpen(false);
       setMapImportTableId(result.tableId);
       onSelectTableSlug(result.tableSlug);
+      invalidateVirtualTableRowsCache(result.tableId);
+      if (selectedProjectId) {
+        invalidateSpatialGeometryLayersCache(selectedProjectId);
+      } else {
+        invalidateSpatialGeometryLayersCache();
+      }
+      emitVirtualTableRowsMutated(result.tableId);
+      await refreshWorkspaceShell();
       setMapTabEpoch((n) => n + 1);
       router.refresh();
     },
-    [router, onSelectTableSlug]
+    [router, onSelectTableSlug, refreshWorkspaceShell, selectedProjectId]
   );
 
   useEffect(() => {
@@ -1494,6 +1555,37 @@ export function WorkspaceSpatialView({
             />
           ) : null}
 
+          {selectedProjectId ? (
+            <WorkspaceSpatialDrawLineSaveDialog
+              open={drawLineSaveOpen}
+              onOpenChange={setDrawLineSaveOpen}
+              line={drawLinePoints}
+              vtablesWithGeometry={vtablesWithGeometry}
+              virtualColumns={virtualColumns}
+              allAccessibleVtables={allAccessibleVtables}
+              defaultTableId={mapImportTableId}
+              onSaved={() => {
+                handleToolModeChange("navigate");
+                setMapTabEpoch((n) => n + 1);
+              }}
+            />
+          ) : null}
+
+          {selectedProjectId ? (
+            <WorkspaceSpatialDrawBidangSaveDialog
+              open={drawSaveOpen}
+              onOpenChange={setDrawSaveOpen}
+              ring={drawBidangRing}
+              vtablesWithGeometry={vtablesWithGeometry}
+              virtualColumns={virtualColumns}
+              allAccessibleVtables={allAccessibleVtables}
+              defaultTableId={mapImportTableId}
+              onSaved={() => {
+                handleToolModeChange("navigate");
+              }}
+            />
+          ) : null}
+
           {!mapFullscreen ? (
           <WorkspaceSpatialToolbar
             layerRows={spatialLayerRows}
@@ -1518,6 +1610,8 @@ export function WorkspaceSpatialView({
             hasMapBookmark={hasMapBookmark}
             toolMode={toolMode}
             onToolModeChange={handleToolModeChange}
+            canDrawBidang={vtablesWithGeometry.length > 0}
+            canDrawGaris={vtablesWithGeometry.length > 0}
             onOpenGoToDialog={() => setGoToOpen(true)}
             importOverlapCount={importOverlapFootprintIds.size}
             filterSyncEnabled={filterSyncEnabled}
@@ -1608,6 +1702,21 @@ export function WorkspaceSpatialView({
               onMeasureFinished={setMeasureFinished}
               finishMeasureSignal={finishMeasureSignal}
               clearMeasureSignal={clearMeasureSignal}
+              drawBidangSnapEnabled={drawBidangSnap}
+              drawSnapFootprints={visibleMapLayers}
+              onDrawBidangDraftChange={setDrawBidangDraft}
+              onDrawRingClosed={(ring) => {
+                setDrawBidangRing(ring);
+              }}
+              closeDrawRingSignal={closeDrawRingSignal}
+              drawGarisSnapEnabled={drawLineSnap}
+              onDrawLineDraftChange={setDrawLineDraft}
+              onDrawLineFinished={(line) => {
+                setDrawLinePoints(line);
+              }}
+              finishDrawLineSignal={finishDrawLineSignal}
+              undoDrawPointSignal={undoDrawPointSignal}
+              clearDrawSignal={clearDrawSignal}
               coordinateDisplay={coordinateDisplay}
               onCoordinateDisplayToggle={handleCoordinateDisplayToggle}
               onMapReady={handleMapReady}
@@ -1699,6 +1808,32 @@ export function WorkspaceSpatialView({
               onIdentifyHitSelect={handleIdentifyHitSelect}
               onToolModeChange={handleToolModeChange}
             />
+            {toolMode === "draw-bidang" ? (
+              <WorkspaceMapDrawBidangHud
+                pointCount={drawBidangDraft.pointCount}
+                closed={drawBidangDraft.closed}
+                snapEnabled={drawBidangSnap}
+                onSnapEnabledChange={setDrawBidangSnap}
+                onCloseRing={() => setCloseDrawRingSignal((n) => n + 1)}
+                onUndoPoint={() => setUndoDrawPointSignal((n) => n + 1)}
+                onClear={() => setClearDrawSignal((n) => n + 1)}
+                onSave={() => setDrawSaveOpen(true)}
+                onCancel={() => handleToolModeChange("navigate")}
+              />
+            ) : null}
+            {toolMode === "draw-garis" ? (
+              <WorkspaceMapDrawLineHud
+                pointCount={drawLineDraft.pointCount}
+                finished={drawLineDraft.finished}
+                snapEnabled={drawLineSnap}
+                onSnapEnabledChange={setDrawLineSnap}
+                onFinishLine={() => setFinishDrawLineSignal((n) => n + 1)}
+                onUndoPoint={() => setUndoDrawPointSignal((n) => n + 1)}
+                onClear={() => setClearDrawSignal((n) => n + 1)}
+                onSave={() => setDrawLineSaveOpen(true)}
+                onCancel={() => handleToolModeChange("navigate")}
+              />
+            ) : null}
             {hasAnyGeometry && visibleMapLayers.length > 0 ? (
               <WorkspaceMapLegend
                 layerRows={spatialLayerRows}

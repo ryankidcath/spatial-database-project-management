@@ -1,6 +1,6 @@
 import proj4 from "proj4";
 
-import type { LinearRing } from "./dxf-import-utils";
+import type { DxfLinePath, DxfPoint, LinearRing } from "./dxf-import-utils";
 
 const WGS84_LNG_LAT = "+proj=longlat +datum=WGS84 +no_defs";
 
@@ -56,6 +56,25 @@ export function reprojectLinearRingTo4326(
   });
 }
 
+export function reprojectDxfPointTo4326(
+  point: DxfPoint,
+  sourceEpsg: number
+): DxfPoint {
+  const [x, y] = point;
+  if (sourceEpsg === 4326) {
+    return [x, y];
+  }
+  ensureEpsgDef(sourceEpsg);
+  ensureEpsgDef(4326);
+  const from = `EPSG:${sourceEpsg}`;
+  const to = `EPSG:4326`;
+  const [lng, lat] = proj4(from, to, [x, y]);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+    throw new Error("Titik hasil proyeksi tidak valid.");
+  }
+  return [lng, lat];
+}
+
 /** FeatureCollection untuk Leaflet; `dxfPolygonIndex` = indeks 0-based sama baris tabel mapping. */
 export function dxfRingsToWgs84PreviewFeatureCollection(
   rings: LinearRing[],
@@ -74,6 +93,57 @@ export function dxfRingsToWgs84PreviewFeatureCollection(
       geometry: {
         type: "Polygon",
         coordinates: [ll.map(([lng, lat]) => [lng, lat])],
+      },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+export function reprojectDxfLinePathTo4326(
+  path: DxfLinePath,
+  sourceEpsg: number
+): DxfLinePath {
+  const out = path.map((pt) => reprojectDxfPointTo4326(pt, sourceEpsg));
+  if (out.length < 2) {
+    throw new Error("Garis hasil proyeksi tidak valid (terlalu sedikit titik).");
+  }
+  return out;
+}
+
+/** FeatureCollection LineString untuk pratinjau DXF. */
+export function dxfLinePathsToWgs84PreviewFeatureCollection(
+  paths: DxfLinePath[],
+  sourceEpsg: number
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (let i = 0; i < paths.length; i++) {
+    const ll = reprojectDxfLinePathTo4326(paths[i]!, sourceEpsg);
+    features.push({
+      type: "Feature",
+      properties: { dxfPolygonIndex: i },
+      geometry: {
+        type: "LineString",
+        coordinates: ll.map(([lng, lat]) => [lng, lat]),
+      },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/** FeatureCollection Point untuk pratinjau DXF. */
+export function dxfPointsToWgs84PreviewFeatureCollection(
+  points: DxfPoint[],
+  sourceEpsg: number
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const [lng, lat] = reprojectDxfPointTo4326(points[i]!, sourceEpsg);
+    features.push({
+      type: "Feature",
+      properties: { dxfPolygonIndex: i },
+      geometry: {
+        type: "Point",
+        coordinates: [lng, lat],
       },
     });
   }

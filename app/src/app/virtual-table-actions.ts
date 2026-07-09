@@ -12,9 +12,13 @@ import {
   defaultTitleFromFeature,
   extractMatchKeyFromProperties,
   featureToStoredGeometry,
+  featureToStoredPointGeometry,
+  featureToStoredLineGeometry,
   geoProp,
   mapPropertiesToPayload,
   normalizeVirtualTableMatchKey,
+  parseFeatureCollectionForLineImport,
+  parseFeatureCollectionForPointImport,
   parseFeatureCollectionForVirtualImport,
 } from "@/lib/virtual-table-geojson-import";
 import {
@@ -51,19 +55,70 @@ import type {
 } from "@/lib/workspace-map-relation-trace";
 import { parseProjectEntity360Profile } from "@/lib/project-entity-360-profile";
 import {
+  buildDxfPolygonizeOptionsFromForm,
   extractClosedPolygonRingsFromDxfLayer,
+  extractOpenLineStringsFromDxfLayer,
+  extractPointsFromDxfLayer,
+  extractPolygonRingsFromDxfLayer,
   parseDxfDocument,
+  parseDxfGeometryMode,
 } from "@/lib/dxf-import-utils";
 import { isPreviewSourceSridSupported } from "@/lib/crs-reproject";
 import {
   buildVirtualTableDxfFeatureCollection,
+  buildVirtualTableDxfLineStringFeatureCollection,
+  buildVirtualTableDxfPointFeatureCollection,
   parseVirtualTableDxfSourceSrid,
 } from "@/lib/virtual-table-dxf-import";
+import {
+  buildBidangPolygonsFromPoints,
+  parseFieldPointsCsv,
+  parseSurveyPointsCsv,
+  type FieldPointsImportColumnMap,
+  type PointsImportColumnMap,
+} from "@/lib/points-to-polygon-import";
+import {
+  buildDrawnBidangGeoJsonFeature,
+  validateDrawnBidangRing,
+  type LatLngPoint,
+} from "@/lib/workspace-map-draw-bidang";
+import {
+  buildDrawnLineGeoJsonFeature,
+  validateDrawnLine,
+} from "@/lib/workspace-map-draw-line";
+import {
+  buildVirtualTablePointsFeatureCollection,
+  parseVirtualTablePointsSourceSrid,
+} from "@/lib/virtual-table-points-import";
+import {
+  buildFieldPointsArchiveFeatureCollection,
+  buildSurveyPointsArchiveFeatureCollection,
+  parseSurveyPointsArchiveSourceSrid,
+} from "@/lib/virtual-table-survey-points-archive";
+import {
+  SURVEY_POINT_COLUMN_DEFS,
+  SURVEY_POINT_GEOM_SLUG,
+  SURVEY_POINT_MATCH_COLUMN_SLUG,
+  defaultFieldPointTableName,
+  defaultSurveyPointTableName,
+} from "@/lib/virtual-table-survey-points-bootstrap";
+import {
+  buildPolygonRingFromArchivedPoints,
+  groupArchivedPointsByBidang,
+  type ArchivedSurveyPointRow,
+} from "@/lib/regenerate-bidang-from-survey-points";
 import {
   LAYER_COLUMN_DEFS,
   LAYER_GEOMETRY_COLUMN_SLUG,
   LAYER_MATCH_COLUMN_SLUG,
 } from "@/lib/virtual-table-layer-bootstrap";
+import {
+  defaultWorkbenchLayerTableName,
+  parseWorkbenchLayerKind,
+  WORKBENCH_LAYER_KIND_ICONS,
+  workbenchLayerColumnDefs,
+  type WorkbenchLayerKind,
+} from "@/lib/virtual-table-workbench-layer-bootstrap";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeOrgAuditLog, writeProjectAuditLog } from "./audit-log-actions";
 import { dispatchWorkspaceNotification } from "./workspace-notification-dispatch";
@@ -1946,6 +2001,7 @@ export async function importVirtualRowsGeoJsonBatchAction(
     String(formData.get("target_title_slug") ?? "title").trim() || "title";
   const linkInboundRelations =
     String(formData.get("link_inbound_relations") ?? "true").trim() !== "false";
+  const geometryKind = String(formData.get("geometry_kind") ?? "polygon").trim();
 
   if (!tableId) return { error: "table_id kosong", ...empty };
   if (!geojsonRaw.trim()) return { error: "geojson_json kosong", ...empty };
@@ -1963,7 +2019,12 @@ export async function importVirtualRowsGeoJsonBatchAction(
     };
   }
 
-  const parsedFc = parseFeatureCollectionForVirtualImport(geojsonRaw);
+  const parsedFc =
+    geometryKind === "point"
+      ? parseFeatureCollectionForPointImport(geojsonRaw)
+      : geometryKind === "linestring"
+        ? parseFeatureCollectionForLineImport(geojsonRaw)
+        : parseFeatureCollectionForVirtualImport(geojsonRaw);
   if (!parsedFc.ok) return { error: parsedFc.error, ...empty };
   const { fc, rows: polygonRows } = parsedFc;
 
@@ -2282,7 +2343,12 @@ export async function importVirtualRowsGeoJsonBatchAction(
 
   for (let j = 0; j < polygonRows.length; j++) {
     const { featureIndex, props } = polygonRows[j]!;
-    const lineLabel = `Poligon #${featureIndex + 1}`;
+    const lineLabel =
+      geometryKind === "point"
+        ? `Titik #${featureIndex + 1}`
+        : geometryKind === "linestring"
+          ? `Garis #${featureIndex + 1}`
+          : `Poligon #${featureIndex + 1}`;
     const feat = fc.features[featureIndex];
     if (!feat || feat.type !== "Feature") {
       pushFailure(lineLabel, "bukan Feature valid");
@@ -2353,9 +2419,21 @@ export async function importVirtualRowsGeoJsonBatchAction(
       }
     }
 
-    const storedGeom = featureToStoredGeometry(feat.geometry, props);
+    const storedGeom =
+      geometryKind === "point"
+        ? featureToStoredPointGeometry(feat.geometry, props)
+        : geometryKind === "linestring"
+          ? featureToStoredLineGeometry(feat.geometry, props)
+          : featureToStoredGeometry(feat.geometry, props);
     if (!storedGeom) {
-      pushFailure(lineLabel, "geometri bukan Polygon/MultiPolygon valid");
+      pushFailure(
+        lineLabel,
+        geometryKind === "point"
+          ? "geometri bukan Point valid"
+          : geometryKind === "linestring"
+            ? "geometri bukan LineString valid"
+            : "geometri bukan Polygon/MultiPolygon valid"
+      );
       continue;
     }
 
@@ -2624,9 +2702,18 @@ export async function importVirtualRowsDxfBatchAction(
   const dxfText = String(formData.get("dxf_text") ?? "");
   const layerName = String(formData.get("layer_name") ?? "").trim();
   const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
+  const dxfGeometryType = String(formData.get("dxf_geometry_type") ?? "polygon")
+    .trim()
+    .toLowerCase();
   const keysJsonRaw = String(formData.get("match_keys_json") ?? "").trim();
   const labelsJsonRaw = String(formData.get("match_labels_json") ?? "").trim();
   const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+  const geometryMode = parseDxfGeometryMode(
+    String(formData.get("geometry_mode") ?? "closed")
+  );
+  const polygonizeSnapRaw = String(
+    formData.get("polygonize_snap_tolerance") ?? ""
+  );
 
   if (!dxfText.trim() || !layerName) {
     return {
@@ -2642,7 +2729,12 @@ export async function importVirtualRowsDxfBatchAction(
   }
   if (!keysJsonRaw) {
     return {
-      error: "match_keys_json wajib (satu kunci per poligon)",
+      error:
+        dxfGeometryType === "point"
+          ? "match_keys_json wajib (satu kunci per titik)"
+          : dxfGeometryType === "linestring"
+            ? "match_keys_json wajib (satu kunci per garis)"
+            : "match_keys_json wajib (satu kunci per poligon)",
       ...empty,
     };
   }
@@ -2717,44 +2809,140 @@ export async function importVirtualRowsDxfBatchAction(
     return { error: msg, ...empty };
   }
 
-  const rings = extractClosedPolygonRingsFromDxfLayer(dxf, layerName, dxfText);
-  if (rings.length === 0) {
-    return {
-      error:
-        "Tidak ada poligon tertutup di layer ini. Pastikan LWPOLYLINE/POLYLINE tertutup, INSERT blok, atau HATCH boundary valid.",
-      ...empty,
-    };
-  }
-  if (matchKeys.length !== rings.length) {
-    return {
-      error: `match_keys_json harus ${rings.length} elemen (sama dengan jumlah poligon tertutup).`,
-      ...empty,
-    };
-  }
-  if (labelPerIndex.length > 0 && labelPerIndex.length !== rings.length) {
-    return {
-      error: `match_labels_json harus ${rings.length} elemen bila diisi.`,
-      ...empty,
-    };
-  }
-  while (labelPerIndex.length < rings.length) {
-    labelPerIndex.push(null);
-  }
+  const polygonizeOpts =
+    geometryMode === "polygonize"
+      ? buildDxfPolygonizeOptionsFromForm(
+          sridParsed.srid,
+          polygonizeSnapRaw || undefined
+        )
+      : undefined;
 
   let fc: GeoJSON.FeatureCollection;
-  try {
-    fc = buildVirtualTableDxfFeatureCollection(
-      rings,
-      matchKeys,
-      labelPerIndex,
-      matchColumnSlug,
+  if (dxfGeometryType === "point") {
+    const points = extractPointsFromDxfLayer(dxf, layerName);
+    if (points.length === 0) {
+      return {
+        error:
+          "Tidak ada entitas POINT pada layer ini. Periksa layer DXF atau pilih mode poligon.",
+        ...empty,
+      };
+    }
+    if (matchKeys.length !== points.length) {
+      return {
+        error: `match_keys_json harus ${points.length} elemen (sama dengan jumlah titik).`,
+        ...empty,
+      };
+    }
+    if (labelPerIndex.length > 0 && labelPerIndex.length !== points.length) {
+      return {
+        error: `match_labels_json harus ${points.length} elemen bila diisi.`,
+        ...empty,
+      };
+    }
+    while (labelPerIndex.length < points.length) {
+      labelPerIndex.push(null);
+    }
+    try {
+      fc = buildVirtualTableDxfPointFeatureCollection(
+        points,
+        matchKeys,
+        labelPerIndex,
+        matchColumnSlug,
+        layerName,
+        sridParsed.srid
+      );
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Gagal membangun geometri titik dari DXF.";
+      return { error: msg, ...empty };
+    }
+  } else if (dxfGeometryType === "linestring") {
+    const paths = extractOpenLineStringsFromDxfLayer(dxf, layerName);
+    if (paths.length === 0) {
+      return {
+        error:
+          "Tidak ada garis terbuka (LINE/LWPOLYLINE) pada layer ini. Periksa layer DXF atau pilih mode poligon.",
+        ...empty,
+      };
+    }
+    if (matchKeys.length !== paths.length) {
+      return {
+        error: `match_keys_json harus ${paths.length} elemen (sama dengan jumlah garis).`,
+        ...empty,
+      };
+    }
+    if (labelPerIndex.length > 0 && labelPerIndex.length !== paths.length) {
+      return {
+        error: `match_labels_json harus ${paths.length} elemen bila diisi.`,
+        ...empty,
+      };
+    }
+    while (labelPerIndex.length < paths.length) {
+      labelPerIndex.push(null);
+    }
+    try {
+      fc = buildVirtualTableDxfLineStringFeatureCollection(
+        paths,
+        matchKeys,
+        labelPerIndex,
+        matchColumnSlug,
+        layerName,
+        sridParsed.srid
+      );
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Gagal membangun geometri garis dari DXF.";
+      return { error: msg, ...empty };
+    }
+  } else {
+    const extracted = extractPolygonRingsFromDxfLayer(
+      dxf,
       layerName,
-      sridParsed.srid
+      dxfText,
+      geometryMode,
+      polygonizeOpts
     );
-  } catch (e) {
-    const msg =
-      e instanceof Error ? e.message : "Gagal membangun geometri dari DXF.";
-    return { error: msg, ...empty };
+    const rings = extracted.rings;
+    if (rings.length === 0) {
+      const polygonizeHint =
+        geometryMode === "polygonize"
+          ? extracted.polygonizeMeta?.warnings.join(" ") ||
+            "Tidak ada poligon terbentuk dari garis di layer ini. Periksa LINE/LWPOLYLINE terbuka dan toleransi snap."
+          : "Tidak ada poligon tertutup di layer ini. Pastikan LWPOLYLINE/POLYLINE tertutup, INSERT blok, atau HATCH boundary valid.";
+      return {
+        error: polygonizeHint,
+        ...empty,
+      };
+    }
+    if (matchKeys.length !== rings.length) {
+      return {
+        error: `match_keys_json harus ${rings.length} elemen (sama dengan jumlah poligon tertutup).`,
+        ...empty,
+      };
+    }
+    if (labelPerIndex.length > 0 && labelPerIndex.length !== rings.length) {
+      return {
+        error: `match_labels_json harus ${rings.length} elemen bila diisi.`,
+        ...empty,
+      };
+    }
+    while (labelPerIndex.length < rings.length) {
+      labelPerIndex.push(null);
+    }
+    try {
+      fc = buildVirtualTableDxfFeatureCollection(
+        rings,
+        matchKeys,
+        labelPerIndex,
+        matchColumnSlug,
+        layerName,
+        sridParsed.srid
+      );
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Gagal membangun geometri dari DXF.";
+      return { error: msg, ...empty };
+    }
   }
 
   const geojsonJson = JSON.stringify(fc);
@@ -2767,6 +2955,1271 @@ export async function importVirtualRowsDxfBatchAction(
 
   const inner = new FormData();
   copyVirtualImportFormFields(formData, inner);
+  inner.set("geojson_json", geojsonJson);
+  if (dxfGeometryType === "point") {
+    inner.set("geometry_kind", "point");
+  } else if (dxfGeometryType === "linestring") {
+    inner.set("geometry_kind", "linestring");
+  }
+  return importVirtualRowsGeoJsonBatchAction(inner);
+}
+
+export type ImportVirtualRowsPointsResult = ImportVirtualRowsGeoJsonResult;
+
+/** Impor bidang dari CSV titik (no_bidang, x, y) → virtual_rows (WGS84, upsert sama GeoJSON). */
+export async function importVirtualRowsPointsBatchAction(
+  formData: FormData
+): Promise<ImportVirtualRowsPointsResult> {
+  const empty = {
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+  };
+
+  const csvText = String(formData.get("points_csv_text") ?? "");
+  const columnNoBidang = String(formData.get("column_no_bidang") ?? "").trim();
+  const columnX = String(formData.get("column_x") ?? "").trim();
+  const columnY = String(formData.get("column_y") ?? "").trim();
+  const columnUrutan = String(formData.get("column_urutan") ?? "").trim();
+  const columnNamaTitik = String(formData.get("column_nama_titik") ?? "").trim();
+  const pointOrderJsonRaw = String(formData.get("point_order_json") ?? "").trim();
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
+  const keysJsonRaw = String(formData.get("match_keys_json") ?? "").trim();
+  const labelsJsonRaw = String(formData.get("match_labels_json") ?? "").trim();
+  const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+
+  if (!csvText.trim()) {
+    return { error: "points_csv_text wajib diisi", ...empty };
+  }
+  if (!columnNoBidang || !columnX || !columnY) {
+    return {
+      error: "column_no_bidang, column_x, dan column_y wajib",
+      ...empty,
+    };
+  }
+  if (!matchColumnSlug) {
+    return {
+      error: "match_column_slug wajib (mis. no_bidang)",
+      ...empty,
+    };
+  }
+  if (!keysJsonRaw) {
+    return {
+      error: "match_keys_json wajib (satu kunci per bidang)",
+      ...empty,
+    };
+  }
+  if (csvText.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("CSV titik"),
+      ...empty,
+    };
+  }
+
+  const sridParsed = parseVirtualTablePointsSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) {
+    return { error: sridParsed.error, ...empty };
+  }
+  if (!isPreviewSourceSridSupported(sridParsed.srid)) {
+    return {
+      error: `EPSG:${sridParsed.srid} belum didukung untuk impor titik. Gunakan SRID dari daftar (UTM/TM-3/WGS84).`,
+      ...empty,
+    };
+  }
+
+  let matchKeys: string[];
+  let labelPerIndex: (string | null)[] = [];
+  try {
+    const parsed = JSON.parse(keysJsonRaw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return {
+        error: "match_keys_json harus berupa JSON array string yang valid.",
+        ...empty,
+      };
+    }
+    matchKeys = parsed.map((x) => String(x ?? "").trim());
+    if (matchKeys.some((k) => !k)) {
+      return {
+        error: "Setiap kunci pencocokan pada match_keys_json tidak boleh kosong.",
+        ...empty,
+      };
+    }
+  } catch {
+    return {
+      error: "match_keys_json harus berupa JSON array string yang valid.",
+      ...empty,
+    };
+  }
+
+  if (labelsJsonRaw) {
+    try {
+      const labelsParsed = JSON.parse(labelsJsonRaw) as unknown;
+      if (!Array.isArray(labelsParsed)) {
+        return {
+          error: "match_labels_json harus berupa JSON array yang valid.",
+          ...empty,
+        };
+      }
+      labelPerIndex = labelsParsed.map((x) => {
+        const t = String(x ?? "").trim();
+        return t.length > 0 ? t : null;
+      });
+    } catch {
+      return {
+        error: "match_labels_json harus berupa JSON array yang valid.",
+        ...empty,
+      };
+    }
+  }
+
+  const columnMap: PointsImportColumnMap = {
+    noBidang: columnNoBidang,
+    x: columnX,
+    y: columnY,
+    ...(columnUrutan ? { urutan: columnUrutan } : {}),
+    ...(columnNamaTitik ? { namaTitik: columnNamaTitik } : {}),
+  };
+
+  let pointOrderOverrides: Record<string, number[]> | undefined;
+  if (pointOrderJsonRaw) {
+    try {
+      const parsed = JSON.parse(pointOrderJsonRaw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        pointOrderOverrides = parsed as Record<string, number[]>;
+      }
+    } catch {
+      return {
+        error: "point_order_json tidak valid.",
+        ...empty,
+      };
+    }
+  }
+
+  const { points, errors: pointErrors } = parseSurveyPointsCsv(
+    csvText,
+    columnMap
+  );
+  if (points.length === 0) {
+    return {
+      error:
+        pointErrors[0] ??
+        "Tidak ada titik valid di CSV. Periksa kolom no_bidang, x, y.",
+      ...empty,
+    };
+  }
+
+  const { polygons, errors: buildErrors } = buildBidangPolygonsFromPoints(
+    points,
+    columnMap,
+    pointOrderOverrides
+  );
+  if (polygons.length === 0) {
+    return {
+      error:
+        buildErrors[0] ??
+        pointErrors[0] ??
+        "Tidak ada bidang terbentuk dari titik.",
+      ...empty,
+    };
+  }
+  const selfIntersect = polygons.find((p) => p.selfIntersect);
+  if (selfIntersect) {
+    return {
+      error: `Bidang ${selfIntersect.bidangKey} self-intersect. Perbaiki urutan titik.`,
+      ...empty,
+    };
+  }
+  if (matchKeys.length !== polygons.length) {
+    return {
+      error: `match_keys_json harus ${polygons.length} elemen (sama dengan jumlah bidang).`,
+      ...empty,
+    };
+  }
+  if (labelPerIndex.length > 0 && labelPerIndex.length !== polygons.length) {
+    return {
+      error: `match_labels_json harus ${polygons.length} elemen bila diisi.`,
+      ...empty,
+    };
+  }
+  while (labelPerIndex.length < polygons.length) {
+    labelPerIndex.push(null);
+  }
+
+  let fc: GeoJSON.FeatureCollection;
+  try {
+    fc = buildVirtualTablePointsFeatureCollection(
+      polygons,
+      matchKeys,
+      labelPerIndex,
+      matchColumnSlug,
+      sridParsed.srid
+    );
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : "Gagal membangun geometri dari titik.";
+    return { error: msg, ...empty };
+  }
+
+  const geojsonJson = JSON.stringify(fc);
+  if (geojsonJson.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("GeoJSON hasil konversi titik"),
+      ...empty,
+    };
+  }
+
+  const inner = new FormData();
+  copyVirtualImportFormFields(formData, inner);
+  inner.set("geojson_json", geojsonJson);
+  return importVirtualRowsGeoJsonBatchAction(inner);
+}
+
+export type ImportVirtualRowsSurveyPointsArchiveResult =
+  ImportVirtualRowsGeoJsonResult;
+
+/** Arsip titik ukur mentah (Point) tanpa membentuk poligon bidang. */
+export async function importVirtualRowsSurveyPointsArchiveAction(
+  formData: FormData
+): Promise<ImportVirtualRowsSurveyPointsArchiveResult> {
+  const empty = {
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+    inboundLinked: 0,
+    inboundLinkFailed: 0,
+  };
+
+  const csvText = String(formData.get("points_csv_text") ?? "");
+  const columnNoBidang = String(formData.get("column_no_bidang") ?? "").trim();
+  const columnX = String(formData.get("column_x") ?? "").trim();
+  const columnY = String(formData.get("column_y") ?? "").trim();
+  const columnUrutan = String(formData.get("column_urutan") ?? "").trim();
+  const columnNamaTitik = String(formData.get("column_nama_titik") ?? "").trim();
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
+  const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+  const geometryColumnSlug = String(
+    formData.get("geometry_column_slug") ?? ""
+  ).trim();
+
+  if (!csvText.trim()) {
+    return { error: "points_csv_text wajib diisi", ...empty };
+  }
+  if (!columnNoBidang || !columnX || !columnY) {
+    return {
+      error: "column_no_bidang, column_x, dan column_y wajib",
+      ...empty,
+    };
+  }
+  if (!matchColumnSlug) {
+    return {
+      error: `match_column_slug wajib (mis. ${SURVEY_POINT_MATCH_COLUMN_SLUG})`,
+      ...empty,
+    };
+  }
+  if (!geometryColumnSlug) {
+    return { error: "geometry_column_slug wajib", ...empty };
+  }
+  if (csvText.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("CSV titik"),
+      ...empty,
+    };
+  }
+
+  const sridParsed = parseSurveyPointsArchiveSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) {
+    return { error: sridParsed.error, ...empty };
+  }
+  if (!isPreviewSourceSridSupported(sridParsed.srid)) {
+    return {
+      error: `EPSG:${sridParsed.srid} belum didukung untuk impor titik. Gunakan SRID dari daftar (UTM/TM-3/WGS84).`,
+      ...empty,
+    };
+  }
+
+  const columnMap: PointsImportColumnMap = {
+    noBidang: columnNoBidang,
+    x: columnX,
+    y: columnY,
+    ...(columnUrutan ? { urutan: columnUrutan } : {}),
+    ...(columnNamaTitik ? { namaTitik: columnNamaTitik } : {}),
+  };
+
+  const { points, errors: pointErrors } = parseSurveyPointsCsv(
+    csvText,
+    columnMap
+  );
+  if (points.length === 0) {
+    return {
+      error:
+        pointErrors[0] ??
+        "Tidak ada titik valid di CSV. Periksa kolom no_bidang, x, y.",
+      ...empty,
+    };
+  }
+
+  let fc: GeoJSON.FeatureCollection;
+  try {
+    fc = buildSurveyPointsArchiveFeatureCollection(
+      points,
+      matchColumnSlug,
+      sridParsed.srid
+    );
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : "Gagal membangun titik dari CSV.";
+    return { error: msg, ...empty };
+  }
+
+  const geojsonJson = JSON.stringify(fc);
+  if (geojsonJson.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("GeoJSON titik arsip"),
+      ...empty,
+    };
+  }
+
+  const inner = new FormData();
+  copyVirtualImportFormFields(formData, inner);
+  inner.set("geojson_json", geojsonJson);
+  inner.set("geometry_kind", "point");
+  inner.set("match_column_slug", matchColumnSlug);
+  inner.set("geometry_column_slug", geometryColumnSlug);
+  return importVirtualRowsGeoJsonBatchAction(inner);
+}
+
+export type ImportVirtualRowsFieldPointsResult =
+  ImportVirtualRowsGeoJsonResult;
+
+function buildFieldPointsImportColumnMap(formData: FormData): {
+  ok: true;
+  map: FieldPointsImportColumnMap;
+} | { ok: false; error: string } {
+  const columnX = String(formData.get("column_x") ?? "").trim();
+  const columnY = String(formData.get("column_y") ?? "").trim();
+  const columnUrutan = String(formData.get("column_urutan") ?? "").trim();
+  if (!columnX || !columnY) {
+    return { ok: false, error: "column_x dan column_y wajib" };
+  }
+  return {
+    ok: true,
+    map: {
+      x: columnX,
+      y: columnY,
+      ...(columnUrutan ? { urutan: columnUrutan } : {}),
+    },
+  };
+}
+
+/** Impor titik lapangan mentah (x,y saja) → Point; label T1,T2… */
+export async function importVirtualRowsFieldPointsAction(
+  formData: FormData
+): Promise<ImportVirtualRowsFieldPointsResult> {
+  const empty = {
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+    inboundLinked: 0,
+    inboundLinkFailed: 0,
+  };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  const csvText = String(formData.get("points_csv_text") ?? "");
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
+  const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+  const geometryColumnSlug = String(
+    formData.get("geometry_column_slug") ?? ""
+  ).trim();
+
+  if (!tableId) return { error: "table_id wajib", ...empty };
+  if (!csvText.trim()) {
+    return { error: "points_csv_text wajib diisi", ...empty };
+  }
+  if (!matchColumnSlug) {
+    return {
+      error: `match_column_slug wajib (mis. ${SURVEY_POINT_MATCH_COLUMN_SLUG})`,
+      ...empty,
+    };
+  }
+  if (!geometryColumnSlug) {
+    return { error: "geometry_column_slug wajib", ...empty };
+  }
+  if (csvText.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("CSV titik"),
+      ...empty,
+    };
+  }
+
+  const colParsed = buildFieldPointsImportColumnMap(formData);
+  if (!colParsed.ok) return { error: colParsed.error, ...empty };
+
+  const sridParsed = parseSurveyPointsArchiveSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) {
+    return { error: sridParsed.error, ...empty };
+  }
+  if (!isPreviewSourceSridSupported(sridParsed.srid)) {
+    return {
+      error: `EPSG:${sridParsed.srid} belum didukung untuk impor titik. Gunakan SRID dari daftar (UTM/TM-3/WGS84).`,
+      ...empty,
+    };
+  }
+
+  const { points, errors: pointErrors } = parseFieldPointsCsv(
+    csvText,
+    colParsed.map
+  );
+  if (points.length === 0) {
+    return {
+      error:
+        pointErrors[0] ??
+        "Tidak ada titik valid di CSV. Periksa kolom x dan y.",
+      ...empty,
+    };
+  }
+
+  let fc: GeoJSON.FeatureCollection;
+  try {
+    fc = buildFieldPointsArchiveFeatureCollection(
+      points,
+      matchColumnSlug,
+      sridParsed.srid
+    );
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : "Gagal membangun titik dari CSV.";
+    return { error: msg, ...empty };
+  }
+
+  const geojsonJson = JSON.stringify(fc);
+  if (geojsonJson.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      error: spatialGeometryTextTooLargeMessage("GeoJSON titik lapangan"),
+      ...empty,
+    };
+  }
+
+  const inner = new FormData();
+  copyVirtualImportFormFields(formData, inner);
+  inner.set("table_id", tableId);
+  inner.set("geojson_json", geojsonJson);
+  inner.set("geometry_kind", "point");
+  inner.set("match_column_slug", matchColumnSlug);
+  inner.set("geometry_column_slug", geometryColumnSlug);
+  return importVirtualRowsGeoJsonBatchAction(inner);
+}
+
+export type BootstrapAndImportFieldPointsResult = {
+  error: string | null;
+  tableId: string | null;
+  tableSlug: string | null;
+  displayName: string | null;
+  inserted: number;
+  updated: number;
+  failed: number;
+  skippedExisting: number;
+  failureSamples: string[];
+};
+
+/** Buat tabel titik lapangan + impor CSV mentah dalam satu langkah. */
+export async function bootstrapAndImportFieldPointsAction(
+  formData: FormData
+): Promise<BootstrapAndImportFieldPointsResult> {
+  const emptyResult = {
+    tableId: null as string | null,
+    tableSlug: null as string | null,
+    displayName: null as string | null,
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+  };
+
+  const bootstrapFd = new FormData();
+  bootstrapFd.set("project_id", String(formData.get("project_id") ?? ""));
+  bootstrapFd.set(
+    "display_name",
+    String(formData.get("display_name") ?? "").trim() ||
+      defaultFieldPointTableName()
+  );
+  const description = String(formData.get("description") ?? "").trim();
+  if (description) bootstrapFd.set("description", description);
+
+  const boot = await bootstrapVirtualTableSurveyPointsAction(bootstrapFd);
+  if (boot.error || !boot.tableId) {
+    return { error: boot.error ?? "Gagal membuat tabel titik", ...emptyResult };
+  }
+
+  const importFd = new FormData();
+  for (const key of [
+    "points_csv_text",
+    "column_x",
+    "column_y",
+    "column_urutan",
+    "source_srid",
+    "upsert_mode",
+    "link_inbound_relations",
+  ]) {
+    const v = formData.get(key);
+    if (v != null) importFd.set(key, String(v));
+  }
+  importFd.set("table_id", boot.tableId);
+  importFd.set("match_column_slug", SURVEY_POINT_MATCH_COLUMN_SLUG);
+  importFd.set("geometry_column_slug", SURVEY_POINT_GEOM_SLUG);
+
+  const imported = await importVirtualRowsFieldPointsAction(importFd);
+  if (imported.error) {
+    return {
+      error: `Tabel «${boot.displayName}» dibuat, tetapi impor gagal: ${imported.error}`,
+      tableId: boot.tableId,
+      tableSlug: boot.tableSlug,
+      displayName: boot.displayName,
+      inserted: imported.inserted,
+      updated: imported.updated,
+      failed: imported.failed,
+      skippedExisting: imported.skippedExisting,
+      failureSamples: imported.failureSamples,
+    };
+  }
+
+  return {
+    error: null,
+    tableId: boot.tableId,
+    tableSlug: boot.tableSlug,
+    displayName: boot.displayName,
+    inserted: imported.inserted,
+    updated: imported.updated,
+    failed: imported.failed,
+    skippedExisting: imported.skippedExisting,
+    failureSamples: imported.failureSamples,
+  };
+}
+
+export type RegenerateBidangFromSurveyPointsResult = {
+  error: string | null;
+  regenerated: number;
+  failed: number;
+  skipped: number;
+  failureSamples: string[];
+};
+
+/** Bangun ulang poligon bidang dari titik arsip (WGS84) yang sudah tersimpan. */
+export async function regenerateBidangPolygonsFromSurveyPointsAction(
+  formData: FormData
+): Promise<RegenerateBidangFromSurveyPointsResult> {
+  const empty = {
+    regenerated: 0,
+    failed: 0,
+    skipped: 0,
+    failureSamples: [] as string[],
+  };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", ...empty };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", ...empty };
+
+  const bidangTableId = String(formData.get("bidang_table_id") ?? "").trim();
+  const pointsTableId = String(formData.get("points_table_id") ?? "").trim();
+  const bidangGeometrySlug = String(
+    formData.get("bidang_geometry_column_slug") ?? ""
+  ).trim();
+  const bidangMatchSlug = String(
+    formData.get("bidang_match_column_slug") ?? ""
+  ).trim();
+  const pointsNoBidangSlug = String(
+    formData.get("points_no_bidang_column_slug") ?? "no_bidang"
+  ).trim();
+  const pointsUrutanSlug = String(
+    formData.get("points_urutan_column_slug") ?? "urutan"
+  ).trim();
+  const pointsGeometrySlug = String(
+    formData.get("points_geometry_column_slug") ?? ""
+  ).trim();
+  const filterNoBidang = String(formData.get("filter_no_bidang") ?? "").trim();
+  const upsertMode = String(formData.get("upsert_mode") ?? "upsert").trim();
+
+  if (!bidangTableId || !pointsTableId) {
+    return { error: "bidang_table_id dan points_table_id wajib", ...empty };
+  }
+  if (!bidangGeometrySlug || !bidangMatchSlug || !pointsGeometrySlug) {
+    return {
+      error:
+        "bidang_geometry_column_slug, bidang_match_column_slug, dan points_geometry_column_slug wajib",
+      ...empty,
+    };
+  }
+
+  const { data: pointsRowsRaw, error: pointsErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, payload")
+    .eq("table_id", pointsTableId)
+    .is("deleted_at", null);
+
+  if (pointsErr) return { error: pointsErr.message, ...empty };
+
+  const grouped = groupArchivedPointsByBidang(
+    (pointsRowsRaw ?? []).map((r) => ({
+      rowId: (r as { id: string }).id,
+      payload:
+        ((r as { payload: Record<string, unknown> | null }).payload as Record<
+          string,
+          unknown
+        >) ?? {},
+    })),
+    pointsNoBidangSlug,
+    pointsUrutanSlug,
+    pointsGeometrySlug
+  );
+
+  if (grouped.size === 0) {
+    return {
+      error: "Tidak ada titik arsip yang bisa dibaca dari tabel titik.",
+      ...empty,
+    };
+  }
+
+  const targets = filterNoBidang
+    ? (() => {
+        const pts = grouped.get(filterNoBidang);
+        return pts ? new Map([[filterNoBidang, pts]]) : new Map();
+      })()
+    : grouped;
+
+  if (targets.size === 0) {
+    return {
+      error: `Tidak ada titik untuk no_bidang "${filterNoBidang}".`,
+      ...empty,
+    };
+  }
+
+  const { data: bidangRowsRaw, error: bidangErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("id, payload")
+    .eq("table_id", bidangTableId)
+    .is("deleted_at", null);
+
+  if (bidangErr) return { error: bidangErr.message, ...empty };
+
+  const existingByKey = new Map<
+    string,
+    { id: string; payload: Record<string, unknown> }
+  >();
+  for (const row of bidangRowsRaw ?? []) {
+    const r = row as { id: string; payload: Record<string, unknown> | null };
+    const payload = r.payload ?? {};
+    const norm = normalizeVirtualTableMatchKey(payload[bidangMatchSlug]);
+    if (norm) existingByKey.set(norm, { id: r.id, payload });
+  }
+
+  let regenerated = 0;
+  let failed = 0;
+  let skipped = 0;
+  const failureSamples: string[] = [];
+
+  const { data: maxSortRow } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("sort_order")
+    .eq("table_id", bidangTableId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  let nextSort =
+    ((maxSortRow as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  for (const [noBidang, pts] of targets as Map<string, ArchivedSurveyPointRow[]>) {
+    const built = buildPolygonRingFromArchivedPoints(pts);
+    if (!built.ok) {
+      failed++;
+      if (failureSamples.length < 12) {
+        failureSamples.push(`${noBidang}: ${built.error}`);
+      }
+      continue;
+    }
+
+    let feature: GeoJSON.Feature;
+    try {
+      const ringLatLng = pts.map((p) => ({ lat: p.lat, lng: p.lng }));
+      feature = buildDrawnBidangGeoJsonFeature(
+        ringLatLng,
+        noBidang,
+        bidangMatchSlug,
+        `Bidang ${noBidang}`
+      );
+    } catch (e) {
+      failed++;
+      const msg = e instanceof Error ? e.message : "Gagal membangun poligon";
+      if (failureSamples.length < 12) {
+        failureSamples.push(`${noBidang}: ${msg}`);
+      }
+      continue;
+    }
+
+    const storedGeom = featureToStoredGeometry(feature.geometry, {});
+    if (!storedGeom) {
+      failed++;
+      if (failureSamples.length < 12) {
+        failureSamples.push(`${noBidang}: geometri poligon tidak valid`);
+      }
+      continue;
+    }
+
+    const matchNorm = normalizeVirtualTableMatchKey(noBidang);
+    if (!matchNorm) {
+      failed++;
+      continue;
+    }
+
+    const patch: Record<string, unknown> = {
+      [bidangMatchSlug]: noBidang,
+      [bidangGeometrySlug]: storedGeom,
+      source: "regenerated_from_survey_points",
+    };
+    if (Object.prototype.hasOwnProperty.call(existingByKey.get(matchNorm)?.payload ?? {}, "title")) {
+      patch.title = `Bidang ${noBidang}`;
+    }
+
+    const existing = existingByKey.get(matchNorm);
+    if (existing) {
+      if (upsertMode === "insert_only") {
+        skipped++;
+        continue;
+      }
+      const merged = { ...existing.payload, ...patch };
+      const { error: updErr } = await supabase
+        .schema("core_pm")
+        .from("virtual_rows")
+        .update({
+          payload: merged,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+      if (updErr) {
+        failed++;
+        if (failureSamples.length < 12) {
+          failureSamples.push(`${noBidang}: ${updErr.message}`);
+        }
+      } else {
+        regenerated++;
+        existingByKey.set(matchNorm, { id: existing.id, payload: merged });
+      }
+      continue;
+    }
+
+    const { error: insErr } = await supabase
+      .schema("core_pm")
+      .from("virtual_rows")
+      .insert({
+        table_id: bidangTableId,
+        payload: patch,
+        sort_order: nextSort++,
+        created_by: user.id,
+      });
+    if (insErr) {
+      failed++;
+      if (failureSamples.length < 12) {
+        failureSamples.push(`${noBidang}: ${insErr.message}`);
+      }
+    } else {
+      regenerated++;
+    }
+  }
+
+  revalidatePath("/");
+  return {
+    error:
+      regenerated === 0 && failed > 0
+        ? failureSamples[0] ?? "Regenerasi gagal"
+        : null,
+    regenerated,
+    failed,
+    skipped,
+    failureSamples,
+  };
+}
+
+export type BootstrapVirtualTableSurveyPointsResult = {
+  error: string | null;
+  tableId: string | null;
+  tableSlug: string | null;
+  displayName: string | null;
+};
+
+/** Buat tabel virtual baru khusus arsip titik ukur (skema standar). */
+export async function bootstrapVirtualTableSurveyPointsAction(
+  formData: FormData
+): Promise<BootstrapVirtualTableSurveyPointsResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) {
+    return {
+      error: "Supabase tidak dikonfigurasi",
+      tableId: null,
+      tableSlug: null,
+      displayName: null,
+    };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return {
+      error: "Belum masuk",
+      tableId: null,
+      tableSlug: null,
+      displayName: null,
+    };
+  }
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const displayName =
+    String(formData.get("display_name") ?? "").trim() ||
+    defaultSurveyPointTableName();
+  const description = String(formData.get("description") ?? "").trim() || null;
+
+  if (!projectId) {
+    return {
+      error: "project_id wajib",
+      tableId: null,
+      tableSlug: null,
+      displayName: null,
+    };
+  }
+
+  const baseSlug = slugify(displayName);
+  if (!baseSlug) {
+    return {
+      error: "Nama tabel tidak valid untuk slug",
+      tableId: null,
+      tableSlug: null,
+      displayName: null,
+    };
+  }
+
+  const { data: existing } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("slug")
+    .eq("project_id", projectId)
+    .is("deleted_at", null)
+    .like("slug", `${baseSlug}%`);
+
+  const existingSlugs = new Set(
+    (existing ?? []).map((r: { slug: string }) => r.slug)
+  );
+  let slug = baseSlug;
+  let suffix = 2;
+  while (existingSlugs.has(slug)) {
+    slug = `${baseSlug}_${suffix}`;
+    suffix++;
+  }
+
+  const { data: maxSort } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("sort_order")
+    .eq("project_id", projectId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const nextSortOrder =
+    ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  const { data: table, error: tableErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .insert({
+      project_id: projectId,
+      slug,
+      display_name: displayName,
+      description,
+      icon: "📍",
+      sort_order: nextSortOrder,
+      created_by: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (tableErr) {
+    return {
+      error: tableErr.message,
+      tableId: null,
+      tableSlug: null,
+      displayName: null,
+    };
+  }
+
+  const tableId = (table as { id: string }).id;
+  const { error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .insert(
+      SURVEY_POINT_COLUMN_DEFS.map((c) => ({
+        table_id: tableId,
+        slug: c.slug,
+        display_name: c.display_name,
+        data_type: c.data_type,
+        position: c.position,
+        is_required: c.is_required,
+        config: {},
+      }))
+    );
+
+  if (colErr) {
+    await softDeleteVirtualTableById(supabase, tableId);
+    return {
+      error: colErr.message,
+      tableId: null,
+      tableSlug: null,
+      displayName: null,
+    };
+  }
+
+  revalidatePath("/");
+  return {
+    error: null,
+    tableId,
+    tableSlug: slug,
+    displayName,
+  };
+}
+
+export type BootstrapVirtualTableWorkbenchLayerResult = {
+  error: string | null;
+  tableId: string | null;
+  tableSlug: string | null;
+  displayName: string | null;
+  layerKind: WorkbenchLayerKind | null;
+};
+
+/** Buat tabel virtual kosong untuk digitasi Bidang / Jalan / Saluran di peta. */
+export async function bootstrapVirtualTableWorkbenchLayerAction(
+  formData: FormData
+): Promise<BootstrapVirtualTableWorkbenchLayerResult> {
+  const empty = {
+    tableId: null as string | null,
+    tableSlug: null as string | null,
+    displayName: null as string | null,
+    layerKind: null as WorkbenchLayerKind | null,
+  };
+
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi", ...empty };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk", ...empty };
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const layerKind = parseWorkbenchLayerKind(
+    String(formData.get("layer_kind") ?? "")
+  );
+  const displayName =
+    String(formData.get("display_name") ?? "").trim() ||
+    (layerKind ? defaultWorkbenchLayerTableName(layerKind) : "");
+  const description = String(formData.get("description") ?? "").trim() || null;
+
+  if (!projectId) return { error: "project_id wajib", ...empty };
+  if (!layerKind) {
+    return { error: "layer_kind harus bidang, jalan, atau saluran", ...empty };
+  }
+  if (!displayName) {
+    return { error: "Nama tabel wajib diisi", ...empty };
+  }
+
+  const baseSlug = slugify(displayName);
+  if (!baseSlug) {
+    return { error: "Nama tabel tidak valid untuk slug", ...empty };
+  }
+
+  const { data: existing } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("slug")
+    .eq("project_id", projectId)
+    .is("deleted_at", null)
+    .like("slug", `${baseSlug}%`);
+
+  const existingSlugs = new Set(
+    (existing ?? []).map((r: { slug: string }) => r.slug)
+  );
+  let slug = baseSlug;
+  let suffix = 2;
+  while (existingSlugs.has(slug)) {
+    slug = `${baseSlug}_${suffix}`;
+    suffix++;
+  }
+
+  const { data: maxSort } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .select("sort_order")
+    .eq("project_id", projectId)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const nextSortOrder =
+    ((maxSort as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+
+  const { data: table, error: tableErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_tables")
+    .insert({
+      project_id: projectId,
+      slug,
+      display_name: displayName,
+      description,
+      icon: WORKBENCH_LAYER_KIND_ICONS[layerKind],
+      sort_order: nextSortOrder,
+      created_by: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (tableErr) {
+    return { error: tableErr.message, ...empty };
+  }
+
+  const tableId = (table as { id: string }).id;
+  const columnDefs = workbenchLayerColumnDefs(layerKind);
+  const { error: colErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .insert(
+      columnDefs.map((c) => ({
+        table_id: tableId,
+        slug: c.slug,
+        display_name: c.display_name,
+        data_type: c.data_type,
+        position: c.position,
+        is_required: c.is_required,
+        config: {},
+      }))
+    );
+
+  if (colErr) {
+    await softDeleteVirtualTableById(supabase, tableId);
+    return { error: colErr.message, ...empty };
+  }
+
+  revalidatePath("/");
+  return {
+    error: null,
+    tableId,
+    tableSlug: slug,
+    displayName,
+    layerKind,
+  };
+}
+
+export type ImportVirtualRowsDrawnPolygonResult = ImportVirtualRowsGeoJsonResult;
+
+/** Simpan satu poligon digambar di peta (WGS84) → virtual_rows. */
+export async function importVirtualRowsDrawnPolygonBatchAction(
+  formData: FormData
+): Promise<ImportVirtualRowsDrawnPolygonResult> {
+  const empty = {
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+  };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  const ringJsonRaw = String(formData.get("ring_json") ?? "").trim();
+  const geometryColumnSlug = String(
+    formData.get("geometry_column_slug") ?? ""
+  ).trim();
+  const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+  const matchKey = String(formData.get("match_key") ?? "").trim();
+  const labelRaw = String(formData.get("label") ?? "").trim();
+  const upsertMode = String(formData.get("upsert_mode") ?? "upsert").trim();
+
+  if (!tableId) return { error: "table_id kosong", ...empty };
+  if (!ringJsonRaw) return { error: "ring_json wajib", ...empty };
+  if (!geometryColumnSlug) {
+    return { error: "geometry_column_slug wajib", ...empty };
+  }
+  if (!matchColumnSlug) {
+    return { error: "match_column_slug wajib", ...empty };
+  }
+  if (!matchKey) {
+    return { error: "match_key wajib (nomor bidang)", ...empty };
+  }
+
+  let ring: LatLngPoint[];
+  try {
+    const parsed = JSON.parse(ringJsonRaw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return { error: "ring_json harus array titik {lat,lng}.", ...empty };
+    }
+    ring = parsed.map((p) => {
+      const o = p as { lat?: unknown; lng?: unknown };
+      const lat = Number(o.lat);
+      const lng = Number(o.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        throw new Error("Koordinat titik tidak valid.");
+      }
+      return { lat, lng };
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "ring_json tidak valid.";
+    return { error: msg, ...empty };
+  }
+
+  const validation = validateDrawnBidangRing(ring);
+  if (!validation.ok) {
+    return { error: validation.error, ...empty };
+  }
+
+  let feature: GeoJSON.Feature;
+  try {
+    feature = buildDrawnBidangGeoJsonFeature(
+      ring,
+      matchKey,
+      matchColumnSlug,
+      labelRaw || null
+    );
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : "Gagal membangun geometri dari gambar.";
+    return { error: msg, ...empty };
+  }
+
+  const fc: GeoJSON.FeatureCollection = {
+    type: "FeatureCollection",
+    features: [feature],
+  };
+  const geojsonJson = JSON.stringify(fc);
+
+  const inner = new FormData();
+  copyVirtualImportFormFields(formData, inner);
+  inner.set("table_id", tableId);
+  inner.set("geometry_column_slug", geometryColumnSlug);
+  inner.set("match_column_slug", matchColumnSlug);
+  inner.set("upsert_mode", upsertMode);
+  inner.set("match_keys_json", JSON.stringify([matchKey]));
+  inner.set(
+    "match_labels_json",
+    JSON.stringify([labelRaw || null])
+  );
+  inner.set("geojson_json", geojsonJson);
+  return importVirtualRowsGeoJsonBatchAction(inner);
+}
+
+export type ImportVirtualRowsDrawnLineResult = ImportVirtualRowsGeoJsonResult;
+
+/** Simpan satu LineString digambar di peta (WGS84) → virtual_rows. */
+export async function importVirtualRowsDrawnLineBatchAction(
+  formData: FormData
+): Promise<ImportVirtualRowsDrawnLineResult> {
+  const empty = {
+    inserted: 0,
+    updated: 0,
+    failed: 0,
+    skippedExisting: 0,
+    failureSamples: [] as string[],
+  };
+
+  const tableId = String(formData.get("table_id") ?? "").trim();
+  const lineJsonRaw = String(formData.get("line_json") ?? "").trim();
+  const geometryColumnSlug = String(
+    formData.get("geometry_column_slug") ?? ""
+  ).trim();
+  const matchColumnSlug = String(formData.get("match_column_slug") ?? "").trim();
+  const matchKey = String(formData.get("match_key") ?? "").trim();
+  const labelRaw = String(formData.get("label") ?? "").trim();
+  const upsertMode = String(formData.get("upsert_mode") ?? "upsert").trim();
+
+  if (!tableId) return { error: "table_id kosong", ...empty };
+  if (!lineJsonRaw) return { error: "line_json wajib", ...empty };
+  if (!geometryColumnSlug) {
+    return { error: "geometry_column_slug wajib", ...empty };
+  }
+  if (!matchColumnSlug) {
+    return { error: "match_column_slug wajib", ...empty };
+  }
+  if (!matchKey) {
+    return { error: "match_key wajib (kode garis)", ...empty };
+  }
+
+  let points: LatLngPoint[];
+  try {
+    const parsed = JSON.parse(lineJsonRaw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return { error: "line_json harus array titik {lat,lng}.", ...empty };
+    }
+    points = parsed.map((p) => {
+      const o = p as { lat?: unknown; lng?: unknown };
+      const lat = Number(o.lat);
+      const lng = Number(o.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        throw new Error("Koordinat titik tidak valid.");
+      }
+      return { lat, lng };
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "line_json tidak valid.";
+    return { error: msg, ...empty };
+  }
+
+  const validation = validateDrawnLine(points);
+  if (!validation.ok) {
+    return { error: validation.error, ...empty };
+  }
+
+  let feature: GeoJSON.Feature;
+  try {
+    feature = buildDrawnLineGeoJsonFeature(
+      points,
+      matchKey,
+      matchColumnSlug,
+      labelRaw || null
+    );
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : "Gagal membangun geometri garis.";
+    return { error: msg, ...empty };
+  }
+
+  const fc: GeoJSON.FeatureCollection = {
+    type: "FeatureCollection",
+    features: [feature],
+  };
+  const geojsonJson = JSON.stringify(fc);
+
+  const inner = new FormData();
+  copyVirtualImportFormFields(formData, inner);
+  inner.set("table_id", tableId);
+  inner.set("geometry_column_slug", geometryColumnSlug);
+  inner.set("match_column_slug", matchColumnSlug);
+  inner.set("upsert_mode", upsertMode);
+  inner.set("geometry_kind", "linestring");
+  inner.set("match_keys_json", JSON.stringify([matchKey]));
+  inner.set(
+    "match_labels_json",
+    JSON.stringify([labelRaw || null])
+  );
   inner.set("geojson_json", geojsonJson);
   return importVirtualRowsGeoJsonBatchAction(inner);
 }
@@ -2917,6 +4370,18 @@ export async function bootstrapVirtualTableLayerFromSpatialAction(
   }
 
   let expectedPolygonCount = 0;
+  let dxfGeometryType: "polygon" | "point" | "linestring" = "polygon";
+  if (sourceFormat === "dxf") {
+    const raw = String(formData.get("dxf_geometry_type") ?? "polygon")
+      .trim()
+      .toLowerCase();
+    dxfGeometryType =
+      raw === "point"
+        ? "point"
+        : raw === "linestring"
+          ? "linestring"
+          : "polygon";
+  }
 
   if (sourceFormat === "geojson") {
     const geojsonRaw = String(formData.get("geojson_json") ?? "");
@@ -2955,14 +4420,6 @@ export async function bootstrapVirtualTableLayerFromSpatialAction(
       const msg = e instanceof Error ? e.message : "Gagal membaca DXF.";
       return { error: msg, ...empty };
     }
-    const rings = extractClosedPolygonRingsFromDxfLayer(dxf, layerName, dxfText);
-    if (rings.length === 0) {
-      return {
-        error:
-          "Tidak ada poligon tertutup di layer DXF yang dipilih.",
-        ...empty,
-      };
-    }
     let matchKeys: string[];
     try {
       const parsed = JSON.parse(keysJsonRaw) as unknown;
@@ -2970,16 +4427,68 @@ export async function bootstrapVirtualTableLayerFromSpatialAction(
         return { error: "match_keys_json tidak valid", ...empty };
       }
       matchKeys = parsed.map((x) => String(x ?? "").trim());
+    } catch {
+      return { error: "match_keys_json tidak valid", ...empty };
+    }
+
+    if (dxfGeometryType === "point") {
+      const points = extractPointsFromDxfLayer(dxf, layerName);
+      if (points.length === 0) {
+        return {
+          error:
+            "Tidak ada entitas POINT pada layer DXF yang dipilih.",
+          ...empty,
+        };
+      }
+      if (
+        matchKeys.length !== points.length ||
+        matchKeys.some((k) => !k)
+      ) {
+        return {
+          error: `match_keys_json harus ${points.length} kunci non-kosong.`,
+          ...empty,
+        };
+      }
+      expectedPolygonCount = points.length;
+    } else if (dxfGeometryType === "linestring") {
+      const paths = extractOpenLineStringsFromDxfLayer(dxf, layerName);
+      if (paths.length === 0) {
+        return {
+          error:
+            "Tidak ada garis terbuka (LINE/LWPOLYLINE) pada layer DXF yang dipilih.",
+          ...empty,
+        };
+      }
+      if (
+        matchKeys.length !== paths.length ||
+        matchKeys.some((k) => !k)
+      ) {
+        return {
+          error: `match_keys_json harus ${paths.length} kunci non-kosong.`,
+          ...empty,
+        };
+      }
+      expectedPolygonCount = paths.length;
+    } else {
+      const rings = extractClosedPolygonRingsFromDxfLayer(
+        dxf,
+        layerName,
+        dxfText
+      );
+      if (rings.length === 0) {
+        return {
+          error: "Tidak ada poligon tertutup di layer DXF yang dipilih.",
+          ...empty,
+        };
+      }
       if (matchKeys.length !== rings.length || matchKeys.some((k) => !k)) {
         return {
           error: `match_keys_json harus ${rings.length} kunci non-kosong.`,
           ...empty,
         };
       }
-    } catch {
-      return { error: "match_keys_json tidak valid", ...empty };
+      expectedPolygonCount = rings.length;
     }
-    expectedPolygonCount = rings.length;
   }
 
   const shell = await createVirtualTableLayerShell(
@@ -3007,6 +4516,7 @@ export async function bootstrapVirtualTableLayerFromSpatialAction(
     importFd.set("dxf_text", String(formData.get("dxf_text") ?? ""));
     importFd.set("layer_name", String(formData.get("layer_name") ?? ""));
     importFd.set("source_srid", String(formData.get("source_srid") ?? "4326"));
+    importFd.set("dxf_geometry_type", dxfGeometryType);
     importFd.set("match_keys_json", String(formData.get("match_keys_json") ?? ""));
     const labels = formData.get("match_labels_json");
     if (labels != null && String(labels).trim()) {
@@ -3017,6 +4527,7 @@ export async function bootstrapVirtualTableLayerFromSpatialAction(
 
   if (importResult.error || importResult.inserted === 0) {
     await softDeleteVirtualTableById(supabase, shell.tableId);
+    const geomLabel = dxfGeometryType === "point" ? "titik" : "poligon";
     const failHint =
       importResult.failureSamples.length > 0
         ? ` (${importResult.failureSamples.slice(0, 3).join("; ")})`
@@ -3024,7 +4535,7 @@ export async function bootstrapVirtualTableLayerFromSpatialAction(
     return {
       error:
         importResult.error ??
-        `Tidak ada poligon yang tersimpan (${importResult.failed} gagal).${failHint}`,
+        `Tidak ada ${geomLabel} yang tersimpan (${importResult.failed} gagal).${failHint}`,
       ...empty,
     };
   }

@@ -1,3 +1,8 @@
+/** Hilangkan BOM UTF-8 dari awal file (umum pada CSV Excel). */
+export function stripUtf8Bom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 /** Parse one CSV line (supports quoted fields and escaped quotes). */
 export function parseCsvLine(line: string): string[] {
   const out: string[] = [];
@@ -27,7 +32,7 @@ export function parseCsvLine(line: string): string[] {
 
 /** Parse CSV text into row objects keyed by header names. */
 export function parseSimpleCsv(raw: string): Array<Record<string, string>> {
-  const lines = raw
+  const lines = stripUtf8Bom(raw)
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);

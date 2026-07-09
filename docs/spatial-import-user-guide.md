@@ -1,77 +1,148 @@
-# Panduan pengguna: impor geometri & atribut spasial
+# Panduan pengguna: impor geometri & workbench surveyor
 
-Ringkasan operasional untuk tim lapangan dan admin. Detail teknis dan status fitur ada di [`spatial-import-roadmap.md`](./spatial-import-roadmap.md).
+Ringkasan operasional untuk tim lapangan dan admin. Detail teknis ada di [`spatial-import-roadmap.md`](./spatial-import-roadmap.md). Strategi produk: [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md).
 
----
-
-## 1. `feature_key` — kunci penghubung
-
-- Setiap bidang / fitur di **satu unit kerja** punya string **`feature_key`** yang Anda tentukan (atau yang dihasilkan pola impor).
-- **Geometri** (tab Map) dan **atribut tabular** (tab Tabel) disambungkan lewat **`issue_id` + `feature_key` yang sama persis** (huruf besar/kecil dan spasi ikut dihitung).
-- Anda boleh mengisi **atribut dulu** (CSV) lalu geometri menyusul, atau sebaliknya — tidak ada kunci asing otomatis; data hanya “nyambung” jika kunci cocok.
+**Di aplikasi (tanpa repositori):** buka **`/help/spatial-import`** pada host Anda (halaman bantuan dapat diakses tanpa login).
 
 ---
 
-## 2. CRS / SRID sumber (EPSG)
+## 0. Alur resmi — produksi bidang di Portal (tabel virtual)
 
-Di dialog simpan geometri (GeoJSON, shapefile hasil konversi, DXF), pilih **EPSG/SRID sumber** yang sesuai dengan koordinat di file:
+**Deliverable geometri** = baris di **tabel virtual** ruang kerja (terlihat di tab **Spasial** dan **Data**), bukan file `.dwg` di folder pribadi.
 
-| Pilihan di aplikasi | Kapan dipakai |
-|---------------------|----------------|
-| **EPSG:4326** (WGS84 lon/lat) | GeoJSON sudah lon/lat; atau shapefile dengan **`.prj`** yang setelah dibaca parser menghasilkan koordinat derajat (umumnya pilih ini). |
-| **EPSG:32748 / 32749** | UTM zona 48S / 49S (meter), jika koordinat file Anda di proyeksi tersebut **tanpa** konversi otomatis ke lon/lat. |
-| **EPSG:23833–23836** | Grid TM-3 Indonesia yang tersedia di form. |
+**Kunci penghubung** atribut ↔ geometri: kolom kunci upsert, biasanya **`no_bidang`** (atau `nib` — sama di CSV admin dan impor surveyor).
 
-Jika SRID salah, geometri bisa tersimpan di lokasi salah atau gagal di basis data. **Ragukan CRS?** Tanyakan surveyor / sumber data, atau uji dengan satu fitur kecil dulu.
+### Pilih jalur sesuai sumber data
+
+| Situasi | Jalur di Portal | Menu |
+|--------|-----------------|------|
+| Titik koordinat dari TS/GPS/Excel (satu file, tanpa kode jenis) | **Titik lapangan mentah** | Tab Spasial → Impor → «Titik lapangan → tabel baru» |
+| Siapkan tabel untuk digitasi (belum ada geometri) | **Bootstrap layer kosong** | Impor Spasial → «Buat tabel layer kosong» → Bidang / Jalan / Saluran |
+| Titik per bidang (sudah ada no_bidang) | **Bidang dari titik** / **Arsip titik** | Format workbench di wizard |
+| Titik lapangan disimpan dulu (audit/revisi) | **Arsip titik ukur** → lalu **Buat ulang poligon** bila perlu | Impor «Arsip titik ukur»; regenerasi dari menu tabel bidang |
+| Sketsa/koreksi cepat di peta | **Gambar bidang** | Tab Spasial → Alat → Gambar bidang |
+| File CAD lama (garis, belum tertutup) | **DXF — Bangun dari garis** | Impor DXF, mode polygonize |
+| File CAD/GeoJSON poligon sudah jadi | **Impor GeoJSON / DXF poligon tertutup** | Jalur legacy — tetap didukung |
+
+**Disarankan untuk proyek baru:** titik CSV langsung (**Bidang dari titik**) atau digitasi (**Gambar bidang**). Impor «poligon tertutup saja» tidak lagi menjadi satu-satunya cara.
+
+### Alur lengkap workbench (training singkat)
+
+Pola lapangan yang paling umum — meniru AutoCAD (titik → layer → snap):
+
+1. **Impor titik lapangan** — CSV `x`,`y` saja → tabel «Titik lapangan»; label **T1**, **T2**, … di peta.
+2. **Sketsa kertas** — di luar app; catat titik mana untuk bidang, jalan, saluran.
+3. **Buat tabel layer kosong** — Impor Spasial → «Buat tabel layer kosong» → pilih **Bidang**, **Jalan**, atau **Saluran** (boleh beberapa tabel).
+4. **Aktifkan lapisan** di tab Spasial — centang tabel titik + tabel layer target.
+5. **Digitasi** — Alat → **Gambar bidang** (poligon, kunci `no_bidang`) atau **Gambar garis** (LineString, kunci `no_garis`); snap ke T1, T2…
+6. **Cek hasil** — tab Spasial (geometri) dan tab Data (baris + kunci).
+
+Satu titik fisik boleh dipakai di **beberapa** geometri (snap ulang ke titik yang sama).
+
+### CRS / SRID sumber (EPSG)
+
+Di setiap dialog impor, pilih **EPSG** yang cocok dengan angka di file:
+
+| Pilihan | Kapan dipakai |
+|---------|----------------|
+| **EPSG:4326** | Koordinat sudah lon/lat (WGS84) |
+| **EPSG:32748 / 32749** | UTM zona 48S / 49S (meter) |
+| **EPSG:23833–23836** | Grid TM-3 Indonesia di form |
+
+Salah SRID → geometri salah posisi. **Selalu cek pratinjau peta** sebelum simpan.
+
+### Bidang dari titik (CSV)
+
+Kolom minimal: **`no_bidang`**, **`x`**, **`y`**. Opsional: `urutan`, `nama_titik`.
+
+1. Tempel atau unggah CSV.
+2. Pilih EPSG sumber.
+3. Pratinjau poligon di peta; urutan titik bisa disesuaikan.
+4. Isi kunci upsert (`no_bidang`) per bidang → simpan ke tabel virtual.
+
+### Titik lapangan mentah (satu file TS/GPS)
+
+Kolom minimal: **`x`**, **`y`** saja. Opsional: `urutan`. **Tidak perlu** `no_bidang` — semua titik dari satu pengukuran lapangan.
+
+1. Tab Spasial → Impor → **Titik lapangan → tabel baru** (atau format «Titik lapangan mentah» ke tabel titik yang ada).
+2. Tempel/unggah CSV; pilih EPSG sumber.
+3. Titik disimpan dengan label otomatis **T1**, **T2**, … (kolom `nama_titik`) — cocokkan dengan **sketsa kertas** di lapangan.
+4. Pemisahan bidang/jalan/saluran dilakukan saat **digitasi** di peta (Fase 6B+), bukan saat impor.
+
+### Arsip titik ukur (tanpa poligon)
+
+Sama format CSV, tetapi setiap baris disimpan sebagai **titik (Point)** — untuk arsip lapangan atau referensi. Kunci per titik: `kode_titik` (= `no_bidang` + urutan).
+
+Titik tampil di peta sebagai **marker bulat biru** kecil.
+
+### Buat ulang poligon dari titik arsip
+
+Setelah titik tersimpan, gunakan **Buat ulang poligon** (menu tabel bidang atau wizard Impor) untuk membentuk poligon bidang dari grup `no_bidang` + urutan titik.
+
+### Gambar garis di peta (jalan, saluran)
+
+1. Buat tabel layer kosong (**Jalan** atau **Saluran**) lewat Impor Spasial, atau pilih tabel garis yang sudah ada.
+2. Aktifkan lapisan **titik lapangan** + tabel garis di peta.
+3. Tab Spasial → **Alat → Gambar garis**.
+4. Klik vertex berurutan (snap ke T1, T2…) → **Selesai garis** → isi kode garis → simpan.
+
+### Gambar bidang di peta
+
+1. Buat tabel **Bidang** kosong lewat Impor Spasial (atau gunakan tabel bidang yang ada).
+2. Pastikan lapisan **titik lapangan** aktif di peta (label **T1**, **T2**, … tampil saat zoom ≥ 12).
+3. Tab Spasial → **Alat → Gambar bidang**.
+4. Klik sudut — snap ke titik ukur (kotak biru) atau vertex poligon lain.
+5. **Tutup bidang** → isi `no_bidang` → simpan.
+6. Buka **sketsa kertas** untuk memilih titik mana yang jadi sudut bidang.
+
+### DXF — dua mode
+
+| Mode | Untuk |
+|------|--------|
+| **Bangun dari garis** (disarankan untuk CAD lama) | `LINE` + polyline **terbuka** → polygonize di Portal |
+| **Poligon tertutup** (legacy) | LW/PL tertutup, INSERT blok, HATCH |
+
+Keduanya: pilih layer, mapping `no_bidang`, pratinjau peta, SRID → simpan ke tabel virtual.
+
+### GeoJSON / shapefile
+
+- **GeoJSON / ZIP shapefile:** poligon batch ke tabel virtual; mapping kunci per fitur.
+- Shapefile: hanya Polygon/MultiPolygon di ZIP; batas ukuran ~36 MB ZIP, ~12 MB teks ke server.
+
+### Setelah simpan
+
+- Periksa tab **Spasial** (lapisan tabel aktif).
+- Baris ada di tab **Data**; kunci `no_bidang` harus cocok dengan atribut admin bila diisi terpisah.
 
 ---
 
-## 3. Tab Map — GeoJSON
+## 1. Legacy — `feature_key` (unit kerja / issue)
 
-1. Pilih file **`.geojson` / `.json`**.
-2. Aplikasi mendeteksi:
-   - **Satu fitur** (Polygon / MultiPolygon / Feature tunggal): isi **Feature key** (wajib) dan label opsional.
-   - **FeatureCollection** (banyak fitur): isi **Prefix key** (opsional) — default key diisi seperti server (prefix + properti `feature_key` / `id` / `ID` / `Id`, atau nomor urut fitur di file). Tabel **Feature key** dan **Label** per poligon bisa **diedit**; mengubah prefix mengatur ulang tabel dari properti file. Hanya **Polygon / MultiPolygon** yang muncul di tabel (urutan = proses batch).
-3. **Batas ukuran teks** ke server sekitar **12 MB** (sama untuk batch GeoJSON dan DXF).
+> Bagian ini untuk alur **unit kerja lama** (bukan tabel virtual utama). Pilot baru memakai **`no_bidang`** di tabel virtual (§0).
 
----
-
-## 4. Tab Map — ZIP shapefile
-
-1. Siapkan **ZIP** berisi set shapefile: minimal **`.shp` + `.dbf`**, disarankan **`.shx` + `.prj`**.
-2. Hanya **Polygon / MultiPolygon** yang diimpor; titik dan garis diabaikan.
-3. Jika ZIP berisi **beberapa layer** `.shp` berpoligon, pilih layer di **dropdown**.
-4. **`.prj`**: jika parser mengenali proyeksi, koordinat sering sudah **lon/lat** — pilih **EPSG:4326**. Tanpa `.prj`, pilih SRID yang cocok dengan angka di `.shp`.
-5. **Batas ZIP** di browser sekitar **36 MB**; hasil teks GeoJSON batch tetap dibatasi **~12 MB** sebelum dikirim ke server.
+- Setiap fitur di **satu unit kerja** punya string **`feature_key`**.
+- Geometri dan atribut tabular disambungkan lewat **`issue_id` + `feature_key` sama persis**.
+- Atribut boleh diisi dulu (CSV) lalu geometri menyusul, atau sebaliknya.
 
 ---
 
-## 5. Tab Map — DXF
+## 2. Legacy — tab Map unit kerja (GeoJSON / DXF)
 
-1. Unggah **`.dxf`** (teks), pilih **layer** yang berisi poligon tertutup (LW/PL, INSERT blok pada layer yang sama, HATCH — sesuai batasan di roadmap).
-2. Isi **prefix** `feature_key` atau sunting tabel **Feature key / Label** per baris; bisa **tempel daftar key**, **saran key** dari atribut yang belum punya geometri, dan **pratinjau peta** (klik poligon ↔ baris).
-3. Gunakan **Unduh template CSV** (`feature_key`, `label`) jika ingin mengisi key di spreadsheet lalu menempel kembali.
-4. **SRID** sama seperti GeoJSON — harus cocok dengan koordinat di DXF.
+Dialog **Simpan geometri fitur unit kerja** (bukan wizard tabel virtual):
 
----
-
-## 6. Tab Tabel — atribut (CSV)
-
-1. Kolom kunci default: **`feature_key`** (boleh diubah di dialog jika nama kolom lain).
-2. **Unduh template CSV** berisi contoh kolom `feature_key` untuk diisi tim lapangan.
-3. Impor CSV melakukan **upsert** per `feature_key` pada unit kerja yang dipilih.
+- GeoJSON / shapefile / DXF poligon tertutup per layer.
+- Lihat §0 untuk alur tabel virtual yang disarankan.
 
 ---
 
-## 7. Setelah impor
+## 3. Evaluasi lisensi CAD (organisasi)
 
-- Periksa peta workspace dan daftar fitur di dialog **kelola geometri** bila perlu hapus / impor ulang.
-- Jika atribut “tidak muncul di peta”, periksa apakah **`feature_key`** atribut sama persis dengan geometri.
+Setelah Fase 1–4 stabil di lapangan, tim dapat meninjau apakah jumlah **lisensi AutoCAD/GIS per surveyor** bisa diturunkan. Checklist:
+
+- [ ] ≥80% bidang baru masuk lewat Portal tanpa menutup poligon di CAD dulu
+- [ ] Surveyor terlatih jalur §0 (titik / gambar / polygonize)
+- [ ] File `.dwg` hanya arsip opsional, bukan deliverable resmi
 
 ---
 
-**Di aplikasi (tanpa repositori):** buka route **`/help/spatial-import`** pada host aplikasi Anda (halaman bantuan ini dapat diakses tanpa login).
-
----
-
-*Dokumen ini diselaraskan dengan perilaku aplikasi; untuk perubahan versi terbaru lihat juga [`spatial-import-roadmap.md`](./spatial-import-roadmap.md).*
+*Dokumen ini diselaraskan dengan perilaku aplikasi; perubahan versi terbaru: [`spatial-import-roadmap.md`](./spatial-import-roadmap.md), [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md).*

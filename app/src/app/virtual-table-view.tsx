@@ -147,6 +147,10 @@ import {
 } from "@/lib/virtual-table-geojson-import";
 import { buildInboundGeomRelationSpecs } from "@/lib/virtual-table-geom-inbound-link";
 import { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
+import { VirtualTablePointsImportDialog } from "./virtual-table-points-import-dialog";
+import { VirtualTableSurveyPointsArchiveDialog } from "./virtual-table-survey-points-archive-dialog";
+import { VirtualTableFieldPointsImportDialog } from "./virtual-table-field-points-import-dialog";
+import { VirtualTableRegeneratePolygonDialog } from "./virtual-table-regenerate-polygon-dialog";
 import { ImportDialogShell } from "./import-dialog-shell";
 import {
   VirtualTableLayerUploadDialog,
@@ -1393,6 +1397,10 @@ export function VirtualTableView({
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [showGeoJsonImport, setShowGeoJsonImport] = useState(false);
   const [showDxfImport, setShowDxfImport] = useState(false);
+  const [showPointsImport, setShowPointsImport] = useState(false);
+  const [showSurveyPointsArchive, setShowSurveyPointsArchive] = useState(false);
+  const [showFieldPointsImport, setShowFieldPointsImport] = useState(false);
+  const [showRegeneratePolygon, setShowRegeneratePolygon] = useState(false);
   const [showLayerUpload, setShowLayerUpload] = useState(false);
 
   const geometryColumns = useMemo(
@@ -3082,6 +3090,62 @@ export function VirtualTableView({
                     <Upload className="size-3.5" />
                     Impor DXF
                   </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setShowPointsImport(true);
+                    }}
+                    disabled={pending || initialLoading}
+                  >
+                    <MapPin className="size-3.5" />
+                    Bidang dari titik
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setShowFieldPointsImport(true);
+                    }}
+                    disabled={pending || initialLoading}
+                  >
+                    <MapPin className="size-3.5" />
+                    Titik lapangan mentah
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setShowSurveyPointsArchive(true);
+                    }}
+                    disabled={pending || initialLoading}
+                  >
+                    <MapPin className="size-3.5" />
+                    Arsip titik ukur
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setShowRegeneratePolygon(true);
+                    }}
+                    disabled={pending || initialLoading}
+                  >
+                    <MapPin className="size-3.5" />
+                    Buat ulang poligon dari titik
+                  </Button>
                 </>
               ) : null}
               <div className="my-1 h-px bg-border" />
@@ -4425,6 +4489,54 @@ export function VirtualTableView({
         }}
       />
 
+      <VirtualTablePointsImportDialog
+        open={showPointsImport}
+        onOpenChange={setShowPointsImport}
+        table={table}
+        columns={sortedColumns}
+        allVirtualTables={allVirtualTables}
+        rows={rows}
+        onImported={() => {
+          bumpActivity();
+          void loadRows();
+        }}
+      />
+
+      <VirtualTableSurveyPointsArchiveDialog
+        open={showSurveyPointsArchive}
+        onOpenChange={setShowSurveyPointsArchive}
+        table={table}
+        columns={sortedColumns}
+        onImported={() => {
+          bumpActivity();
+          void loadRows();
+        }}
+      />
+
+      <VirtualTableFieldPointsImportDialog
+        open={showFieldPointsImport}
+        onOpenChange={setShowFieldPointsImport}
+        table={table}
+        columns={sortedColumns}
+        onImported={() => {
+          bumpActivity();
+          void loadRows();
+        }}
+      />
+
+      <VirtualTableRegeneratePolygonDialog
+        open={showRegeneratePolygon}
+        onOpenChange={setShowRegeneratePolygon}
+        bidangTable={table}
+        bidangColumns={sortedColumns}
+        allVirtualTables={allVirtualTables}
+        allVirtualColumns={allVirtualColumnsForImport}
+        onRegenerated={() => {
+          bumpActivity();
+          void loadRows();
+        }}
+      />
+
       {projectId ? (
         <VirtualTableLayerUploadDialog
           open={showLayerUpload}
@@ -4790,6 +4902,17 @@ function VirtualTableCsvImportDialog({
 // ---------------------------------------------------------------------------
 
 export { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
+export { VirtualTablePointsImportDialog } from "./virtual-table-points-import-dialog";
+export { VirtualTableSurveyPointsArchiveDialog } from "./virtual-table-survey-points-archive-dialog";
+export {
+  VirtualTableFieldPointsImportDialog,
+  type FieldPointsImportCreated,
+} from "./virtual-table-field-points-import-dialog";
+export { VirtualTableRegeneratePolygonDialog } from "./virtual-table-regenerate-polygon-dialog";
+export {
+  VirtualTableWorkbenchLayerBootstrapDialog,
+  type WorkbenchLayerBootstrapCreated,
+} from "./virtual-table-workbench-layer-bootstrap-dialog";
 export {
   VirtualTableLayerUploadDialog,
   type LayerUploadCreated,
