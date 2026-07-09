@@ -1,4 +1,5 @@
 import type { MapFootprintLayerKind } from "@/app/workspace-map";
+import type { MoveGeomVertexEdits } from "@/lib/workspace-map-vertex-edit-geom";
 
 export type WorkspaceMapToolMode =
   | "navigate"
@@ -18,13 +19,14 @@ export type MoveGeomSelection = {
   originalGeojson: unknown;
 };
 
-export type MoveGeomEditSubMode = "translate" | "rotate";
+export type MoveGeomEditSubMode = "translate" | "rotate" | "vertex";
 
 export type MoveGeomDraftState = {
   selection: MoveGeomSelection | null;
   deltaLat: number;
   deltaLng: number;
   rotationDeg: number;
+  vertexEdits: MoveGeomVertexEdits;
   subMode: MoveGeomEditSubMode;
 };
 

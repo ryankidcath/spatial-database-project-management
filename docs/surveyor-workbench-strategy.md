@@ -326,7 +326,7 @@ Fase 8 dibagi dua jalur independen (bisa rilis bertahap):
 | Snap saat **menggambar baru** | ✅ Gambar bidang / garis | — |
 | **Translasi** seluruh poligon/garis | ❌ | Alat «Geser» di tab Spasial |
 | **Rotasi** | ❌ | ✅ v1.1 — mode Putar + handle |
-| **Edit vertex** (geser sudut) | ❌ | v1.2 (opsional) |
+| **Edit vertex** (geser sudut) | ❌ | ✅ mode Sudut |
 | Snap ke **lapisan referensi** saat menggeser | ❌ | Snap ke persil BPN + titik ukur |
 | Edit via GeoJSON teks | ⚠️ Tab Data (tidak praktis surveyor) | Tetap ada sebagai fallback |
 
@@ -349,12 +349,12 @@ Bidang hasil ukur + lapisan «Persil BPN» aktif
 - [x] **Pratinjau overlap** — sorot lapisan referensi yang bertabrakan; refresh setelah lepas drag (`workspace-map-move-geom-overlap.ts`, HUD geser geometri)
 - [x] Simpan ke kolom `geom` tabel virtual (WGS84); `emitVirtualTableRowsMutated`
 - [x] **Rotasi** — mode Putar + handle biru di peta; pivot = centroid setelah geser (`workspace-map-transform-geom.ts`)
-- [ ] (Opsional v1.2) Edit vertex satu per satu
+- [x] **Edit vertex** — mode Sudut + handle hijau per sudut/vertex (`workspace-map-vertex-edit-geom.ts`)
 - [ ] Panduan: kapan geser di Portal vs tetap di CAD (busur presisi, layout cetak)
 
 **Kode yang akan disentuh (indikatif):** `workspace-map.tsx`, lib transform geometri (Turf `transformTranslate` / `transformRotate`), alat Spasial baru, server action update geom.
 
-**Status fase:** `[~]` berjalan (2026-07-09) — geser + putar + snap + pratinjau overlap; edit vertex & panduan belum.
+**Status fase:** `[~]` berjalan (2026-07-09) — geser + putar + edit sudut + overlap QC; panduan belum.
 
 #### Fase 8B — Referensi persil BPN (file unduhan + ATLAS)
 

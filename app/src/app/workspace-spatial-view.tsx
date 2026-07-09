@@ -157,6 +157,10 @@ import {
   applyMoveGeomTransform,
   supportsMoveGeomRotation,
 } from "@/lib/workspace-map-transform-geom";
+import {
+  supportsMoveGeomVertexEdit,
+  type MoveGeomVertexEdits,
+} from "@/lib/workspace-map-vertex-edit-geom";
 import { updateVirtualRowGeometryAction } from "./virtual-table-actions";
 import { VIRTUAL_TABLE_ROWS_MUTATED, emitVirtualTableRowsMutated } from "@/lib/workspace-virtual-table-mutations";
 import { invalidateVirtualTableRowsCache } from "@/lib/virtual-table-rows-cache";
@@ -167,6 +171,7 @@ const EMPTY_MOVE_GEOM_DRAFT: MoveGeomDraftState = {
   deltaLat: 0,
   deltaLng: 0,
   rotationDeg: 0,
+  vertexEdits: {},
   subMode: "translate",
 };
 import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
@@ -845,6 +850,14 @@ export function WorkspaceSpatialView({
     [moveGeomDraft.selection]
   );
 
+  const moveGeomVertexEditSupported = useMemo(
+    () =>
+      moveGeomDraft.selection
+        ? supportsMoveGeomVertexEdit(moveGeomDraft.selection.originalGeojson)
+        : false,
+    [moveGeomDraft.selection]
+  );
+
   const moveGeomOverlapFootprintIds = useMemo(
     () =>
       toolMode === "move-geom"
@@ -1093,6 +1106,7 @@ export function WorkspaceSpatialView({
       deltaLat: 0,
       deltaLng: 0,
       rotationDeg: 0,
+      vertexEdits: {},
       subMode: "translate",
     });
     setMoveGeomMessage(null);
@@ -1100,14 +1114,36 @@ export function WorkspaceSpatialView({
 
   const handleMoveGeomDeltaChange = useCallback(
     (deltaLat: number, deltaLng: number) => {
-      setMoveGeomDraft((prev) => ({ ...prev, deltaLat, deltaLng }));
+      setMoveGeomDraft((prev) => ({
+        ...prev,
+        deltaLat,
+        deltaLng,
+        vertexEdits: {},
+      }));
     },
     []
   );
 
   const handleMoveGeomRotationChange = useCallback((rotationDeg: number) => {
-    setMoveGeomDraft((prev) => ({ ...prev, rotationDeg }));
+    setMoveGeomDraft((prev) => ({
+      ...prev,
+      rotationDeg,
+      vertexEdits: {},
+    }));
   }, []);
+
+  const handleMoveGeomVertexEditChange = useCallback(
+    (index: number, lat: number, lng: number) => {
+      setMoveGeomDraft((prev) => {
+        const nextEdits: MoveGeomVertexEdits = {
+          ...prev.vertexEdits,
+          [index]: { lat, lng },
+        };
+        return { ...prev, vertexEdits: nextEdits };
+      });
+    },
+    []
+  );
 
   const handleMoveGeomSubModeChange = useCallback(
     (subMode: MoveGeomEditSubMode) => {
@@ -1116,6 +1152,13 @@ export function WorkspaceSpatialView({
           subMode === "rotate" &&
           prev.selection &&
           !supportsMoveGeomRotation(prev.selection.originalGeojson)
+        ) {
+          return prev;
+        }
+        if (
+          subMode === "vertex" &&
+          prev.selection &&
+          !supportsMoveGeomVertexEdit(prev.selection.originalGeojson)
         ) {
           return prev;
         }
@@ -1135,6 +1178,7 @@ export function WorkspaceSpatialView({
       deltaLat: 0,
       deltaLng: 0,
       rotationDeg: 0,
+      vertexEdits: {},
     }));
   }, []);
 
@@ -1146,6 +1190,7 @@ export function WorkspaceSpatialView({
           deltaLng: moveGeomDraft.deltaLng,
           deltaLat: moveGeomDraft.deltaLat,
           rotationDeg: moveGeomDraft.rotationDeg,
+          vertexEdits: moveGeomDraft.vertexEdits,
         },
         visibleMapLayers
       )
@@ -1162,6 +1207,7 @@ export function WorkspaceSpatialView({
     moveGeomDraft.deltaLat,
     moveGeomDraft.deltaLng,
     moveGeomDraft.rotationDeg,
+    moveGeomDraft.vertexEdits,
     visibleMapLayers,
     refreshMoveGeomOverlapPreview,
   ]);
@@ -1175,12 +1221,14 @@ export function WorkspaceSpatialView({
   }, []);
 
   const handleMoveGeomSave = useCallback(() => {
-    const { selection, deltaLat, deltaLng, rotationDeg } = moveGeomDraft;
+    const { selection, deltaLat, deltaLng, rotationDeg, vertexEdits } =
+      moveGeomDraft;
     if (!selection) return;
     const transformed = applyMoveGeomTransform(selection.originalGeojson, {
       deltaLng,
       deltaLat,
       rotationDeg,
+      vertexEdits,
     });
     if (!transformed) {
       setMoveGeomMessage("Geometri tidak valid untuk disimpan.");
@@ -1905,11 +1953,14 @@ export function WorkspaceSpatialView({
               moveGeomDeltaLat={moveGeomDraft.deltaLat}
               moveGeomDeltaLng={moveGeomDraft.deltaLng}
               moveGeomRotationDeg={moveGeomDraft.rotationDeg}
+              moveGeomVertexEdits={moveGeomDraft.vertexEdits}
               moveGeomRotationSupported={moveGeomRotationSupported}
+              moveGeomVertexEditSupported={moveGeomVertexEditSupported}
               moveGeomHideFootprintId={moveGeomDraft.selection?.footprintId ?? null}
               onMoveGeomSelect={handleMoveGeomSelect}
               onMoveGeomDeltaChange={handleMoveGeomDeltaChange}
               onMoveGeomRotationChange={handleMoveGeomRotationChange}
+              onMoveGeomVertexEditChange={handleMoveGeomVertexEditChange}
               onMoveGeomSubModeChange={handleMoveGeomSubModeChange}
               onMoveGeomDragStart={handleMoveGeomDragStart}
               onMoveGeomDragEnd={handleMoveGeomDragEnd}
@@ -2034,6 +2085,7 @@ export function WorkspaceSpatialView({
               <WorkspaceMapMoveGeomHud
                 draft={moveGeomDraft}
                 rotationSupported={moveGeomRotationSupported}
+                vertexEditSupported={moveGeomVertexEditSupported}
                 overlapPreview={moveGeomOverlapPreview}
                 overlapRefreshing={moveGeomDragging}
                 snapEnabled={moveGeomSnap}
