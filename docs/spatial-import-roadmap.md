@@ -171,11 +171,11 @@ Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 F
 
 ### 4.9 Fase 8 (rencana) — koreksi geometri + referensi persil BPN
 
-**Konteks surveyor:** setelah gambar bidang, overlay persil unduhan BPN → geser bidang jika overlap → baru «beres». Portal: overlap ✅ (G-D1), impor persil file ✅; geser geometri ❌.
+**Konteks surveyor:** setelah gambar bidang, overlay persil unduhan BPN → geser bidang jika overlap → baru «beres». Portal: overlap ✅ (G-D1), impor persil file ✅; geser geometri ✅ (v1 translasi).
 
 **8A — Edit geometri di peta**
 
-- [ ] Alat geser (translasi) poligon/garis + snap ke referensi
+- [x] Alat geser (translasi) poligon/garis/titik + snap ke vertex lapisan aktif
 - [ ] Integrasi QC overlap saat koreksi
 - [ ] (Opsional) rotasi / edit vertex
 

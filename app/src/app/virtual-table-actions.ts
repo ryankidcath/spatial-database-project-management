@@ -87,6 +87,9 @@ import {
   validateDrawnLine,
 } from "@/lib/workspace-map-draw-line";
 import {
+  geometryKindFromStored,
+} from "@/lib/workspace-map-translate-geom";
+import {
   buildVirtualTablePointsFeatureCollection,
   parseVirtualTablePointsSourceSrid,
 } from "@/lib/virtual-table-points-import";
@@ -4521,6 +4524,149 @@ export async function importVirtualRowsDrawnLineBatchAction(
   );
   inner.set("geojson_json", geojsonJson);
   return importVirtualRowsGeoJsonBatchAction(inner);
+}
+
+/** Fase 8A — perbarui kolom geometri satu baris virtual (translasi di peta). */
+export async function updateVirtualRowGeometryAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return { error: "Supabase tidak dikonfigurasi" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum masuk" };
+
+  const rowId = String(formData.get("row_id") ?? "").trim();
+  const geometryColumnSlug = String(
+    formData.get("geometry_column_slug") ?? ""
+  ).trim();
+  const geometryJsonRaw = String(formData.get("geometry_json") ?? "").trim();
+
+  if (!rowId) return { error: "row_id kosong" };
+  if (!geometryColumnSlug) return { error: "geometry_column_slug wajib" };
+  if (!geometryJsonRaw) return { error: "geometry_json wajib" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(geometryJsonRaw);
+  } catch {
+    return { error: "geometry_json tidak valid." };
+  }
+
+  const kind = geometryKindFromStored(parsed);
+  if (!kind) {
+    return { error: "Geometri tidak dikenali (Point / LineString / Polygon)." };
+  }
+
+  const { data: row, error: rowErr } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .select("payload, table_id")
+    .eq("id", rowId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (rowErr) return { error: rowErr.message };
+  if (!row) return { error: "Baris tidak ditemukan" };
+
+  const { payload: currentPayload, table_id } = row as {
+    payload: Record<string, unknown>;
+    table_id: string;
+  };
+
+  const { data: col } = await supabase
+    .schema("core_pm")
+    .from("virtual_columns")
+    .select("slug, display_name, data_type, is_required, config")
+    .eq("table_id", table_id)
+    .eq("slug", geometryColumnSlug)
+    .maybeSingle();
+
+  if (!col || (col as { data_type: string }).data_type !== "geometry") {
+    return { error: `Kolom geometri «${geometryColumnSlug}» tidak ditemukan` };
+  }
+
+  const obj = parsed as {
+    type?: string;
+    geometry?: unknown;
+    properties?: Record<string, unknown>;
+  };
+  const geom = obj.type === "Feature" ? obj.geometry : parsed;
+  const props =
+    obj.type === "Feature" && obj.properties
+      ? obj.properties
+      : (currentPayload as Record<string, unknown>);
+
+  let stored:
+    | ReturnType<typeof featureToStoredGeometry>
+    | ReturnType<typeof featureToStoredPointGeometry>
+    | ReturnType<typeof featureToStoredLineGeometry>
+    | null = null;
+
+  if (kind === "point") {
+    stored = featureToStoredPointGeometry(geom, props);
+  } else if (kind === "linestring") {
+    stored = featureToStoredLineGeometry(geom, props);
+  } else {
+    stored = featureToStoredGeometry(geom, props);
+  }
+
+  if (!stored) {
+    return { error: "Geometri tidak valid setelah konversi." };
+  }
+
+  const oldValue = currentPayload[geometryColumnSlug];
+  const newPayload = { ...currentPayload, [geometryColumnSlug]: stored };
+
+  const { error } = await supabase
+    .schema("core_pm")
+    .from("virtual_rows")
+    .update({ payload: newPayload, updated_at: new Date().toISOString() })
+    .eq("id", rowId)
+    .is("deleted_at", null);
+
+  if (error) return { error: error.message };
+
+  if (!cellValuesEqual(oldValue, stored)) {
+    const scope = await resolveVirtualTableScope(supabase, table_id);
+    if (scope) {
+      const { data: allCols } = await supabase
+        .schema("core_pm")
+        .from("virtual_columns")
+        .select("slug, display_name, data_type, position")
+        .eq("table_id", table_id)
+        .order("position");
+
+      const label = rowLabelFromPayload(
+        newPayload,
+        (allCols ?? []) as {
+          slug: string;
+          display_name: string;
+          data_type: string;
+          position: number;
+        }[],
+        rowId
+      );
+
+      await writeVirtualTableAuditLog(supabase, scope, {
+        actorUserId: user.id,
+        action: "virtual_row.geometry_updated",
+        entity: "core_pm.virtual_rows",
+        entityId: rowId,
+        payload: {
+          column_slug: geometryColumnSlug,
+          table_display_name: scope.displayName,
+          row_label: label,
+          source: "move_geom_tool",
+        },
+      });
+    }
+  }
+
+  revalidatePath("/");
+  return { error: null };
 }
 
 export type BootstrapVirtualTableLayerResult = {

@@ -6,7 +6,23 @@ export type WorkspaceMapToolMode =
   | "measure-area"
   | "identify"
   | "draw-bidang"
-  | "draw-garis";
+  | "draw-garis"
+  | "move-geom";
+
+export type MoveGeomSelection = {
+  footprintId: string;
+  label: string;
+  virtualTableId: string;
+  virtualRowId: string;
+  geometryColumnSlug: string;
+  originalGeojson: unknown;
+};
+
+export type MoveGeomDraftState = {
+  selection: MoveGeomSelection | null;
+  deltaLat: number;
+  deltaLng: number;
+};
 
 export type DrawBidangDraftState = {
   pointCount: number;

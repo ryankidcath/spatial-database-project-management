@@ -41,11 +41,13 @@ import { WorkspaceMapDrawBidangController } from "./workspace-map-draw-bidang-co
 import type { DrawBidangControllerState } from "./workspace-map-draw-bidang-controller";
 import { WorkspaceMapDrawLineController } from "./workspace-map-draw-line-controller";
 import type { DrawLineControllerState } from "./workspace-map-draw-line-controller";
+import { WorkspaceMapMoveGeomController } from "./workspace-map-move-geom-controller";
 import type { MeasureDraftState } from "./workspace-map-tool-controller";
 import { WorkspaceMapRelationTraceLayer } from "./workspace-map-relation-trace-layer";
 import type {
   MapIdentifyHit,
   MapMeasureResult,
+  MoveGeomSelection,
   WorkspaceMapToolMode,
 } from "@/lib/workspace-map-tool-types";
 import type { LatLngPoint } from "@/lib/workspace-map-draw-bidang";
@@ -943,6 +945,15 @@ export type WorkspaceMapProps = {
   onDrawLineDraftChange?: (draft: DrawLineControllerState) => void;
   onDrawLineFinished?: (line: LatLngPoint[]) => void;
   finishDrawLineSignal?: number;
+  moveGeomFootprints?: MapFootprint[];
+  moveGeomSnapEnabled?: boolean;
+  moveGeomSnapFootprints?: MapFootprint[];
+  moveGeomSelection?: MoveGeomSelection | null;
+  moveGeomDeltaLat?: number;
+  moveGeomDeltaLng?: number;
+  moveGeomHideFootprintId?: string | null;
+  onMoveGeomSelect?: (selection: MoveGeomSelection) => void;
+  onMoveGeomDeltaChange?: (deltaLat: number, deltaLng: number) => void;
   coordinateDisplay?: CoordinateDisplayMode;
   onCoordinateDisplayToggle?: () => void;
   onMapReady?: (map: L.Map | null) => void;
@@ -993,6 +1004,15 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       onDrawLineDraftChange,
       onDrawLineFinished,
       finishDrawLineSignal = 0,
+      moveGeomFootprints = [],
+      moveGeomSnapEnabled = true,
+      moveGeomSnapFootprints = [],
+      moveGeomSelection = null,
+      moveGeomDeltaLat = 0,
+      moveGeomDeltaLng = 0,
+      moveGeomHideFootprintId = null,
+      onMoveGeomSelect,
+      onMoveGeomDeltaChange,
       coordinateDisplay = "latlng",
       onCoordinateDisplayToggle,
       onMapReady,
@@ -1352,6 +1372,13 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
     const fg = L.featureGroup();
     let layerToReopen: L.Layer | null = null;
     for (const fp of footprints) {
+      if (
+        moveGeomHideFootprintId &&
+        fp.id === moveGeomHideFootprintId &&
+        toolMode === "move-geom"
+      ) {
+        continue;
+      }
       if (!fp.geojson || typeof fp.geojson !== "object") continue;
       const layerKind = fp.layerKind ?? "demo";
       const isBerkasHighlight =
@@ -1363,7 +1390,8 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           layerKind === "virtual_table" &&
           onVirtualRowSelect != null &&
           toolMode === "navigate";
-        const layerInteractive = toolMode === "navigate";
+        const layerInteractive =
+          toolMode === "navigate" || toolMode === "move-geom";
       const fpOpacity = resolveFootprintOpacity(
         fp,
         layerOpacityByTableId,
@@ -1504,6 +1532,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
     importPreviewOpacity,
     showFeatureLabels,
     toolMode,
+    moveGeomHideFootprintId,
     importOverlapFootprintIds,
     analysisHighlightFootprintIds,
   ]);
@@ -1590,6 +1619,22 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           finishLineSignal={finishDrawLineSignal}
           undoPointSignal={undoDrawPointSignal}
           clearDrawSignal={clearDrawSignal}
+        />
+      ) : null}
+      {mapInstance && enableGisChrome ? (
+        <WorkspaceMapMoveGeomController
+          map={mapInstance}
+          active={toolMode === "move-geom"}
+          footprints={moveGeomFootprints}
+          snapEnabled={moveGeomSnapEnabled}
+          snapFootprints={moveGeomSnapFootprints}
+          selection={moveGeomSelection}
+          deltaLat={moveGeomDeltaLat}
+          deltaLng={moveGeomDeltaLng}
+          onSelect={onMoveGeomSelect ?? (() => {})}
+          onDeltaChange={(dLat, dLng) =>
+            onMoveGeomDeltaChange?.(dLat, dLng)
+          }
         />
       ) : null}
       {mapInstance && enableGisChrome ? (
