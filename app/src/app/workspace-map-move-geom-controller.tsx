@@ -15,9 +15,11 @@ import {
 import {
   applyMoveGeomTransform,
   centroidOfStoredGeometry,
+  resolveRotationPivotOfStoredGeometry,
 } from "@/lib/workspace-map-transform-geom";
 import { translateStoredGeometry } from "@/lib/workspace-map-translate-geom";
 import {
+  extractEditableVertexPositions,
   resolveVertexHandlePositions,
   type MoveGeomVertexEdits,
 } from "@/lib/workspace-map-vertex-edit-geom";
@@ -30,9 +32,13 @@ const PREVIEW_COLOR = "#c2410c";
 const PREVIEW_FILL = "#ea580c";
 const ROTATE_HANDLE_COLOR = "#1d4ed8";
 const PIVOT_COLOR = "#64748b";
+const PIVOT_ACTIVE_COLOR = "#c2410c";
+const PIVOT_OPTION_COLOR = "#94a3b8";
 const VERTEX_HANDLE_COLOR = "#059669";
 const ROTATE_HANDLE_HIT_PX = 14;
 const VERTEX_HANDLE_HIT_PX = 12;
+const PIVOT_VERTEX_HIT_PX = 12;
+const PIVOT_CENTROID_HIT_PX = 10;
 const ROTATE_HANDLE_OFFSET_PX = 44;
 
 const NON_INTERACTIVE_MARKER: L.CircleMarkerOptions = {
@@ -51,12 +57,14 @@ type Props = {
   deltaLat: number;
   deltaLng: number;
   rotationDeg: number;
+  rotationPivotVertexIndex: number | null;
   vertexEdits: MoveGeomVertexEdits;
   rotationSupported: boolean;
   vertexEditSupported: boolean;
   onSelect: (selection: MoveGeomSelection) => void;
   onDeltaChange: (deltaLat: number, deltaLng: number) => void;
   onRotationChange: (rotationDeg: number) => void;
+  onRotationPivotChange: (pivotVertexIndex: number | null) => void;
   onVertexEditChange: (index: number, lat: number, lng: number) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
@@ -114,10 +122,11 @@ function handleLatLngForRotation(
   return map.containerPointToLatLng(L.point(hx, hy));
 }
 
-function pivotLatLng(
+function rotationPivotLatLng(
   selection: MoveGeomSelection,
   deltaLng: number,
-  deltaLat: number
+  deltaLat: number,
+  pivotVertexIndex: number | null
 ): L.LatLng | null {
   const translated = translateStoredGeometry(
     selection.originalGeojson,
@@ -125,21 +134,34 @@ function pivotLatLng(
     deltaLat
   );
   if (!translated) return null;
-  const pivot = centroidOfStoredGeometry(translated);
+  const pivot = resolveRotationPivotOfStoredGeometry(
+    translated,
+    pivotVertexIndex
+  );
   if (!pivot) return null;
   return L.latLng(pivot[1]!, pivot[0]!);
+}
+
+function translatedGeometryForPivot(
+  selection: MoveGeomSelection,
+  deltaLng: number,
+  deltaLat: number
+): unknown | null {
+  return translateStoredGeometry(selection.originalGeojson, deltaLng, deltaLat);
 }
 
 function baseGeometryAfterTranslateRotate(
   selection: MoveGeomSelection,
   deltaLng: number,
   deltaLat: number,
-  rotationDeg: number
+  rotationDeg: number,
+  rotationPivotVertexIndex: number | null
 ): unknown | null {
   return applyMoveGeomTransform(selection.originalGeojson, {
     deltaLng,
     deltaLat,
     rotationDeg,
+    rotationPivotVertexIndex,
     vertexEdits: {},
   });
 }
@@ -155,12 +177,14 @@ export function WorkspaceMapMoveGeomController({
   deltaLat,
   deltaLng,
   rotationDeg,
+  rotationPivotVertexIndex,
   vertexEdits,
   rotationSupported,
   vertexEditSupported,
   onSelect,
   onDeltaChange,
   onRotationChange,
+  onRotationPivotChange,
   onVertexEditChange,
   onDragStart,
   onDragEnd,
@@ -180,6 +204,7 @@ export function WorkspaceMapMoveGeomController({
   const selectionRef = useRef(selection);
   const deltaRef = useRef({ dLat: deltaLat, dLng: deltaLng });
   const rotationRef = useRef(rotationDeg);
+  const rotationPivotVertexIndexRef = useRef(rotationPivotVertexIndex);
   const vertexEditsRef = useRef(vertexEdits);
   const subModeRef = useRef(editSubMode);
   const footprintsRef = useRef(footprints);
@@ -190,6 +215,7 @@ export function WorkspaceMapMoveGeomController({
   const onSelectRef = useRef(onSelect);
   const onDeltaChangeRef = useRef(onDeltaChange);
   const onRotationChangeRef = useRef(onRotationChange);
+  const onRotationPivotChangeRef = useRef(onRotationPivotChange);
   const onVertexEditChangeRef = useRef(onVertexEditChange);
   const onDragStartRef = useRef(onDragStart);
   const onDragEndRef = useRef(onDragEnd);
@@ -203,6 +229,9 @@ export function WorkspaceMapMoveGeomController({
   useEffect(() => {
     rotationRef.current = rotationDeg;
   }, [rotationDeg]);
+  useEffect(() => {
+    rotationPivotVertexIndexRef.current = rotationPivotVertexIndex;
+  }, [rotationPivotVertexIndex]);
   useEffect(() => {
     vertexEditsRef.current = vertexEdits;
   }, [vertexEdits]);
@@ -233,6 +262,9 @@ export function WorkspaceMapMoveGeomController({
   useEffect(() => {
     onRotationChangeRef.current = onRotationChange;
   }, [onRotationChange]);
+  useEffect(() => {
+    onRotationPivotChangeRef.current = onRotationPivotChange;
+  }, [onRotationPivotChange]);
   useEffect(() => {
     onVertexEditChangeRef.current = onVertexEditChange;
   }, [onVertexEditChange]);
@@ -284,6 +316,7 @@ export function WorkspaceMapMoveGeomController({
       deltaLng: deltaRef.current.dLng,
       deltaLat: deltaRef.current.dLat,
       rotationDeg: rotationRef.current,
+      rotationPivotVertexIndex: rotationPivotVertexIndexRef.current,
       vertexEdits: vertexEditsRef.current,
     }),
     []
@@ -339,21 +372,48 @@ export function WorkspaceMapMoveGeomController({
     group.clearLayers();
 
     if (subModeRef.current === "rotate" && rotationSupportedRef.current) {
-      const pivot = pivotLatLng(
+      const translated = translatedGeometryForPivot(
         sel,
         deltaRef.current.dLng,
         deltaRef.current.dLat
       );
-      if (!pivot) return;
+      if (!translated) return;
 
-      L.circleMarker(pivot, {
-        ...NON_INTERACTIVE_MARKER,
-        radius: 5,
-        color: PIVOT_COLOR,
-        fillColor: "#f8fafc",
-        fillOpacity: 1,
-        weight: 2,
-      }).addTo(group);
+      const activePivotIndex = rotationPivotVertexIndexRef.current;
+      const centroid = centroidOfStoredGeometry(translated);
+      const vertices = extractEditableVertexPositions(translated);
+
+      for (const v of vertices) {
+        const isActive = activePivotIndex === v.index;
+        L.circleMarker([v.lat, v.lng], {
+          ...NON_INTERACTIVE_MARKER,
+          radius: isActive ? 7 : 5,
+          color: isActive ? PIVOT_ACTIVE_COLOR : PIVOT_OPTION_COLOR,
+          fillColor: isActive ? "#fed7aa" : "#f1f5f9",
+          fillOpacity: 1,
+          weight: isActive ? 2 : 1,
+        }).addTo(group);
+      }
+
+      if (centroid) {
+        const isActive = activePivotIndex == null;
+        L.circleMarker([centroid[1]!, centroid[0]!], {
+          ...NON_INTERACTIVE_MARKER,
+          radius: isActive ? 6 : 4,
+          color: isActive ? PIVOT_ACTIVE_COLOR : PIVOT_COLOR,
+          fillColor: isActive ? "#fed7aa" : "#f8fafc",
+          fillOpacity: 1,
+          weight: isActive ? 2 : 1,
+        }).addTo(group);
+      }
+
+      const pivot = rotationPivotLatLng(
+        sel,
+        deltaRef.current.dLng,
+        deltaRef.current.dLat,
+        activePivotIndex
+      );
+      if (!pivot) return;
 
       const handle = handleLatLngForRotation(
         map,
@@ -383,7 +443,8 @@ export function WorkspaceMapMoveGeomController({
         sel,
         deltaRef.current.dLng,
         deltaRef.current.dLat,
-        rotationRef.current
+        rotationRef.current,
+        rotationPivotVertexIndexRef.current
       );
       if (!base) return;
       const handles = resolveVertexHandlePositions(
@@ -429,6 +490,7 @@ export function WorkspaceMapMoveGeomController({
     deltaLat,
     deltaLng,
     rotationDeg,
+    rotationPivotVertexIndex,
     vertexEdits,
     editSubMode,
     redrawAll,
@@ -459,7 +521,8 @@ export function WorkspaceMapMoveGeomController({
         sel,
         deltaRef.current.dLng,
         deltaRef.current.dLat,
-        rotationRef.current
+        rotationRef.current,
+        rotationPivotVertexIndexRef.current
       );
       if (!base) return [];
       return resolveVertexHandlePositions(
@@ -487,10 +550,11 @@ export function WorkspaceMapMoveGeomController({
     const isNearRotationHandle = (latlng: L.LatLng): boolean => {
       const sel = selectionRef.current;
       if (!sel || !rotationSupportedRef.current) return false;
-      const pivot = pivotLatLng(
+      const pivot = rotationPivotLatLng(
         sel,
         deltaRef.current.dLng,
-        deltaRef.current.dLat
+        deltaRef.current.dLat,
+        rotationPivotVertexIndexRef.current
       );
       if (!pivot) return false;
       const handle = handleLatLngForRotation(
@@ -504,6 +568,44 @@ export function WorkspaceMapMoveGeomController({
         Math.hypot(clickPt.x - handlePt.x, clickPt.y - handlePt.y) <
         ROTATE_HANDLE_HIT_PX
       );
+    };
+
+    /** undefined = tidak kena; null = pusat; number = indeks sudut */
+    const findRotationPivotPick = (
+      latlng: L.LatLng
+    ): number | null | undefined => {
+      const sel = selectionRef.current;
+      if (!sel) return undefined;
+      const translated = translatedGeometryForPivot(
+        sel,
+        deltaRef.current.dLng,
+        deltaRef.current.dLat
+      );
+      if (!translated) return undefined;
+
+      const clickPt = map.latLngToContainerPoint(latlng);
+      let bestIndex: number | null = null;
+      let bestDist = PIVOT_VERTEX_HIT_PX;
+
+      for (const v of extractEditableVertexPositions(translated)) {
+        const pt = map.latLngToContainerPoint(L.latLng(v.lat, v.lng));
+        const d = Math.hypot(pt.x - clickPt.x, pt.y - clickPt.y);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIndex = v.index;
+        }
+      }
+      if (bestIndex != null) return bestIndex;
+
+      const centroid = centroidOfStoredGeometry(translated);
+      if (centroid) {
+        const pt = map.latLngToContainerPoint(
+          L.latLng(centroid[1]!, centroid[0]!)
+        );
+        const d = Math.hypot(pt.x - clickPt.x, pt.y - clickPt.y);
+        if (d < PIVOT_CENTROID_HIT_PX) return null;
+      }
+      return undefined;
     };
 
     const applyDragAtLatLng = (latlng: L.LatLng) => {
@@ -523,10 +625,11 @@ export function WorkspaceMapMoveGeomController({
       if (rotateDraggingRef.current) {
         const sel = selectionRef.current;
         if (!sel) return;
-        const pivot = pivotLatLng(
+        const pivot = rotationPivotLatLng(
           sel,
           deltaRef.current.dLng,
-          deltaRef.current.dLat
+          deltaRef.current.dLat,
+          rotationPivotVertexIndexRef.current
         );
         if (!pivot) return;
         const currentAngle = angleDegFromPivot(map, pivot, latlng);
@@ -552,7 +655,8 @@ export function WorkspaceMapMoveGeomController({
           latlng,
           rotationRef.current,
           vertexEditsRef.current,
-          refs
+          refs,
+          rotationPivotVertexIndexRef.current
         );
         dLat = snapped.dLat;
         dLng = snapped.dLng;
@@ -628,10 +732,11 @@ export function WorkspaceMapMoveGeomController({
         rotationSupportedRef.current &&
         isNearRotationHandle(e.latlng)
       ) {
-        const pivot = pivotLatLng(
+        const pivot = rotationPivotLatLng(
           sel,
           deltaRef.current.dLng,
-          deltaRef.current.dLat
+          deltaRef.current.dLat,
+          rotationPivotVertexIndexRef.current
         );
         if (!pivot) return;
         rotateDraggingRef.current = true;
@@ -646,6 +751,20 @@ export function WorkspaceMapMoveGeomController({
           L.DomEvent.preventDefault(e.originalEvent);
         }
         return;
+      }
+
+      if (subModeRef.current === "rotate" && rotationSupportedRef.current) {
+        const pivotPick = findRotationPivotPick(e.latlng);
+        if (pivotPick !== undefined) {
+          if (pivotPick !== rotationPivotVertexIndexRef.current) {
+            onRotationPivotChangeRef.current(pivotPick);
+          }
+          L.DomEvent.stopPropagation(e);
+          if (e.originalEvent) {
+            L.DomEvent.preventDefault(e.originalEvent);
+          }
+          return;
+        }
       }
 
       if (subModeRef.current !== "translate") return;

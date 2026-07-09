@@ -5,6 +5,7 @@ import { feature } from "@turf/helpers";
 import { asGeometry } from "@/lib/workspace-map-geo-utils";
 import {
   applyVertexEditsToStored,
+  extractEditableVertexPositions,
   type MoveGeomVertexEdits,
 } from "@/lib/workspace-map-vertex-edit-geom";
 import {
@@ -18,6 +19,8 @@ export type MoveGeomTransform = {
   deltaLng: number;
   deltaLat: number;
   rotationDeg: number;
+  /** null = pusat geometri; angka = indeks vertex sebagai sumbu putar */
+  rotationPivotVertexIndex: number | null;
   vertexEdits: MoveGeomVertexEdits;
 };
 
@@ -25,6 +28,7 @@ export const EMPTY_MOVE_GEOM_TRANSFORM: MoveGeomTransform = {
   deltaLng: 0,
   deltaLat: 0,
   rotationDeg: 0,
+  rotationPivotVertexIndex: null,
   vertexEdits: {},
 };
 
@@ -57,6 +61,23 @@ export function centroidOfStoredGeometry(stored: unknown): Position | null {
     /* invalid */
   }
   return null;
+}
+
+/**
+ * Posisi sumbu putar [lng, lat] pada geometri (setelah translasi, sebelum rotasi).
+ * null = centroid; angka = vertex dengan indeks tersebut.
+ */
+export function resolveRotationPivotOfStoredGeometry(
+  stored: unknown,
+  pivotVertexIndex: number | null
+): Position | null {
+  if (pivotVertexIndex == null) {
+    return centroidOfStoredGeometry(stored);
+  }
+  const verts = extractEditableVertexPositions(stored);
+  const match = verts.find((v) => v.index === pivotVertexIndex);
+  if (!match) return centroidOfStoredGeometry(stored);
+  return [match.lng, match.lat];
 }
 
 /** Titik tunggal tidak bisa diputar secara bermakna. */
@@ -92,13 +113,14 @@ export function rotateStoredGeometry(
 }
 
 /**
- * Terapkan translasi lalu rotasi sekitar centroid hasil translasi.
+ * Terapkan translasi lalu rotasi sekitar sumbu (pusat atau vertex) hasil translasi.
  */
 export function applyMoveGeomTransform(
   stored: unknown,
   transform: MoveGeomTransform
 ): unknown | null {
-  const { deltaLng, deltaLat, rotationDeg, vertexEdits } = transform;
+  const { deltaLng, deltaLat, rotationDeg, rotationPivotVertexIndex, vertexEdits } =
+    transform;
   const hasTranslate =
     Math.abs(deltaLng) > 1e-12 || Math.abs(deltaLat) > 1e-12;
   const hasRotate = Math.abs(rotationDeg) > 1e-12;
@@ -113,7 +135,10 @@ export function applyMoveGeomTransform(
   }
 
   if (hasRotate) {
-    const pivot = centroidOfStoredGeometry(current);
+    const pivot = resolveRotationPivotOfStoredGeometry(
+      current,
+      rotationPivotVertexIndex ?? null
+    );
     if (!pivot) return current;
     current = rotateStoredGeometry(current, rotationDeg, pivot);
     if (!current) return null;

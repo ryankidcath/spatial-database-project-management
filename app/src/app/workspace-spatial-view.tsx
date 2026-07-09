@@ -171,6 +171,7 @@ const EMPTY_MOVE_GEOM_DRAFT: MoveGeomDraftState = {
   deltaLat: 0,
   deltaLng: 0,
   rotationDeg: 0,
+  rotationPivotVertexIndex: null,
   vertexEdits: {},
   subMode: "translate",
 };
@@ -1106,6 +1107,7 @@ export function WorkspaceSpatialView({
       deltaLat: 0,
       deltaLng: 0,
       rotationDeg: 0,
+      rotationPivotVertexIndex: null,
       vertexEdits: {},
       subMode: "translate",
     });
@@ -1131,6 +1133,18 @@ export function WorkspaceSpatialView({
       vertexEdits: {},
     }));
   }, []);
+
+  const handleMoveGeomRotationPivotChange = useCallback(
+    (rotationPivotVertexIndex: number | null) => {
+      setMoveGeomDraft((prev) => ({
+        ...prev,
+        rotationPivotVertexIndex,
+        rotationDeg: 0,
+        vertexEdits: {},
+      }));
+    },
+    []
+  );
 
   const handleMoveGeomVertexEditChange = useCallback(
     (index: number, lat: number, lng: number) => {
@@ -1178,6 +1192,7 @@ export function WorkspaceSpatialView({
       deltaLat: 0,
       deltaLng: 0,
       rotationDeg: 0,
+      rotationPivotVertexIndex: null,
       vertexEdits: {},
     }));
   }, []);
@@ -1190,6 +1205,7 @@ export function WorkspaceSpatialView({
           deltaLng: moveGeomDraft.deltaLng,
           deltaLat: moveGeomDraft.deltaLat,
           rotationDeg: moveGeomDraft.rotationDeg,
+          rotationPivotVertexIndex: moveGeomDraft.rotationPivotVertexIndex,
           vertexEdits: moveGeomDraft.vertexEdits,
         },
         visibleMapLayers
@@ -1207,6 +1223,7 @@ export function WorkspaceSpatialView({
     moveGeomDraft.deltaLat,
     moveGeomDraft.deltaLng,
     moveGeomDraft.rotationDeg,
+    moveGeomDraft.rotationPivotVertexIndex,
     moveGeomDraft.vertexEdits,
     visibleMapLayers,
     refreshMoveGeomOverlapPreview,
@@ -1221,13 +1238,20 @@ export function WorkspaceSpatialView({
   }, []);
 
   const handleMoveGeomSave = useCallback(() => {
-    const { selection, deltaLat, deltaLng, rotationDeg, vertexEdits } =
-      moveGeomDraft;
+    const {
+      selection,
+      deltaLat,
+      deltaLng,
+      rotationDeg,
+      rotationPivotVertexIndex,
+      vertexEdits,
+    } = moveGeomDraft;
     if (!selection) return;
     const transformed = applyMoveGeomTransform(selection.originalGeojson, {
       deltaLng,
       deltaLat,
       rotationDeg,
+      rotationPivotVertexIndex,
       vertexEdits,
     });
     if (!transformed) {
@@ -1953,6 +1977,9 @@ export function WorkspaceSpatialView({
               moveGeomDeltaLat={moveGeomDraft.deltaLat}
               moveGeomDeltaLng={moveGeomDraft.deltaLng}
               moveGeomRotationDeg={moveGeomDraft.rotationDeg}
+              moveGeomRotationPivotVertexIndex={
+                moveGeomDraft.rotationPivotVertexIndex
+              }
               moveGeomVertexEdits={moveGeomDraft.vertexEdits}
               moveGeomRotationSupported={moveGeomRotationSupported}
               moveGeomVertexEditSupported={moveGeomVertexEditSupported}
@@ -1960,6 +1987,7 @@ export function WorkspaceSpatialView({
               onMoveGeomSelect={handleMoveGeomSelect}
               onMoveGeomDeltaChange={handleMoveGeomDeltaChange}
               onMoveGeomRotationChange={handleMoveGeomRotationChange}
+              onMoveGeomRotationPivotChange={handleMoveGeomRotationPivotChange}
               onMoveGeomVertexEditChange={handleMoveGeomVertexEditChange}
               onMoveGeomSubModeChange={handleMoveGeomSubModeChange}
               onMoveGeomDragStart={handleMoveGeomDragStart}
@@ -2092,6 +2120,7 @@ export function WorkspaceSpatialView({
                 savePending={moveGeomSavePending}
                 atLat={mapStatusState.lat}
                 onSubModeChange={handleMoveGeomSubModeChange}
+                onRotationPivotChange={handleMoveGeomRotationPivotChange}
                 onSnapEnabledChange={setMoveGeomSnap}
                 onResetTransform={handleMoveGeomResetTransform}
                 onClearSelection={handleMoveGeomClearSelection}

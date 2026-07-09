@@ -956,6 +956,7 @@ export type WorkspaceMapProps = {
   moveGeomDeltaLat?: number;
   moveGeomDeltaLng?: number;
   moveGeomRotationDeg?: number;
+  moveGeomRotationPivotVertexIndex?: number | null;
   moveGeomVertexEdits?: import("@/lib/workspace-map-vertex-edit-geom").MoveGeomVertexEdits;
   moveGeomRotationSupported?: boolean;
   moveGeomVertexEditSupported?: boolean;
@@ -963,6 +964,7 @@ export type WorkspaceMapProps = {
   onMoveGeomSelect?: (selection: MoveGeomSelection) => void;
   onMoveGeomDeltaChange?: (deltaLat: number, deltaLng: number) => void;
   onMoveGeomRotationChange?: (rotationDeg: number) => void;
+  onMoveGeomRotationPivotChange?: (pivotVertexIndex: number | null) => void;
   onMoveGeomVertexEditChange?: (index: number, lat: number, lng: number) => void;
   onMoveGeomSubModeChange?: (mode: MoveGeomEditSubMode) => void;
   onMoveGeomDragStart?: () => void;
@@ -1026,6 +1028,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       moveGeomDeltaLat = 0,
       moveGeomDeltaLng = 0,
       moveGeomRotationDeg = 0,
+      moveGeomRotationPivotVertexIndex = null,
       moveGeomVertexEdits = {},
       moveGeomRotationSupported = false,
       moveGeomVertexEditSupported = false,
@@ -1033,6 +1036,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       onMoveGeomSelect,
       onMoveGeomDeltaChange,
       onMoveGeomRotationChange,
+      onMoveGeomRotationPivotChange,
       onMoveGeomVertexEditChange,
       onMoveGeomSubModeChange,
       onMoveGeomDragStart,
@@ -1661,6 +1665,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           deltaLat={moveGeomDeltaLat}
           deltaLng={moveGeomDeltaLng}
           rotationDeg={moveGeomRotationDeg}
+          rotationPivotVertexIndex={moveGeomRotationPivotVertexIndex}
           vertexEdits={moveGeomVertexEdits}
           rotationSupported={moveGeomRotationSupported}
           vertexEditSupported={moveGeomVertexEditSupported}
@@ -1669,6 +1674,9 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
             onMoveGeomDeltaChange?.(dLat, dLng)
           }
           onRotationChange={(deg) => onMoveGeomRotationChange?.(deg)}
+          onRotationPivotChange={(index) =>
+            onMoveGeomRotationPivotChange?.(index)
+          }
           onVertexEditChange={(index, lat, lng) =>
             onMoveGeomVertexEditChange?.(index, lat, lng)
           }
