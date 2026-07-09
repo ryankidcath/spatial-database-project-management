@@ -150,11 +150,12 @@ export function WorkspaceMapMoveGeomHud({
               {hasRotation ? (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Putar {displayRotation.toFixed(1)}° — sumbu: {pivotLabel}.
-                  Drag handle biru di peta.
+                  Drag sumbu oranye atau handle biru.
                 </p>
               ) : (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Klik sudut untuk sumbu putar (oranye = aktif). Drag handle biru
+                  Klik sudut untuk ganti sumbu (oranye = aktif). Drag sumbu oranye
+                  atau handle biru
                   {snapEnabled ? " — sisi/sudut fitur snap ke titik/garis." : "."}
                 </p>
               )}
