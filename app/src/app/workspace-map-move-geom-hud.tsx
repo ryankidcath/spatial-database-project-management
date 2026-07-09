@@ -245,6 +245,13 @@ export function WorkspaceMapMoveGeomHud({
           </span>
         ) : null}
       </label>
+      {selection && snapEnabled ? (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          <span className="text-[#9333ea]">━</span> titik fitur ↔ titik referensi
+          {" · "}
+          <span className="text-[#0891b2]">━</span> sisi fitur ∥ garis referensi
+        </p>
+      ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">
         {selection ? (
