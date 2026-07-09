@@ -47,6 +47,7 @@ export function computeSnappedTranslateDelta(
   rotationDeg: number,
   vertexEdits: MoveGeomVertexEdits,
   referenceVertices: LatLngPoint[],
+  rotationPivotVertexIndex: number | null = null,
   pixelTolerance = DEFAULT_SNAP_PIXEL_TOLERANCE
 ): { dLat: number; dLng: number } {
   const rawDLat = sessionBase.dLat + (mouseLatLng.lat - dragStart.lat);
@@ -60,6 +61,7 @@ export function computeSnappedTranslateDelta(
     deltaLng: rawDLng,
     deltaLat: rawDLat,
     rotationDeg,
+    rotationPivotVertexIndex,
     vertexEdits,
   });
   if (!translated) {

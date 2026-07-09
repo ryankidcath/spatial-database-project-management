@@ -23,6 +23,7 @@ type Props = {
   savePending: boolean;
   atLat: number;
   onSubModeChange: (mode: MoveGeomEditSubMode) => void;
+  onRotationPivotChange: (pivotVertexIndex: number | null) => void;
   onSnapEnabledChange: (enabled: boolean) => void;
   onResetTransform: () => void;
   onClearSelection: () => void;
@@ -40,13 +41,14 @@ export function WorkspaceMapMoveGeomHud({
   savePending,
   atLat,
   onSubModeChange,
+  onRotationPivotChange,
   onSnapEnabledChange,
   onResetTransform,
   onClearSelection,
   onSave,
   onCancel,
 }: Props) {
-  const { selection, deltaLat, deltaLng, rotationDeg, vertexEdits, subMode } =
+  const { selection, deltaLat, deltaLng, rotationDeg, rotationPivotVertexIndex, vertexEdits, subMode } =
     draft;
   const hasTranslate =
     Math.abs(deltaLat) > 1e-12 || Math.abs(deltaLng) > 1e-12;
@@ -58,6 +60,10 @@ export function WorkspaceMapMoveGeomHud({
       ? approximateTranslationMeters(deltaLat, deltaLng, atLat)
       : 0;
   const displayRotation = normalizeRotationDeg(rotationDeg);
+  const pivotLabel =
+    rotationPivotVertexIndex == null
+      ? "pusat"
+      : `sudut ${rotationPivotVertexIndex + 1}`;
   const vertexEditCount = Object.keys(vertexEdits).length;
   const overlapHits = overlapPreview.hits;
   const extraOverlapCount = Math.max(0, overlapHits.length - OVERLAP_LIST_LIMIT);
@@ -104,7 +110,7 @@ export function WorkspaceMapMoveGeomHud({
               disabled={!rotationSupported}
               title={
                 rotationSupported
-                  ? "Putar sekitar pusat geometri"
+                  ? "Putar sekitar pusat atau sudut yang dipilih"
                   : "Titik tunggal tidak mendukung rotasi"
               }
               onClick={() => onSubModeChange("rotate")}
@@ -140,15 +146,33 @@ export function WorkspaceMapMoveGeomHud({
               </p>
             )
           ) : subMode === "rotate" ? (
-            hasRotation ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Putar {displayRotation.toFixed(1)}° — drag handle biru di peta.
-              </p>
-            ) : (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Drag handle biru mengelilingi titik pusat untuk memutar.
-              </p>
-            )
+            <>
+              {hasRotation ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Putar {displayRotation.toFixed(1)}° — sumbu: {pivotLabel}.
+                  Drag handle biru di peta.
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Klik sudut di peta untuk sumbu putar (oranye = aktif), atau
+                  pusat. Lalu drag handle biru.
+                </p>
+              )}
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  className={cn(
+                    "rounded border px-2 py-0.5 text-[11px] transition-colors",
+                    rotationPivotVertexIndex == null
+                      ? "border-primary bg-muted font-medium text-foreground"
+                      : "border-border text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => onRotationPivotChange(null)}
+                >
+                  Sumbu pusat
+                </button>
+              </div>
+            </>
           ) : hasVertexEdits ? (
             <p className="mt-1 text-xs text-muted-foreground">
               {vertexEditCount} sudut disesuaikan — drag handle hijau di peta.

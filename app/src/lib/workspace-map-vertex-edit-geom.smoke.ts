@@ -33,6 +33,7 @@ const moved = applyMoveGeomTransform(polygon, {
   deltaLng: 0.001,
   deltaLat: 0,
   rotationDeg: 0,
+  rotationPivotVertexIndex: null,
   vertexEdits: { 0: { lat: -6.7398, lng: 108.5502 } },
 });
 if (!moved) {

@@ -3,7 +3,13 @@ import { applyMoveGeomTransform } from "./workspace-map-transform-geom";
 import { computeMoveGeomOverlapPreview } from "./workspace-map-move-geom-overlap";
 import type { MoveGeomSelection } from "./workspace-map-tool-types";
 
-const NO_TRANSFORM = { deltaLng: 0, deltaLat: 0, rotationDeg: 0, vertexEdits: {} };
+const NO_TRANSFORM = {
+  deltaLng: 0,
+  deltaLat: 0,
+  rotationDeg: 0,
+  rotationPivotVertexIndex: null,
+  vertexEdits: {},
+};
 
 function box(
   id: string,
@@ -69,7 +75,7 @@ if (atOrigin.isClean || atOrigin.hits.length === 0) {
 
 const movedClear = computeMoveGeomOverlapPreview(
   selection,
-  { deltaLng: 0, deltaLat: 0.01, rotationDeg: 0, vertexEdits: {} },
+  { deltaLng: 0, deltaLat: 0.01, rotationDeg: 0, rotationPivotVertexIndex: null, vertexEdits: {} },
   refs
 );
 if (!movedClear.isClean) {
@@ -80,6 +86,7 @@ const rotated = applyMoveGeomTransform(selection.originalGeojson, {
   deltaLng: 0,
   deltaLat: 0,
   rotationDeg: 45,
+  rotationPivotVertexIndex: null,
   vertexEdits: {},
 });
 if (!rotated) {

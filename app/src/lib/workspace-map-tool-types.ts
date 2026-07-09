@@ -26,6 +26,8 @@ export type MoveGeomDraftState = {
   deltaLat: number;
   deltaLng: number;
   rotationDeg: number;
+  /** null = pusat geometri; angka = indeks vertex/sudut sebagai sumbu putar */
+  rotationPivotVertexIndex: number | null;
   vertexEdits: MoveGeomVertexEdits;
   subMode: MoveGeomEditSubMode;
 };
