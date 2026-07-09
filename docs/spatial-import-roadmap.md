@@ -177,7 +177,8 @@ Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 F
 
 - [x] Alat geser (translasi) poligon/garis/titik + snap ke vertex lapisan aktif
 - [x] Integrasi QC overlap saat koreksi — pratinjau + sorot lapisan referensi setelah lepas drag
-- [ ] (Opsional) rotasi / edit vertex
+- [x] Rotasi poligon/garis — mode Putar + handle di peta
+- [ ] (Opsional) edit vertex satu per satu
 
 **8B — Referensi persil BPN + ATLAS**
 

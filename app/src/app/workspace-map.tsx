@@ -48,6 +48,7 @@ import type {
   MapIdentifyHit,
   MapMeasureResult,
   MoveGeomSelection,
+  MoveGeomEditSubMode,
   WorkspaceMapToolMode,
 } from "@/lib/workspace-map-tool-types";
 import type { LatLngPoint } from "@/lib/workspace-map-draw-bidang";
@@ -951,11 +952,16 @@ export type WorkspaceMapProps = {
   moveGeomSnapEnabled?: boolean;
   moveGeomSnapFootprints?: MapFootprint[];
   moveGeomSelection?: MoveGeomSelection | null;
+  moveGeomEditSubMode?: MoveGeomEditSubMode;
   moveGeomDeltaLat?: number;
   moveGeomDeltaLng?: number;
+  moveGeomRotationDeg?: number;
+  moveGeomRotationSupported?: boolean;
   moveGeomHideFootprintId?: string | null;
   onMoveGeomSelect?: (selection: MoveGeomSelection) => void;
   onMoveGeomDeltaChange?: (deltaLat: number, deltaLng: number) => void;
+  onMoveGeomRotationChange?: (rotationDeg: number) => void;
+  onMoveGeomSubModeChange?: (mode: MoveGeomEditSubMode) => void;
   onMoveGeomDragStart?: () => void;
   onMoveGeomDragEnd?: () => void;
   coordinateDisplay?: CoordinateDisplayMode;
@@ -1013,11 +1019,16 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       moveGeomSnapEnabled = true,
       moveGeomSnapFootprints = [],
       moveGeomSelection = null,
+      moveGeomEditSubMode = "translate",
       moveGeomDeltaLat = 0,
       moveGeomDeltaLng = 0,
+      moveGeomRotationDeg = 0,
+      moveGeomRotationSupported = false,
       moveGeomHideFootprintId = null,
       onMoveGeomSelect,
       onMoveGeomDeltaChange,
+      onMoveGeomRotationChange,
+      onMoveGeomSubModeChange,
       onMoveGeomDragStart,
       onMoveGeomDragEnd,
       coordinateDisplay = "latlng",
@@ -1640,12 +1651,16 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           snapEnabled={moveGeomSnapEnabled}
           snapFootprints={moveGeomSnapFootprints}
           selection={moveGeomSelection}
+          editSubMode={moveGeomEditSubMode}
           deltaLat={moveGeomDeltaLat}
           deltaLng={moveGeomDeltaLng}
+          rotationDeg={moveGeomRotationDeg}
+          rotationSupported={moveGeomRotationSupported}
           onSelect={onMoveGeomSelect ?? (() => {})}
           onDeltaChange={(dLat, dLng) =>
             onMoveGeomDeltaChange?.(dLat, dLng)
           }
+          onRotationChange={(deg) => onMoveGeomRotationChange?.(deg)}
           onDragStart={onMoveGeomDragStart}
           onDragEnd={onMoveGeomDragEnd}
         />

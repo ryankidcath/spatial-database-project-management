@@ -18,10 +18,14 @@ export type MoveGeomSelection = {
   originalGeojson: unknown;
 };
 
+export type MoveGeomEditSubMode = "translate" | "rotate";
+
 export type MoveGeomDraftState = {
   selection: MoveGeomSelection | null;
   deltaLat: number;
   deltaLng: number;
+  rotationDeg: number;
+  subMode: MoveGeomEditSubMode;
 };
 
 export type DrawBidangDraftState = {

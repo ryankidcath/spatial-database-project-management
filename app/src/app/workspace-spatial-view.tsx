@@ -80,6 +80,7 @@ import type {
   MapIdentifyHit,
   MapMeasureResult,
   MoveGeomDraftState,
+  MoveGeomEditSubMode,
   MoveGeomSelection,
   WorkspaceMapToolMode,
 } from "@/lib/workspace-map-tool-types";
@@ -152,11 +153,22 @@ import {
   totalCountsMapToRecord,
   totalCountsRecordToMap,
 } from "@/lib/workspace-spatial-geometry-layers-cache";
-import { translateStoredGeometry } from "@/lib/workspace-map-translate-geom";
+import {
+  applyMoveGeomTransform,
+  supportsMoveGeomRotation,
+} from "@/lib/workspace-map-transform-geom";
 import { updateVirtualRowGeometryAction } from "./virtual-table-actions";
 import { VIRTUAL_TABLE_ROWS_MUTATED, emitVirtualTableRowsMutated } from "@/lib/workspace-virtual-table-mutations";
 import { invalidateVirtualTableRowsCache } from "@/lib/virtual-table-rows-cache";
 import { useWorkspaceShellRefresh } from "./workspace-shell-context";
+
+const EMPTY_MOVE_GEOM_DRAFT: MoveGeomDraftState = {
+  selection: null,
+  deltaLat: 0,
+  deltaLng: 0,
+  rotationDeg: 0,
+  subMode: "translate",
+};
 import { mapPreviewLayersSignature } from "@/lib/virtual-table-map-preview";
 import { buildChatRowPathSegments } from "@/lib/chat-row-context";
 import {
@@ -296,11 +308,8 @@ export function WorkspaceSpatialView({
   const [clearDrawSignal, setClearDrawSignal] = useState(0);
   const [drawSaveOpen, setDrawSaveOpen] = useState(false);
   const [drawLineSaveOpen, setDrawLineSaveOpen] = useState(false);
-  const [moveGeomDraft, setMoveGeomDraft] = useState<MoveGeomDraftState>({
-    selection: null,
-    deltaLat: 0,
-    deltaLng: 0,
-  });
+  const [moveGeomDraft, setMoveGeomDraft] =
+    useState<MoveGeomDraftState>(EMPTY_MOVE_GEOM_DRAFT);
   const [moveGeomSnap, setMoveGeomSnap] = useState(true);
   const [moveGeomSavePending, startMoveGeomSave] = useTransition();
   const [moveGeomMessage, setMoveGeomMessage] = useState<string | null>(null);
@@ -828,6 +837,14 @@ export function WorkspaceSpatialView({
     [analysisHighlightIds]
   );
 
+  const moveGeomRotationSupported = useMemo(
+    () =>
+      moveGeomDraft.selection
+        ? supportsMoveGeomRotation(moveGeomDraft.selection.originalGeojson)
+        : false,
+    [moveGeomDraft.selection]
+  );
+
   const moveGeomOverlapFootprintIds = useMemo(
     () =>
       toolMode === "move-geom"
@@ -1055,7 +1072,7 @@ export function WorkspaceSpatialView({
       setFinishDrawLineSignal((n) => n + 1);
     }
     if (mode !== "move-geom") {
-      setMoveGeomDraft({ selection: null, deltaLat: 0, deltaLng: 0 });
+      setMoveGeomDraft(EMPTY_MOVE_GEOM_DRAFT);
       setMoveGeomMessage(null);
       setMoveGeomDragging(false);
       setMoveGeomOverlapPreview({
@@ -1071,7 +1088,13 @@ export function WorkspaceSpatialView({
   }, []);
 
   const handleMoveGeomSelect = useCallback((selection: MoveGeomSelection) => {
-    setMoveGeomDraft({ selection, deltaLat: 0, deltaLng: 0 });
+    setMoveGeomDraft({
+      selection,
+      deltaLat: 0,
+      deltaLng: 0,
+      rotationDeg: 0,
+      subMode: "translate",
+    });
     setMoveGeomMessage(null);
   }, []);
 
@@ -1082,20 +1105,48 @@ export function WorkspaceSpatialView({
     []
   );
 
-  const handleMoveGeomClearSelection = useCallback(() => {
-    setMoveGeomDraft({ selection: null, deltaLat: 0, deltaLng: 0 });
+  const handleMoveGeomRotationChange = useCallback((rotationDeg: number) => {
+    setMoveGeomDraft((prev) => ({ ...prev, rotationDeg }));
   }, []);
 
-  const handleMoveGeomResetDelta = useCallback(() => {
-    setMoveGeomDraft((prev) => ({ ...prev, deltaLat: 0, deltaLng: 0 }));
+  const handleMoveGeomSubModeChange = useCallback(
+    (subMode: MoveGeomEditSubMode) => {
+      setMoveGeomDraft((prev) => {
+        if (
+          subMode === "rotate" &&
+          prev.selection &&
+          !supportsMoveGeomRotation(prev.selection.originalGeojson)
+        ) {
+          return prev;
+        }
+        return { ...prev, subMode };
+      });
+    },
+    []
+  );
+
+  const handleMoveGeomClearSelection = useCallback(() => {
+    setMoveGeomDraft(EMPTY_MOVE_GEOM_DRAFT);
+  }, []);
+
+  const handleMoveGeomResetTransform = useCallback(() => {
+    setMoveGeomDraft((prev) => ({
+      ...prev,
+      deltaLat: 0,
+      deltaLng: 0,
+      rotationDeg: 0,
+    }));
   }, []);
 
   const refreshMoveGeomOverlapPreview = useCallback(() => {
     setMoveGeomOverlapPreview(
       computeMoveGeomOverlapPreview(
         moveGeomDraft.selection,
-        moveGeomDraft.deltaLat,
-        moveGeomDraft.deltaLng,
+        {
+          deltaLng: moveGeomDraft.deltaLng,
+          deltaLat: moveGeomDraft.deltaLat,
+          rotationDeg: moveGeomDraft.rotationDeg,
+        },
         visibleMapLayers
       )
     );
@@ -1110,6 +1161,7 @@ export function WorkspaceSpatialView({
     moveGeomDraft.selection,
     moveGeomDraft.deltaLat,
     moveGeomDraft.deltaLng,
+    moveGeomDraft.rotationDeg,
     visibleMapLayers,
     refreshMoveGeomOverlapPreview,
   ]);
@@ -1123,14 +1175,14 @@ export function WorkspaceSpatialView({
   }, []);
 
   const handleMoveGeomSave = useCallback(() => {
-    const { selection, deltaLat, deltaLng } = moveGeomDraft;
+    const { selection, deltaLat, deltaLng, rotationDeg } = moveGeomDraft;
     if (!selection) return;
-    const translated = translateStoredGeometry(
-      selection.originalGeojson,
+    const transformed = applyMoveGeomTransform(selection.originalGeojson, {
       deltaLng,
-      deltaLat
-    );
-    if (!translated) {
+      deltaLat,
+      rotationDeg,
+    });
+    if (!transformed) {
       setMoveGeomMessage("Geometri tidak valid untuk disimpan.");
       return;
     }
@@ -1139,7 +1191,7 @@ export function WorkspaceSpatialView({
       const fd = new FormData();
       fd.set("row_id", selection.virtualRowId);
       fd.set("geometry_column_slug", selection.geometryColumnSlug);
-      fd.set("geometry_json", JSON.stringify(translated));
+      fd.set("geometry_json", JSON.stringify(transformed));
       const r = await updateVirtualRowGeometryAction(fd);
       if (r.error) {
         setMoveGeomMessage(r.error);
@@ -1147,7 +1199,7 @@ export function WorkspaceSpatialView({
       }
       emitVirtualTableRowsMutated(selection.virtualTableId);
       invalidateVirtualTableRowsCache(selection.virtualTableId);
-      setMoveGeomDraft({ selection: null, deltaLat: 0, deltaLng: 0 });
+      setMoveGeomDraft(EMPTY_MOVE_GEOM_DRAFT);
       setToolMode("navigate");
     });
   }, [moveGeomDraft]);
@@ -1849,11 +1901,16 @@ export function WorkspaceSpatialView({
               moveGeomSnapEnabled={moveGeomSnap}
               moveGeomSnapFootprints={visibleMapLayers}
               moveGeomSelection={moveGeomDraft.selection}
+              moveGeomEditSubMode={moveGeomDraft.subMode}
               moveGeomDeltaLat={moveGeomDraft.deltaLat}
               moveGeomDeltaLng={moveGeomDraft.deltaLng}
+              moveGeomRotationDeg={moveGeomDraft.rotationDeg}
+              moveGeomRotationSupported={moveGeomRotationSupported}
               moveGeomHideFootprintId={moveGeomDraft.selection?.footprintId ?? null}
               onMoveGeomSelect={handleMoveGeomSelect}
               onMoveGeomDeltaChange={handleMoveGeomDeltaChange}
+              onMoveGeomRotationChange={handleMoveGeomRotationChange}
+              onMoveGeomSubModeChange={handleMoveGeomSubModeChange}
               onMoveGeomDragStart={handleMoveGeomDragStart}
               onMoveGeomDragEnd={handleMoveGeomDragEnd}
               coordinateDisplay={coordinateDisplay}
@@ -1976,13 +2033,15 @@ export function WorkspaceSpatialView({
             {toolMode === "move-geom" ? (
               <WorkspaceMapMoveGeomHud
                 draft={moveGeomDraft}
+                rotationSupported={moveGeomRotationSupported}
                 overlapPreview={moveGeomOverlapPreview}
                 overlapRefreshing={moveGeomDragging}
                 snapEnabled={moveGeomSnap}
                 savePending={moveGeomSavePending}
                 atLat={mapStatusState.lat}
+                onSubModeChange={handleMoveGeomSubModeChange}
                 onSnapEnabledChange={setMoveGeomSnap}
-                onResetDelta={handleMoveGeomResetDelta}
+                onResetTransform={handleMoveGeomResetTransform}
                 onClearSelection={handleMoveGeomClearSelection}
                 onSave={handleMoveGeomSave}
                 onCancel={() => handleToolModeChange("navigate")}

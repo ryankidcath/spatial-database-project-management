@@ -29,6 +29,7 @@
     "@turf/length": "^7.3.5",
     "@turf/line-intersect": "^7.3.5",
     "@turf/polygonize": "^7.3.5",
+    "@turf/transform-rotate": "^7.3.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dxf-parser": "^1.1.2",

@@ -1,6 +1,9 @@
 import type { MapFootprint } from "@/app/workspace-map";
+import { applyMoveGeomTransform } from "./workspace-map-transform-geom";
 import { computeMoveGeomOverlapPreview } from "./workspace-map-move-geom-overlap";
 import type { MoveGeomSelection } from "./workspace-map-tool-types";
+
+const NO_TRANSFORM = { deltaLng: 0, deltaLat: 0, rotationDeg: 0 };
 
 function box(
   id: string,
@@ -51,18 +54,35 @@ const selection: MoveGeomSelection = {
 };
 
 const refs: MapFootprint[] = [
-  box("vtable:row-b:geom", 108.5505, -6.741, 108.552, -6.738),
+  box("vtable:row-b:geom", 108.5502, -6.7402, 108.5512, -6.7392),
   box("vtable:row-c:geom", 108.6, -6.8, 108.601, -6.799),
 ];
 
-const atOrigin = computeMoveGeomOverlapPreview(selection, 0, 0, refs);
-if (!atOrigin.isClean || atOrigin.hits.length === 0) {
+const atOrigin = computeMoveGeomOverlapPreview(
+  selection,
+  NO_TRANSFORM,
+  refs
+);
+if (atOrigin.isClean || atOrigin.hits.length === 0) {
   throw new Error("expected overlap at origin with row-b");
 }
 
-const movedClear = computeMoveGeomOverlapPreview(selection, 0, 0.01, refs);
+const movedClear = computeMoveGeomOverlapPreview(
+  selection,
+  { deltaLng: 0, deltaLat: 0.01, rotationDeg: 0 },
+  refs
+);
 if (!movedClear.isClean) {
   throw new Error("expected no overlap after large translation");
+}
+
+const rotated = applyMoveGeomTransform(selection.originalGeojson, {
+  deltaLng: 0,
+  deltaLat: 0,
+  rotationDeg: 45,
+});
+if (!rotated) {
+  throw new Error("expected rotation to succeed");
 }
 
 console.log("workspace-map-move-geom-overlap.smoke: ok");

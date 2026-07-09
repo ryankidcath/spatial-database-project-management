@@ -413,7 +413,7 @@ export function WorkspaceSpatialToolbar({
               }}
             >
               <Move className="size-4 shrink-0" aria-hidden />
-              Geser geometri
+              Edit geometri
             </button>
             <button
               type="button"
