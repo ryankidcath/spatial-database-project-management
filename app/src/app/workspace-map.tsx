@@ -1414,8 +1414,8 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
           layerKind === "virtual_table" &&
           onVirtualRowSelect != null &&
           toolMode === "navigate";
-        const layerInteractive =
-          toolMode === "navigate" || toolMode === "move-geom";
+        const allowFeaturePopup = toolMode === "navigate";
+        const layerInteractive = allowFeaturePopup;
       const fpOpacity = resolveFootprintOpacity(
         fp,
         layerOpacityByTableId,
@@ -1479,7 +1479,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
                 feature,
                 onVirtualRowSelect
               );
-            } else if (layerInteractive) {
+            } else if (allowFeaturePopup) {
               featureLayer.bindPopup(
                 popupHtmlWithGeoJson(fp, feature),
                 POPUP_OPTIONS
@@ -1499,7 +1499,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
         });
         // Fallback jika source bukan Feature/FeatureCollection.
         if (!isFeatureSource) {
-          if (!useVirtualRowClick && layerInteractive) {
+          if (!useVirtualRowClick && allowFeaturePopup) {
             layer.bindPopup(popupHtmlWithGeoJson(fp, fp.geojson), POPUP_OPTIONS);
           } else if (useVirtualRowClick) {
             const select = buildVirtualRowSelect(fp);
@@ -1544,7 +1544,7 @@ export const WorkspaceMap = forwardRef<WorkspaceMapHandle, WorkspaceMapProps>(
       lastAutoFitBoundsKeyRef.current = boundsKey;
     }
 
-    if (layerToReopen) {
+    if (layerToReopen && toolMode === "navigate") {
       openLayerPopup(layerToReopen);
     }
   }, [
