@@ -154,8 +154,8 @@ export function WorkspaceMapMoveGeomHud({
                 </p>
               ) : (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Klik sudut di peta untuk sumbu putar (oranye = aktif), atau
-                  pusat. Lalu drag handle biru.
+                  Klik sudut untuk sumbu putar (oranye = aktif). Drag handle biru
+                  {snapEnabled ? " — snap ke titik/garis referensi." : "."}
                 </p>
               )}
               <div className="mt-1.5 flex flex-wrap gap-1">
@@ -235,12 +235,13 @@ export function WorkspaceMapMoveGeomHud({
         <input
           type="checkbox"
           checked={snapEnabled}
-          disabled={subMode === "rotate"}
           onChange={(e) => onSnapEnabledChange(e.target.checked)}
         />
-        Snap ke vertex lapisan referensi
+        Snap ke vertex / garis referensi
         {subMode === "rotate" ? (
-          <span className="text-muted-foreground">(hanya Geser/Sudut)</span>
+          <span className="text-muted-foreground">
+            (arah ke titik atau selaras garis)
+          </span>
         ) : null}
       </label>
 

@@ -1,8 +1,12 @@
 import { extractMultiPolygonFromGeoJSON } from "@/lib/geojson-multipolygon";
 import { ringHasSelfIntersection } from "@/lib/points-to-polygon-import";
 import { extractWgs84PointFromStoredGeometry } from "@/lib/regenerate-bidang-from-survey-points";
+import { asGeometry } from "@/lib/workspace-map-geo-utils";
+import type { Position } from "geojson";
 
 export type LatLngPoint = { lat: number; lng: number };
+
+export type LatLngSegment = { a: LatLngPoint; b: LatLngPoint };
 
 export const DEFAULT_SNAP_PIXEL_TOLERANCE = 18;
 
@@ -36,6 +40,83 @@ export function collectSnapVerticesFromFootprints(
       }
     }
   }
+  return out;
+}
+
+function pushSegment(
+  out: LatLngSegment[],
+  seen: Set<string>,
+  a: LatLngPoint,
+  b: LatLngPoint
+) {
+  if (
+    !Number.isFinite(a.lat) ||
+    !Number.isFinite(a.lng) ||
+    !Number.isFinite(b.lat) ||
+    !Number.isFinite(b.lng)
+  ) {
+    return;
+  }
+  if (a.lat === b.lat && a.lng === b.lng) return;
+  const keyA = `${a.lng.toFixed(7)},${a.lat.toFixed(7)}`;
+  const keyB = `${b.lng.toFixed(7)},${b.lat.toFixed(7)}`;
+  const key = keyA < keyB ? `${keyA}|${keyB}` : `${keyB}|${keyA}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({ a, b });
+}
+
+function pushRingSegments(
+  out: LatLngSegment[],
+  seen: Set<string>,
+  ring: Position[]
+) {
+  if (ring.length < 2) return;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const c0 = ring[i]!;
+    const c1 = ring[i + 1]!;
+    pushSegment(out, seen, { lat: c0[1]!, lng: c0[0]! }, { lat: c1[1]!, lng: c1[0]! });
+  }
+}
+
+/** Segmen garis (sisi poligon / LineString) dari lapisan referensi untuk snap sudut putar. */
+export function collectSnapSegmentsFromFootprints(
+  footprints: { geojson: unknown }[]
+): LatLngSegment[] {
+  const out: LatLngSegment[] = [];
+  const seen = new Set<string>();
+
+  for (const fp of footprints) {
+    const stored = fp.geojson;
+    if (!stored || typeof stored !== "object") continue;
+    const obj = stored as { type?: string; geometry?: unknown };
+    const geom =
+      obj.type === "Feature" && obj.geometry
+        ? asGeometry(obj.geometry)
+        : asGeometry(stored);
+    if (!geom) continue;
+
+    if (geom.type === "LineString") {
+      pushRingSegments(out, seen, geom.coordinates);
+      continue;
+    }
+
+    if (geom.type === "MultiLineString") {
+      for (const line of geom.coordinates) {
+        pushRingSegments(out, seen, line);
+      }
+      continue;
+    }
+
+    const mp = extractMultiPolygonFromGeoJSON(stored);
+    if (!mp) continue;
+    for (const poly of mp) {
+      const ring = poly[0];
+      if (!ring) continue;
+      pushRingSegments(out, seen, ring);
+    }
+  }
+
   return out;
 }
 
