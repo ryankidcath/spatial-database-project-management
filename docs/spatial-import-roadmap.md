@@ -162,9 +162,9 @@ Alur: scan → saran default (A+B) → UI mapping editable → pratinjau → bat
 - [x] Ekstrak POINT dari DXF (parser + mode impor POINT di dialog DXF virtual table)
 - [x] Ekstrak LineString terbuka dari DXF
 - [x] Heuristik layer + geometri (alias nama layer) — `dxf-layer-classification.ts`
-- [ ] UI mapping layer/geom → tabel target + pratinjau
-- [ ] Server action impor DXF split multi-tabel
-- [ ] Wizard Spasial «DXF → pisah layer»
+- [x] UI mapping layer/geom → tabel target + pratinjau — `virtual-table-dxf-split-import-dialog.tsx`
+- [x] Server action impor DXF split multi-tabel — `importDxfSplitMultiTableAction`
+- [x] Wizard Spasial «DXF → pisah layer»
 - [ ] Panduan: Fase 7 untuk migrasi CAD vs Fase 6 untuk proyek baru
 
 Lihat [`surveyor-workbench-strategy.md`](./surveyor-workbench-strategy.md) §4 Fase 7.

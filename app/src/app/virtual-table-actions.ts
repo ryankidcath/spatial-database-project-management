@@ -119,6 +119,16 @@ import {
   workbenchLayerColumnDefs,
   type WorkbenchLayerKind,
 } from "@/lib/virtual-table-workbench-layer-bootstrap";
+import {
+  buildImportFeatureCollectionForMappingRow,
+  geometryColumnSlugForSplitTarget,
+  geometryKindForSplitTarget,
+  matchColumnSlugForSplitTarget,
+  parseDxfSplitImportPayload,
+  type DxfSplitMappingRow,
+  type DxfSplitTargetKind,
+  workbenchKindFromSplitTarget,
+} from "@/lib/dxf-split-import";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { writeOrgAuditLog, writeProjectAuditLog } from "./audit-log-actions";
 import { dispatchWorkspaceNotification } from "./workspace-notification-dispatch";
@@ -2962,6 +2972,295 @@ export async function importVirtualRowsDxfBatchAction(
     inner.set("geometry_kind", "linestring");
   }
   return importVirtualRowsGeoJsonBatchAction(inner);
+}
+
+export type ImportDxfSplitTableSummary = {
+  target: DxfSplitTargetKind;
+  tableId: string;
+  displayName: string;
+  inserted: number;
+  updated: number;
+  failed: number;
+  skippedExisting: number;
+  layerCount: number;
+};
+
+export type ImportDxfSplitMultiTableResult = {
+  error: string | null;
+  tables: ImportDxfSplitTableSummary[];
+  totalInserted: number;
+  totalUpdated: number;
+  totalFailed: number;
+  failureSamples: string[];
+};
+
+/** Fase 7 — impor satu file DXF campur ke beberapa tabel virtual (bootstrap + batch). */
+export async function importDxfSplitMultiTableAction(
+  formData: FormData
+): Promise<ImportDxfSplitMultiTableResult> {
+  const empty: ImportDxfSplitMultiTableResult = {
+    error: null,
+    tables: [],
+    totalInserted: 0,
+    totalUpdated: 0,
+    totalFailed: 0,
+    failureSamples: [],
+  };
+
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const dxfText = String(formData.get("dxf_text") ?? "");
+  const sourceSridRaw = String(formData.get("source_srid") ?? "4326");
+  const mappingJsonRaw = String(formData.get("mapping_json") ?? "").trim();
+  const polygonizeSnapRaw = String(
+    formData.get("polygonize_snap_tolerance") ?? ""
+  );
+
+  if (!projectId) {
+    return { ...empty, error: "project_id wajib" };
+  }
+  if (!dxfText.trim()) {
+    return { ...empty, error: "dxf_text wajib diisi" };
+  }
+  if (!mappingJsonRaw) {
+    return { ...empty, error: "mapping_json wajib" };
+  }
+  if (dxfText.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+    return {
+      ...empty,
+      error: spatialGeometryTextTooLargeMessage("DXF"),
+    };
+  }
+
+  const sridParsed = parseVirtualTableDxfSourceSrid(sourceSridRaw);
+  if (!sridParsed.ok) {
+    return { ...empty, error: sridParsed.error };
+  }
+  if (!isPreviewSourceSridSupported(sridParsed.srid)) {
+    return {
+      ...empty,
+      error: `EPSG:${sridParsed.srid} belum didukung untuk impor DXF split.`,
+    };
+  }
+
+  let payloadParsed: ReturnType<typeof parseDxfSplitImportPayload>;
+  try {
+    payloadParsed = parseDxfSplitImportPayload(JSON.parse(mappingJsonRaw));
+  } catch {
+    return { ...empty, error: "mapping_json bukan JSON valid." };
+  }
+  if (!payloadParsed.ok) {
+    return { ...empty, error: payloadParsed.error };
+  }
+  const { targetTables, rows } = payloadParsed.payload;
+
+  let dxf: ReturnType<typeof parseDxfDocument>;
+  try {
+    dxf = parseDxfDocument(dxfText);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Gagal membaca DXF.";
+    return { ...empty, error: msg };
+  }
+
+  const polygonizeOpts = buildDxfPolygonizeOptionsFromForm(
+    sridParsed.srid,
+    polygonizeSnapRaw || undefined
+  );
+
+  const tableIdByTarget = new Map<DxfSplitTargetKind, string>();
+  const tableNameByTarget = new Map<DxfSplitTargetKind, string>();
+  const tableStats = new Map<
+    string,
+    ImportDxfSplitTableSummary & { layerNames: Set<string> }
+  >();
+
+  for (const cfg of targetTables) {
+    if (!cfg.enabled || cfg.target === "skip") continue;
+    tableNameByTarget.set(cfg.target, cfg.displayName);
+  }
+
+  async function resolveTableId(
+    target: DxfSplitTargetKind
+  ): Promise<{ tableId: string; displayName: string } | { error: string }> {
+    const cached = tableIdByTarget.get(target);
+    const displayName =
+      tableNameByTarget.get(target) ??
+      (target === "titik"
+        ? defaultFieldPointTableName()
+        : defaultWorkbenchLayerTableName(
+            workbenchKindFromSplitTarget(target) ?? "bidang"
+          ));
+    if (cached) {
+      return { tableId: cached, displayName };
+    }
+
+    if (target === "titik") {
+      const bootFd = new FormData();
+      bootFd.set("project_id", projectId);
+      bootFd.set("display_name", displayName);
+      const boot = await bootstrapVirtualTableSurveyPointsAction(bootFd);
+      if (boot.error || !boot.tableId) {
+        return { error: boot.error ?? `Gagal membuat tabel titik «${displayName}».` };
+      }
+      tableIdByTarget.set(target, boot.tableId);
+      tableNameByTarget.set(target, boot.displayName ?? displayName);
+      return {
+        tableId: boot.tableId,
+        displayName: boot.displayName ?? displayName,
+      };
+    }
+
+    const layerKind = workbenchKindFromSplitTarget(target);
+    if (!layerKind) {
+      return { error: `Target «${target}» tidak didukung untuk bootstrap.` };
+    }
+    const bootFd = new FormData();
+    bootFd.set("project_id", projectId);
+    bootFd.set("layer_kind", layerKind);
+    bootFd.set("display_name", displayName);
+    const boot = await bootstrapVirtualTableWorkbenchLayerAction(bootFd);
+    if (boot.error || !boot.tableId) {
+      return {
+        error: boot.error ?? `Gagal membuat tabel «${displayName}».`,
+      };
+    }
+    tableIdByTarget.set(target, boot.tableId);
+    tableNameByTarget.set(target, boot.displayName ?? displayName);
+    return {
+      tableId: boot.tableId,
+      displayName: boot.displayName ?? displayName,
+    };
+  }
+
+  const activeRows = rows.filter((r) => r.enabled && r.target !== "skip");
+
+  for (const row of activeRows) {
+    const tableResolved = await resolveTableId(row.target);
+    if ("error" in tableResolved) {
+      return { ...empty, error: tableResolved.error };
+    }
+
+    const matchSlug = matchColumnSlugForSplitTarget(row.target);
+    const geomSlug = geometryColumnSlugForSplitTarget(row.target);
+    const mappingRow: DxfSplitMappingRow = {
+      id: `${row.layerName}::${row.geomKind}`,
+      layerName: row.layerName,
+      geomKind: row.geomKind,
+      target: row.target,
+      enabled: true,
+      entityCount: row.matchKeys.length,
+      reason: "",
+      matchKeys: row.matchKeys,
+      matchLabels: row.matchLabels,
+    };
+
+    let fc: GeoJSON.FeatureCollection;
+    try {
+      fc = buildImportFeatureCollectionForMappingRow(
+        dxf,
+        dxfText,
+        mappingRow,
+        matchSlug,
+        sridParsed.srid,
+        polygonizeOpts
+      );
+    } catch (e) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : `Gagal mengekstrak layer «${row.layerName}».`;
+      return { ...empty, error: msg };
+    }
+
+    if (fc.features.length === 0) {
+      return {
+        ...empty,
+        error: `Tidak ada fitur pada layer «${row.layerName}» (${row.geomKind}).`,
+      };
+    }
+
+    const geojsonJson = JSON.stringify(fc);
+    if (geojsonJson.length > MAX_SPATIAL_GEOMETRY_TEXT_CHARS) {
+      return {
+        ...empty,
+        error: spatialGeometryTextTooLargeMessage(
+          `GeoJSON hasil layer «${row.layerName}»`
+        ),
+      };
+    }
+
+    const inner = new FormData();
+    inner.set("table_id", tableResolved.tableId);
+    inner.set("geojson_json", geojsonJson);
+    inner.set("geometry_column_slug", geomSlug);
+    inner.set("match_column_slug", matchSlug);
+    inner.set("geometry_kind", geometryKindForSplitTarget(row.target));
+    inner.set("upsert_mode", "upsert");
+    inner.set("link_inbound_relations", "false");
+
+    const imported = await importVirtualRowsGeoJsonBatchAction(inner);
+    if (imported.error) {
+      return {
+        ...empty,
+        error: `Impor layer «${row.layerName}» ke «${tableResolved.displayName}» gagal: ${imported.error}`,
+        tables: [...tableStats.values()].map(
+          ({ layerNames, ...rest }) => ({
+            ...rest,
+            layerCount: layerNames.size,
+          })
+        ),
+        totalInserted: [...tableStats.values()].reduce(
+          (s, t) => s + t.inserted,
+          0
+        ),
+        totalUpdated: [...tableStats.values()].reduce(
+          (s, t) => s + t.updated,
+          0
+        ),
+        totalFailed: [...tableStats.values()].reduce(
+          (s, t) => s + t.failed,
+          0
+        ),
+        failureSamples: imported.failureSamples ?? [],
+      };
+    }
+
+    const existing = tableStats.get(tableResolved.tableId);
+    if (existing) {
+      existing.inserted += imported.inserted;
+      existing.updated += imported.updated;
+      existing.failed += imported.failed;
+      existing.skippedExisting += imported.skippedExisting;
+      existing.layerNames.add(row.layerName);
+    } else {
+      tableStats.set(tableResolved.tableId, {
+        target: row.target,
+        tableId: tableResolved.tableId,
+        displayName: tableResolved.displayName,
+        inserted: imported.inserted,
+        updated: imported.updated,
+        failed: imported.failed,
+        skippedExisting: imported.skippedExisting,
+        layerCount: 1,
+        layerNames: new Set([row.layerName]),
+      });
+    }
+  }
+
+  const tables = [...tableStats.values()].map(({ layerNames, ...rest }) => ({
+    ...rest,
+    layerCount: layerNames.size,
+  }));
+
+  revalidatePath("/");
+
+  return {
+    error: null,
+    tables,
+    totalInserted: tables.reduce((s, t) => s + t.inserted, 0),
+    totalUpdated: tables.reduce((s, t) => s + t.updated, 0),
+    totalFailed: tables.reduce((s, t) => s + t.failed, 0),
+    failureSamples: [],
+  };
 }
 
 export type ImportVirtualRowsPointsResult = ImportVirtualRowsGeoJsonResult;
