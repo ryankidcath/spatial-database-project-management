@@ -14,71 +14,46 @@ export function undirectedAngleDiffDeg(a: number, b: number): number {
   return d;
 }
 
-/** Snap delta putar agar sisi geometri selaras dengan segmen referensi. */
-export function snapRotationDeltaToLineBearings(
-  proposedDelta: number,
-  edgeBearingsAtSession: number[],
-  referenceSegmentBearings: number[],
+/**
+ * Pilih total rotasi agar sisi (bearing pada rotasi 0) selaras dengan garis referensi.
+ * Hanya mengembalikan kandidat jika rotasi usulan sudah hampir selaras.
+ */
+export function pickRotationDegAligningEdgeToSegment(
+  edgeBearingAtZero: number,
+  segmentBearing: number,
+  proposedRotation: number,
   angleToleranceDeg = DEFAULT_ROTATE_SNAP_ANGLE_TOLERANCE_DEG
 ): number | null {
-  if (edgeBearingsAtSession.length === 0 || referenceSegmentBearings.length === 0) {
-    return null;
-  }
+  const alignAtProposed = undirectedAngleDiffDeg(
+    edgeBearingAtZero + proposedRotation,
+    segmentBearing
+  );
+  if (alignAtProposed >= angleToleranceDeg) return null;
 
-  let bestDelta: number | null = null;
-  let bestDiff = angleToleranceDeg;
+  let bestR: number | null = null;
+  let bestRotDiff = angleToleranceDeg;
 
-  for (const edgeBearing of edgeBearingsAtSession) {
-    const rotatedBearing = edgeBearing + proposedDelta;
-    for (const segBearing of referenceSegmentBearings) {
-      const diff = undirectedAngleDiffDeg(rotatedBearing, segBearing);
-      if (diff >= bestDiff) continue;
+  const candidates = [
+    segmentBearing - edgeBearingAtZero,
+    segmentBearing - edgeBearingAtZero + 180,
+    segmentBearing - edgeBearingAtZero - 180,
+  ];
 
-      const candidates = [
-        segBearing - edgeBearing,
-        segBearing - edgeBearing + 180,
-        segBearing - edgeBearing - 180,
-      ];
-      for (const candidate of candidates) {
-        const alignDiff = undirectedAngleDiffDeg(edgeBearing + candidate, segBearing);
-        if (alignDiff >= angleToleranceDeg) continue;
-        const snapDiff = Math.abs(shortestSignedAngleDiffDeg(proposedDelta, candidate));
-        if (
-          diff < bestDiff ||
-          (diff === bestDiff &&
-            (bestDelta == null ||
-              snapDiff <
-                Math.abs(shortestSignedAngleDiffDeg(proposedDelta, bestDelta))))
-        ) {
-          bestDiff = diff;
-          bestDelta = candidate;
-        }
-      }
+  for (const candidate of candidates) {
+    if (
+      undirectedAngleDiffDeg(edgeBearingAtZero + candidate, segmentBearing) >=
+      0.5
+    ) {
+      continue;
+    }
+    const rotDiff = Math.abs(
+      shortestSignedAngleDiffDeg(proposedRotation, candidate)
+    );
+    if (rotDiff < bestRotDiff) {
+      bestRotDiff = rotDiff;
+      bestR = candidate;
     }
   }
 
-  return bestDelta;
-}
-
-/** Pilih delta putar terdekat agar arah drag menuju salah satu sudut referensi. */
-export function snapRotationDeltaToReferenceAngles(
-  mouseAngle: number,
-  startAngle: number,
-  referenceAnglesDeg: number[],
-  angleToleranceDeg = DEFAULT_ROTATE_SNAP_ANGLE_TOLERANCE_DEG
-): number | null {
-  const proposedDelta = mouseAngle - startAngle;
-  let bestDelta: number | null = null;
-  let bestDiff = angleToleranceDeg;
-
-  for (const refAngle of referenceAnglesDeg) {
-    const angularDiff = Math.abs(shortestSignedAngleDiffDeg(mouseAngle, refAngle));
-    if (angularDiff >= bestDiff) continue;
-    const snappedDelta = refAngle - startAngle;
-    bestDiff = angularDiff;
-    bestDelta = snappedDelta;
-  }
-
-  if (bestDelta != null) return bestDelta;
-  return null;
+  return bestR;
 }

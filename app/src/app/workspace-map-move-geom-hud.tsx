@@ -155,7 +155,7 @@ export function WorkspaceMapMoveGeomHud({
               ) : (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Klik sudut untuk sumbu putar (oranye = aktif). Drag handle biru
-                  {snapEnabled ? " — snap ke titik/garis referensi." : "."}
+                  {snapEnabled ? " — sisi/sudut fitur snap ke titik/garis." : "."}
                 </p>
               )}
               <div className="mt-1.5 flex flex-wrap gap-1">
