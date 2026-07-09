@@ -25,12 +25,38 @@ export function collectSnapVerticesFromFootprints(
   };
 
   for (const fp of footprints) {
-    const pt = extractWgs84PointFromStoredGeometry(fp.geojson);
+    const stored = fp.geojson;
+    if (!stored || typeof stored !== "object") continue;
+
+    const pt = extractWgs84PointFromStoredGeometry(stored);
     if (pt) {
       add(pt.lat, pt.lng);
       continue;
     }
-    const mp = extractMultiPolygonFromGeoJSON(fp.geojson);
+
+    const obj = stored as { type?: string; geometry?: unknown };
+    const geom =
+      obj.type === "Feature" && obj.geometry
+        ? asGeometry(obj.geometry)
+        : asGeometry(stored);
+
+    if (geom?.type === "LineString") {
+      for (const c of geom.coordinates) {
+        add(c[1]!, c[0]!);
+      }
+      continue;
+    }
+
+    if (geom?.type === "MultiLineString") {
+      for (const line of geom.coordinates) {
+        for (const c of line) {
+          add(c[1]!, c[0]!);
+        }
+      }
+      continue;
+    }
+
+    const mp = extractMultiPolygonFromGeoJSON(stored);
     if (!mp) continue;
     for (const poly of mp) {
       const ring = poly[0];
