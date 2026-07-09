@@ -27,6 +27,7 @@ import {
   VirtualTableRegeneratePolygonDialog,
   VirtualTableFieldPointsImportDialog,
   VirtualTableWorkbenchLayerBootstrapDialog,
+  VirtualTableDxfSplitImportDialog,
   type LayerUploadCreated,
 } from "./virtual-table-view";
 
@@ -34,7 +35,8 @@ export type SpatialImportTarget =
   | "existing"
   | "new_layer"
   | "new_field_points"
-  | "new_workbench_layer";
+  | "new_workbench_layer"
+  | "dxf_split";
 export type SpatialImportFormat =
   | "geojson"
   | "dxf"
@@ -132,7 +134,8 @@ export function WorkspaceSpatialImportWizard({
   const stepTotal =
     target === "new_layer" ||
     target === "new_field_points" ||
-    target === "new_workbench_layer"
+    target === "new_workbench_layer" ||
+    target === "dxf_split"
       ? 2
       : 3;
 
@@ -141,7 +144,8 @@ export function WorkspaceSpatialImportWizard({
       setStep(
         target === "new_layer" ||
           target === "new_field_points" ||
-          target === "new_workbench_layer"
+          target === "new_workbench_layer" ||
+          target === "dxf_split"
           ? "target"
           : "configure"
       );
@@ -157,7 +161,8 @@ export function WorkspaceSpatialImportWizard({
     if (
       target === "new_layer" ||
       target === "new_field_points" ||
-      target === "new_workbench_layer"
+      target === "new_workbench_layer" ||
+      target === "dxf_split"
     ) {
       setStep("import");
       return;
@@ -174,6 +179,7 @@ export function WorkspaceSpatialImportWizard({
   };
 
   const summaryLine = useMemo(() => {
+    if (target === "dxf_split") return "DXF campur → pisah layer";
     if (target === "new_field_points") return "Titik lapangan → tabel baru";
     if (target === "new_workbench_layer") return "Buat tabel layer kosong";
     if (target === "new_layer") return "Tabel virtual baru dari file";
@@ -198,7 +204,7 @@ export function WorkspaceSpatialImportWizard({
       <DialogContent
         className={cn(
           "max-h-[90vh] overflow-y-auto",
-          step === "import" ? "max-w-2xl" : "max-w-lg"
+          step === "import" ? (target === "dxf_split" ? "max-w-3xl" : "max-w-2xl") : "max-w-lg"
         )}
         data-testid="spatial-import-wizard"
       >
@@ -222,7 +228,8 @@ export function WorkspaceSpatialImportWizard({
             <ol className="flex gap-2 text-xs text-muted-foreground">
               {(target === "new_layer" ||
               target === "new_field_points" ||
-              target === "new_workbench_layer"
+              target === "new_workbench_layer" ||
+              target === "dxf_split"
                 ? (["target", "import"] as WizardStep[])
                 : (["target", "configure", "import"] as WizardStep[])
               ).map((s, i) => (
@@ -320,6 +327,31 @@ export function WorkspaceSpatialImportWizard({
                       <span className="text-xs text-muted-foreground">
                         Siapkan tabel untuk digitasi di peta — tanpa file. Cocok
                         setelah titik lapangan diimpor.
+                      </span>
+                    </span>
+                  </label>
+                  <label
+                    className={cn(
+                      "flex cursor-pointer gap-3 rounded-lg border px-3 py-3 transition-colors",
+                      target === "dxf_split"
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-border hover:bg-muted/40"
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="spatial-import-target"
+                      className="mt-1"
+                      checked={target === "dxf_split"}
+                      onChange={() => setTarget("dxf_split")}
+                    />
+                    <span>
+                      <span className="block font-medium text-foreground">
+                        DXF campur → pisah ke beberapa layer
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        Migrasi file CAD lama: bidang, jalan, saluran, dan titik
+                        dalam satu DXF — mapping layer + pratinjau sebelum simpan.
                       </span>
                     </span>
                   </label>
@@ -448,7 +480,33 @@ export function WorkspaceSpatialImportWizard({
               </div>
             </div>
 
-            {target === "new_field_points" ? (
+            {target === "dxf_split" ? (
+              <VirtualTableDxfSplitImportDialog
+                embedded
+                open
+                projectId={projectId}
+                onOpenChange={(next) => {
+                  if (!next) goBack();
+                }}
+                onImported={onImported}
+                onCreated={(result) => {
+                  const first = result.tables[0];
+                  if (first) {
+                    onLayerCreated({
+                      tableId: first.tableId,
+                      tableSlug: "",
+                      displayName:
+                        result.tables.length > 1
+                          ? `${result.tables.length} tabel (${result.totalInserted} baris)`
+                          : first.displayName,
+                      inserted: result.totalInserted,
+                    });
+                  }
+                  handleClose(false);
+                }}
+                cancelLabel="Kembali"
+              />
+            ) : target === "new_field_points" ? (
               <VirtualTableFieldPointsImportDialog
                 embedded
                 open

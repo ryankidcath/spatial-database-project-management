@@ -4901,6 +4901,10 @@ function VirtualTableCsvImportDialog({
 // GeoJSON batch import (FeatureCollection → satu baris per poligon)
 // ---------------------------------------------------------------------------
 
+export {
+  VirtualTableDxfSplitImportDialog,
+  type DxfSplitImportCreated,
+} from "./virtual-table-dxf-split-import-dialog";
 export { VirtualTableDxfImportDialog } from "./virtual-table-dxf-import-dialog";
 export { VirtualTablePointsImportDialog } from "./virtual-table-points-import-dialog";
 export { VirtualTableSurveyPointsArchiveDialog } from "./virtual-table-survey-points-archive-dialog";

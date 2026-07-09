@@ -289,11 +289,11 @@ Unggah DXF
 - [x] **Ekstrak POINT** dari DXF (parser + mode impor POINT di dialog DXF virtual table)
 - [x] **Ekstrak LineString** terbuka (garis yang tidak dipaksa jadi poligon)
 - [x] **Heuristik klasifikasi** — alias nama layer + aturan topologi geometri (`dxf-layer-classification.ts`)
-- [ ] **UI mapping** — per baris layer (atau layer+geom): target = Bidang / Jalan / Saluran / Titik / lewati
-- [ ] **Pratinjau** — hitung entitas per kelompok; peta warna berbeda per tabel tujuan
-- [ ] **Kunci otomatis** — `no_bidang`, `no_garis`, label `T1…` (editable batch sebelum simpan)
-- [ ] **Server action** — impor DXF split multi-tabel dalam satu transaksi UI
-- [ ] **Wizard Spasial** — «DXF → pisah ke beberapa layer» (selain jalur DXF satu-tabel existing)
+- [x] **UI mapping** — per baris layer (atau layer+geom): target = Bidang / Jalan / Saluran / Titik / lewati (`virtual-table-dxf-split-import-dialog.tsx`)
+- [x] **Pratinjau** — hitung entitas per kelompok; peta warna berbeda per tabel tujuan (`dxf-split-preview-map.tsx`)
+- [x] **Kunci otomatis** — `no_bidang`, `no_garis`, label `T1…` (editable batch sebelum simpan via regenerate on target change)
+- [x] **Server action** — impor DXF split multi-tabel dalam satu transaksi UI (`importDxfSplitMultiTableAction`)
+- [x] **Wizard Spasial** — «DXF → pisah ke beberapa layer» (`workspace-spatial-import-wizard.tsx`)
 - [ ] **Panduan** — kapan pakai Fase 7 vs titik CSV + digitasi (Fase 6)
 
 **Kebijakan:**
@@ -307,9 +307,7 @@ Unggah DXF
 
 **Kode heuristik (selesai):** `classifyDxfDocument` / `classifyDxfLayer` / `matchDxfLayerAlias` / `scanDxfLayerGeometry` — saran target `bidang` | `jalan` | `saluran` | `titik` | `skip`; layer campuran → `splitGroups` per jenis geom; polygonize loop → Bidang + sisa garis → Jalan; konflik alias vs geom → ikuti geom + confidence rendah.
 
-**Status fase:** `[~]` berjalan (2026-07-09) — ekstrak POINT/LineString + heuristik klasifikasi selesai; UI mapping / wizard / batch impor belum.
-
-**Estimasi sisa MVP:** UI mapping + pratinjau + action batch + wizard (tanpa mengulang ekstrak/heuristik).
+**Status fase:** `[x]` MVP selesai (2026-07-09) — heuristik + wizard mapping/pratinjau + batch impor multi-tabel; panduan user §Fase 7 belum.
 
 ---
 
