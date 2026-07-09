@@ -9,11 +9,22 @@ import {
   type LatLngPoint,
 } from "@/lib/workspace-map-draw-bidang";
 import { pickVirtualTableFootprintAtPoint } from "@/lib/workspace-map-pick-footprint";
+import {
+  applyMoveGeomTransform,
+  centroidOfStoredGeometry,
+} from "@/lib/workspace-map-transform-geom";
 import { translateStoredGeometry } from "@/lib/workspace-map-translate-geom";
-import type { MoveGeomSelection } from "@/lib/workspace-map-tool-types";
+import type {
+  MoveGeomEditSubMode,
+  MoveGeomSelection,
+} from "@/lib/workspace-map-tool-types";
 
 const PREVIEW_COLOR = "#c2410c";
 const PREVIEW_FILL = "#ea580c";
+const HANDLE_COLOR = "#1d4ed8";
+const PIVOT_COLOR = "#64748b";
+const HANDLE_HIT_PX = 14;
+const HANDLE_OFFSET_PX = 44;
 
 type Props = {
   map: L.Map | null;
@@ -22,10 +33,14 @@ type Props = {
   snapEnabled: boolean;
   snapFootprints: MapFootprint[];
   selection: MoveGeomSelection | null;
+  editSubMode: MoveGeomEditSubMode;
   deltaLat: number;
   deltaLng: number;
+  rotationDeg: number;
+  rotationSupported: boolean;
   onSelect: (selection: MoveGeomSelection) => void;
   onDeltaChange: (deltaLat: number, deltaLng: number) => void;
+  onRotationChange: (rotationDeg: number) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
 };
@@ -68,6 +83,44 @@ function selectionFromFootprint(fp: MapFootprint): MoveGeomSelection | null {
   };
 }
 
+function angleDegFromPivot(
+  map: L.Map,
+  pivot: L.LatLng,
+  point: L.LatLng
+): number {
+  const p = map.latLngToContainerPoint(pivot);
+  const t = map.latLngToContainerPoint(point);
+  return (Math.atan2(t.y - p.y, t.x - p.x) * 180) / Math.PI;
+}
+
+function handleLatLngForRotation(
+  map: L.Map,
+  pivot: L.LatLng,
+  rotationDeg: number
+): L.LatLng {
+  const p = map.latLngToContainerPoint(pivot);
+  const rad = ((rotationDeg - 90) * Math.PI) / 180;
+  const hx = p.x + HANDLE_OFFSET_PX * Math.cos(rad);
+  const hy = p.y + HANDLE_OFFSET_PX * Math.sin(rad);
+  return map.containerPointToLatLng(L.point(hx, hy));
+}
+
+function pivotLatLng(
+  selection: MoveGeomSelection,
+  deltaLng: number,
+  deltaLat: number
+): L.LatLng | null {
+  const translated = translateStoredGeometry(
+    selection.originalGeojson,
+    deltaLng,
+    deltaLat
+  );
+  if (!translated) return null;
+  const pivot = centroidOfStoredGeometry(translated);
+  if (!pivot) return null;
+  return L.latLng(pivot[1]!, pivot[0]!);
+}
+
 export function WorkspaceMapMoveGeomController({
   map,
   active,
@@ -75,19 +128,29 @@ export function WorkspaceMapMoveGeomController({
   snapEnabled,
   snapFootprints,
   selection,
+  editSubMode,
   deltaLat,
   deltaLng,
+  rotationDeg,
+  rotationSupported,
   onSelect,
   onDeltaChange,
+  onRotationChange,
   onDragStart,
   onDragEnd,
 }: Props) {
   const previewGroupRef = useRef<L.LayerGroup | null>(null);
-  const draggingRef = useRef(false);
+  const handlesGroupRef = useRef<L.LayerGroup | null>(null);
+  const translateDraggingRef = useRef(false);
+  const rotateDraggingRef = useRef(false);
   const dragStartRef = useRef<L.LatLng | null>(null);
   const sessionBaseRef = useRef({ dLat: 0, dLng: 0 });
+  const sessionBaseRotationRef = useRef(0);
+  const startAngleRef = useRef(0);
   const selectionRef = useRef(selection);
   const deltaRef = useRef({ dLat: deltaLat, dLng: deltaLng });
+  const rotationRef = useRef(rotationDeg);
+  const subModeRef = useRef(editSubMode);
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -97,19 +160,27 @@ export function WorkspaceMapMoveGeomController({
     deltaRef.current = { dLat: deltaLat, dLng: deltaLng };
   }, [deltaLat, deltaLng]);
 
+  useEffect(() => {
+    rotationRef.current = rotationDeg;
+  }, [rotationDeg]);
+
+  useEffect(() => {
+    subModeRef.current = editSubMode;
+  }, [editSubMode]);
+
   const redrawPreview = useCallback(() => {
     const group = previewGroupRef.current;
     const sel = selectionRef.current;
     if (!group || !sel) return;
     group.clearLayers();
-    const translated = translateStoredGeometry(
-      sel.originalGeojson,
-      deltaRef.current.dLng,
-      deltaRef.current.dLat
-    );
-    if (!translated) return;
+    const transformed = applyMoveGeomTransform(sel.originalGeojson, {
+      deltaLng: deltaRef.current.dLng,
+      deltaLat: deltaRef.current.dLat,
+      rotationDeg: rotationRef.current,
+    });
+    if (!transformed) return;
     try {
-      L.geoJSON(translated as GeoJSON.GeoJsonObject, {
+      L.geoJSON(transformed as GeoJSON.GeoJsonObject, {
         style: {
           color: PREVIEW_COLOR,
           fillColor: PREVIEW_FILL,
@@ -131,25 +202,94 @@ export function WorkspaceMapMoveGeomController({
     }
   }, []);
 
+  const redrawHandles = useCallback(() => {
+    const group = handlesGroupRef.current;
+    const sel = selectionRef.current;
+    if (!group || !map) return;
+    group.clearLayers();
+    if (
+      !sel ||
+      subModeRef.current !== "rotate" ||
+      !rotationSupported
+    ) {
+      return;
+    }
+    const pivot = pivotLatLng(
+      sel,
+      deltaRef.current.dLng,
+      deltaRef.current.dLat
+    );
+    if (!pivot) return;
+
+    L.circleMarker(pivot, {
+      radius: 5,
+      color: PIVOT_COLOR,
+      fillColor: "#f8fafc",
+      fillOpacity: 1,
+      weight: 2,
+    }).addTo(group);
+
+    const handle = handleLatLngForRotation(
+      map,
+      pivot,
+      rotationRef.current
+    );
+    L.circleMarker(handle, {
+      radius: 8,
+      color: HANDLE_COLOR,
+      fillColor: "#93c5fd",
+      fillOpacity: 0.95,
+      weight: 2,
+    }).addTo(group);
+
+    L.polyline([pivot, handle], {
+      color: HANDLE_COLOR,
+      weight: 1,
+      dashArray: "3 3",
+      interactive: false,
+    }).addTo(group);
+  }, [map, rotationSupported]);
+
+  const redrawAll = useCallback(() => {
+    redrawPreview();
+    redrawHandles();
+  }, [redrawPreview, redrawHandles]);
+
   useEffect(() => {
     if (!map || !active) {
       previewGroupRef.current?.clearLayers();
+      handlesGroupRef.current?.clearLayers();
       return;
     }
     if (!previewGroupRef.current) {
       previewGroupRef.current = L.layerGroup().addTo(map);
     }
-    redrawPreview();
-  }, [map, active, selection, deltaLat, deltaLng, redrawPreview]);
+    if (!handlesGroupRef.current) {
+      handlesGroupRef.current = L.layerGroup().addTo(map);
+    }
+    redrawAll();
+  }, [map, active, selection, deltaLat, deltaLng, rotationDeg, editSubMode, redrawAll]);
 
   useEffect(() => {
-    redrawPreview();
-  }, [deltaLat, deltaLng, selection, redrawPreview]);
+    redrawAll();
+  }, [deltaLat, deltaLng, rotationDeg, selection, editSubMode, redrawAll]);
+
+  useEffect(() => {
+    if (!map || !active) return;
+    const onViewChange = () => redrawHandles();
+    map.on("move", onViewChange);
+    map.on("zoom", onViewChange);
+    return () => {
+      map.off("move", onViewChange);
+      map.off("zoom", onViewChange);
+    };
+  }, [map, active, redrawHandles]);
 
   useEffect(() => {
     if (!map) return;
     if (!active) {
-      draggingRef.current = false;
+      translateDraggingRef.current = false;
+      rotateDraggingRef.current = false;
       dragStartRef.current = null;
       map.dragging.enable();
       return;
@@ -161,8 +301,30 @@ export function WorkspaceMapMoveGeomController({
       return collectSnapVerticesFromFootprints(refs);
     };
 
+    const isNearRotationHandle = (latlng: L.LatLng): boolean => {
+      const sel = selectionRef.current;
+      if (!sel || !rotationSupported) return false;
+      const pivot = pivotLatLng(
+        sel,
+        deltaRef.current.dLng,
+        deltaRef.current.dLat
+      );
+      if (!pivot) return false;
+      const handle = handleLatLngForRotation(
+        map,
+        pivot,
+        rotationRef.current
+      );
+      const clickPt = map.latLngToContainerPoint(latlng);
+      const handlePt = map.latLngToContainerPoint(handle);
+      return (
+        Math.hypot(clickPt.x - handlePt.x, clickPt.y - handlePt.y) <
+        HANDLE_HIT_PX
+      );
+    };
+
     const onMapClick = (e: L.LeafletMouseEvent) => {
-      if (draggingRef.current) return;
+      if (translateDraggingRef.current || rotateDraggingRef.current) return;
       if (!selectionRef.current) {
         const fp = pickVirtualTableFootprintAtPoint(
           footprints,
@@ -175,13 +337,37 @@ export function WorkspaceMapMoveGeomController({
           L.DomEvent.stopPropagation(e);
           onSelect(sel);
         }
-        return;
       }
     };
 
     const onMouseDown = (e: L.LeafletMouseEvent) => {
-      if (!selectionRef.current) return;
-      draggingRef.current = true;
+      const sel = selectionRef.current;
+      if (!sel) return;
+
+      if (
+        subModeRef.current === "rotate" &&
+        rotationSupported &&
+        isNearRotationHandle(e.latlng)
+      ) {
+        const pivot = pivotLatLng(
+          sel,
+          deltaRef.current.dLng,
+          deltaRef.current.dLat
+        );
+        if (!pivot) return;
+        rotateDraggingRef.current = true;
+        dragStartRef.current = e.latlng;
+        sessionBaseRotationRef.current = rotationRef.current;
+        startAngleRef.current = angleDegFromPivot(map, pivot, e.latlng);
+        map.dragging.disable();
+        onDragStart?.();
+        L.DomEvent.stopPropagation(e);
+        return;
+      }
+
+      if (subModeRef.current !== "translate") return;
+
+      translateDraggingRef.current = true;
       dragStartRef.current = e.latlng;
       sessionBaseRef.current = { ...deltaRef.current };
       map.dragging.disable();
@@ -190,7 +376,22 @@ export function WorkspaceMapMoveGeomController({
     };
 
     const onMouseMove = (e: L.LeafletMouseEvent) => {
-      if (!draggingRef.current || !dragStartRef.current) return;
+      if (rotateDraggingRef.current && dragStartRef.current) {
+        const sel = selectionRef.current;
+        if (!sel) return;
+        const pivot = pivotLatLng(
+          sel,
+          deltaRef.current.dLng,
+          deltaRef.current.dLat
+        );
+        if (!pivot) return;
+        const currentAngle = angleDegFromPivot(map, pivot, e.latlng);
+        const deltaAngle = currentAngle - startAngleRef.current;
+        onRotationChange(sessionBaseRotationRef.current + deltaAngle);
+        return;
+      }
+
+      if (!translateDraggingRef.current || !dragStartRef.current) return;
       let current = e.latlng;
       if (snapEnabled) {
         current = snapLatLng(map, current, snapVertices());
@@ -205,8 +406,9 @@ export function WorkspaceMapMoveGeomController({
     };
 
     const onMouseUp = () => {
-      if (!draggingRef.current) return;
-      draggingRef.current = false;
+      if (!translateDraggingRef.current && !rotateDraggingRef.current) return;
+      translateDraggingRef.current = false;
+      rotateDraggingRef.current = false;
       dragStartRef.current = null;
       map.dragging.enable();
       onDragEnd?.();
@@ -216,7 +418,14 @@ export function WorkspaceMapMoveGeomController({
     map.on("mousedown", onMouseDown);
     map.on("mousemove", onMouseMove);
     map.on("mouseup", onMouseUp);
-    map.getContainer().style.cursor = selection ? "move" : "crosshair";
+
+    const cursor =
+      !selection
+        ? "crosshair"
+        : subModeRef.current === "rotate" && rotationSupported
+          ? "grab"
+          : "move";
+    map.getContainer().style.cursor = cursor;
 
     return () => {
       map.off("click", onMapClick);
@@ -225,7 +434,8 @@ export function WorkspaceMapMoveGeomController({
       map.off("mouseup", onMouseUp);
       map.getContainer().style.cursor = "";
       map.dragging.enable();
-      draggingRef.current = false;
+      translateDraggingRef.current = false;
+      rotateDraggingRef.current = false;
     };
   }, [
     map,
@@ -234,8 +444,11 @@ export function WorkspaceMapMoveGeomController({
     snapEnabled,
     snapFootprints,
     selection,
+    rotationSupported,
+    editSubMode,
     onSelect,
     onDeltaChange,
+    onRotationChange,
     onDragStart,
     onDragEnd,
   ]);
@@ -245,6 +458,10 @@ export function WorkspaceMapMoveGeomController({
       if (previewGroupRef.current && map) {
         map.removeLayer(previewGroupRef.current);
         previewGroupRef.current = null;
+      }
+      if (handlesGroupRef.current && map) {
+        map.removeLayer(handlesGroupRef.current);
+        handlesGroupRef.current = null;
       }
     };
   }, [map]);

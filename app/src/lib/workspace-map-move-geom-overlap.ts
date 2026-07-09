@@ -7,9 +7,10 @@ import {
   polygonOverlapAreaSqM,
 } from "./workspace-map-geo-utils";
 import {
-  geometryKindFromStored,
-  translateStoredGeometry,
-} from "./workspace-map-translate-geom";
+  applyMoveGeomTransform,
+  type MoveGeomTransform,
+} from "./workspace-map-transform-geom";
+import { geometryKindFromStored } from "./workspace-map-translate-geom";
 import type { MoveGeomSelection } from "./workspace-map-tool-types";
 
 export type MoveGeomOverlapHit = {
@@ -33,21 +34,19 @@ const EMPTY_PREVIEW: MoveGeomOverlapPreview = {
   supportsAreaOverlap: false,
 };
 
-function translatedMovingFeatures(
+function transformedMovingFeatures(
   selection: MoveGeomSelection,
-  deltaLng: number,
-  deltaLat: number
+  transform: MoveGeomTransform
 ): GeoJSON.Feature[] {
-  const translated = translateStoredGeometry(
+  const transformed = applyMoveGeomTransform(
     selection.originalGeojson,
-    deltaLng,
-    deltaLat
+    transform
   );
-  if (!translated) return [];
+  if (!transformed) return [];
   const pseudo: MapFootprint = {
     id: selection.footprintId,
     label: selection.label,
-    geojson: translated,
+    geojson: transformed,
     layerKind: "virtual_table",
     virtualTableId: selection.virtualTableId,
     virtualRowId: selection.virtualRowId,
@@ -56,23 +55,18 @@ function translatedMovingFeatures(
 }
 
 /**
- * Pratinjau overlap fitur yang digeser terhadap lapisan referensi lain di peta.
+ * Pratinjau overlap fitur yang digeser/diputar terhadap lapisan referensi lain di peta.
  */
 export function computeMoveGeomOverlapPreview(
   selection: MoveGeomSelection | null,
-  deltaLat: number,
-  deltaLng: number,
+  transform: MoveGeomTransform,
   referenceFootprints: MapFootprint[]
 ): MoveGeomOverlapPreview {
   if (!selection) return EMPTY_PREVIEW;
 
   const supportsAreaOverlap =
     geometryKindFromStored(selection.originalGeojson) === "polygon";
-  const movingFeatures = translatedMovingFeatures(
-    selection,
-    deltaLng,
-    deltaLat
-  );
+  const movingFeatures = transformedMovingFeatures(selection, transform);
   if (movingFeatures.length === 0) return { ...EMPTY_PREVIEW, supportsAreaOverlap };
 
   const refs = referenceFootprints.filter(
