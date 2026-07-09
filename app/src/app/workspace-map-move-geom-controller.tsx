@@ -645,20 +645,16 @@ export function WorkspaceMapMoveGeomController({
 
         let rotationDeg: number;
         if (snapEnabledRef.current) {
-          const geomAtSession = applyMoveGeomTransform(sel.originalGeojson, {
-            deltaLng: deltaRef.current.dLng,
-            deltaLat: deltaRef.current.dLat,
-            rotationDeg: sessionBaseRotationRef.current,
-            rotationPivotVertexIndex: rotationPivotVertexIndexRef.current,
-            vertexEdits: {},
-          });
           rotationDeg = computeSnappedRotationDeg(
             map,
             { lat: pivot.lat, lng: pivot.lng },
             { lat: latlng.lat, lng: latlng.lng },
             sessionBaseRotationRef.current,
             startAngleRef.current,
-            geomAtSession ?? sel.originalGeojson,
+            sel,
+            deltaRef.current.dLng,
+            deltaRef.current.dLat,
+            rotationPivotVertexIndexRef.current,
             refs,
             snapSegments()
           );
