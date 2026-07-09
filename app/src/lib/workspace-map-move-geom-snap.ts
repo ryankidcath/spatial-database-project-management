@@ -446,3 +446,127 @@ export function computeSnappedTranslateDelta(
 
   return bestAdjust ?? { dLat: rawDLat, dLng: rawDLng };
 }
+
+export type MoveGeomSnapVertexPair = {
+  from: LatLngPoint;
+  to: LatLngPoint;
+};
+
+export type MoveGeomSnapEdgePair = {
+  moving: LatLngSegment;
+  reference: LatLngSegment;
+};
+
+function pixelDistanceBetweenPoints(
+  map: L.Map,
+  a: LatLngPoint,
+  b: LatLngPoint
+): number {
+  const pa = map.latLngToContainerPoint(L.latLng(a.lat, a.lng));
+  const pb = map.latLngToContainerPoint(L.latLng(b.lat, b.lng));
+  return Math.hypot(pb.x - pa.x, pb.y - pa.y);
+}
+
+/** Pasangan vertex fitur ↔ referensi terdekat dalam toleransi snap. */
+export function findActiveVertexSnapPair(
+  map: L.Map,
+  movingVertices: LatLngPoint[],
+  referenceVertices: LatLngPoint[],
+  pixelTolerance = DEFAULT_SNAP_PIXEL_TOLERANCE
+): MoveGeomSnapVertexPair | null {
+  let best: (MoveGeomSnapVertexPair & { dist: number }) | null = null;
+
+  for (const from of movingVertices) {
+    for (const to of referenceVertices) {
+      const dist = pixelDistanceBetweenPoints(map, from, to);
+      if (dist > pixelTolerance) continue;
+      if (!best || dist < best.dist) {
+        best = { from, to, dist };
+      }
+    }
+  }
+
+  return best ? { from: best.from, to: best.to } : null;
+}
+
+function pointToSegmentDistancePx(
+  map: L.Map,
+  point: LatLngPoint,
+  segment: LatLngSegment
+): number {
+  const p = map.latLngToContainerPoint(L.latLng(point.lat, point.lng));
+  const a = map.latLngToContainerPoint(L.latLng(segment.a.lat, segment.a.lng));
+  const b = map.latLngToContainerPoint(L.latLng(segment.b.lat, segment.b.lng));
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-6) {
+    return Math.hypot(p.x - a.x, p.y - a.y);
+  }
+  const t = Math.max(
+    0,
+    Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq)
+  );
+  const projX = a.x + t * dx;
+  const projY = a.y + t * dy;
+  return Math.hypot(p.x - projX, p.y - projY);
+}
+
+function parallelSegmentsClosePx(
+  map: L.Map,
+  moving: LatLngSegment,
+  reference: LatLngSegment,
+  maxDistancePx: number
+): boolean {
+  const distances = [
+    pointToSegmentDistancePx(map, moving.a, reference),
+    pointToSegmentDistancePx(map, moving.b, reference),
+    pointToSegmentDistancePx(map, reference.a, moving),
+    pointToSegmentDistancePx(map, reference.b, moving),
+    pointToSegmentDistancePx(
+      map,
+      {
+        lat: (moving.a.lat + moving.b.lat) / 2,
+        lng: (moving.a.lng + moving.b.lng) / 2,
+      },
+      reference
+    ),
+    pointToSegmentDistancePx(
+      map,
+      {
+        lat: (reference.a.lat + reference.b.lat) / 2,
+        lng: (reference.a.lng + reference.b.lng) / 2,
+      },
+      moving
+    ),
+  ];
+  return Math.min(...distances) <= maxDistancePx;
+}
+
+/** Pasangan sisi fitur ∥ segmen referensi (logika selaras dengan snap putar). */
+export function findActiveEdgeSnapPair(
+  map: L.Map,
+  movingEdges: LatLngSegment[],
+  referenceSegments: LatLngSegment[],
+  angleToleranceDeg = DEFAULT_ROTATE_SNAP_ANGLE_TOLERANCE_DEG,
+  maxDistancePx = 48
+): MoveGeomSnapEdgePair | null {
+  let best: (MoveGeomSnapEdgePair & { alignDiff: number }) | null = null;
+
+  for (const moving of movingEdges) {
+    const movingBearing = screenSegmentBearingDeg(map, moving);
+    for (const reference of referenceSegments) {
+      const refBearing = screenSegmentBearingDeg(map, reference);
+      const alignDiff = undirectedAngleDiffDeg(movingBearing, refBearing);
+      if (alignDiff >= angleToleranceDeg) continue;
+      if (!parallelSegmentsClosePx(map, moving, reference, maxDistancePx)) {
+        continue;
+      }
+      if (!best || alignDiff < best.alignDiff) {
+        best = { moving, reference, alignDiff };
+      }
+    }
+  }
+
+  return best ? { moving: best.moving, reference: best.reference } : null;
+}
