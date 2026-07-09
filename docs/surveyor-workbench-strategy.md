@@ -344,18 +344,16 @@ Bidang hasil ukur + lapisan «Persil BPN» aktif
 
 **Fitur (rencana):**
 
-- [ ] Mode alat **Geser geometri** — pilih baris/lapisan, drag translasi di peta
-- [ ] **Snap** ke vertex persil referensi dan titik lapangan saat geser
+- [x] Mode alat **Geser geometri** — pilih baris/lapisan, drag translasi di peta (`move-geom`, `workspace-map-move-geom-controller.tsx`, `updateVirtualRowGeometryAction`)
+- [x] **Snap** ke vertex lapisan referensi aktif (termasuk titik lapangan) saat geser — opsi di HUD
 - [ ] **Pratinjau overlap** real-time (atau refresh setelah lepas drag)
-- [ ] Simpan ke kolom `geom` tabel virtual (WGS84); `emitVirtualTableRowsMutated`
+- [x] Simpan ke kolom `geom` tabel virtual (WGS84); `emitVirtualTableRowsMutated`
 - [ ] (Opsional v1.1) Rotasi handle; edit vertex satu per satu
 - [ ] Panduan: kapan geser di Portal vs tetap di CAD (busur presisi, layout cetak)
 
 **Kode yang akan disentuh (indikatif):** `workspace-map.tsx`, lib transform geometri (Turf `transformTranslate` / `transformRotate`), alat Spasial baru, server action update geom.
 
-**Status fase:** `[ ]` belum dimulai (2026-07-08).
-
-**Estimasi MVP 8A:** ~2–3 minggu dev (interaksi peta + persist + snap).
+**Status fase:** `[~]` berjalan (2026-07-09) — alat Geser geometri + persist; snap overlap QC & rotasi belum.
 
 #### Fase 8B — Referensi persil BPN (file unduhan + ATLAS)
 

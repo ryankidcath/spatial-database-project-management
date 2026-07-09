@@ -178,6 +178,8 @@ export function WorkspaceMapToolController({
       toolMode === "draw-garis"
     ) {
       el.style.cursor = "crosshair";
+    } else if (toolMode === "move-geom") {
+      el.style.cursor = "";
     } else {
       el.style.cursor = "cell";
     }

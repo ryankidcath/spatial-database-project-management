@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
   type CSSProperties,
 } from "react";
 import { Spinner } from "@/components/ui/spinner";
@@ -74,6 +75,8 @@ import type {
   CoordinateDisplayMode,
   MapIdentifyHit,
   MapMeasureResult,
+  MoveGeomDraftState,
+  MoveGeomSelection,
   WorkspaceMapToolMode,
 } from "@/lib/workspace-map-tool-types";
 import type { CoordinateDisplayMode as CoordPref } from "@/lib/workspace-spatial-map-preferences";
@@ -97,6 +100,7 @@ import {
 import { WorkspaceMapToolHud } from "./workspace-map-tool-hud";
 import { WorkspaceMapDrawBidangHud } from "./workspace-map-draw-bidang-hud";
 import { WorkspaceMapDrawLineHud } from "./workspace-map-draw-line-hud";
+import { WorkspaceMapMoveGeomHud } from "./workspace-map-move-geom-hud";
 import { WorkspaceSpatialDrawBidangSaveDialog } from "./workspace-spatial-draw-bidang-save-dialog";
 import { WorkspaceSpatialDrawLineSaveDialog } from "./workspace-spatial-draw-line-save-dialog";
 import type { MeasureDraftState } from "./workspace-map-tool-controller";
@@ -144,6 +148,8 @@ import {
   totalCountsMapToRecord,
   totalCountsRecordToMap,
 } from "@/lib/workspace-spatial-geometry-layers-cache";
+import { translateStoredGeometry } from "@/lib/workspace-map-translate-geom";
+import { updateVirtualRowGeometryAction } from "./virtual-table-actions";
 import { VIRTUAL_TABLE_ROWS_MUTATED, emitVirtualTableRowsMutated } from "@/lib/workspace-virtual-table-mutations";
 import { invalidateVirtualTableRowsCache } from "@/lib/virtual-table-rows-cache";
 import { useWorkspaceShellRefresh } from "./workspace-shell-context";
@@ -286,6 +292,14 @@ export function WorkspaceSpatialView({
   const [clearDrawSignal, setClearDrawSignal] = useState(0);
   const [drawSaveOpen, setDrawSaveOpen] = useState(false);
   const [drawLineSaveOpen, setDrawLineSaveOpen] = useState(false);
+  const [moveGeomDraft, setMoveGeomDraft] = useState<MoveGeomDraftState>({
+    selection: null,
+    deltaLat: 0,
+    deltaLng: 0,
+  });
+  const [moveGeomSnap, setMoveGeomSnap] = useState(true);
+  const [moveGeomSavePending, startMoveGeomSave] = useTransition();
+  const [moveGeomMessage, setMoveGeomMessage] = useState<string | null>(null);
   const [leafletMap, setLeafletMap] = useState<LeafletMap | null>(null);
   const [mapFullscreen, setMapFullscreen] = useState(false);
   const [desktopPrefs, setDesktopPrefs] = useState<SpatialDesktopPrefs>(() =>
@@ -1020,10 +1034,64 @@ export function WorkspaceSpatialView({
       setDrawLineSaveOpen(false);
       setFinishDrawLineSignal((n) => n + 1);
     }
+    if (mode !== "move-geom") {
+      setMoveGeomDraft({ selection: null, deltaLat: 0, deltaLng: 0 });
+      setMoveGeomMessage(null);
+    }
     if (mode !== "draw-bidang" && mode !== "draw-garis") {
       setClearDrawSignal((n) => n + 1);
     }
   }, []);
+
+  const handleMoveGeomSelect = useCallback((selection: MoveGeomSelection) => {
+    setMoveGeomDraft({ selection, deltaLat: 0, deltaLng: 0 });
+    setMoveGeomMessage(null);
+  }, []);
+
+  const handleMoveGeomDeltaChange = useCallback(
+    (deltaLat: number, deltaLng: number) => {
+      setMoveGeomDraft((prev) => ({ ...prev, deltaLat, deltaLng }));
+    },
+    []
+  );
+
+  const handleMoveGeomClearSelection = useCallback(() => {
+    setMoveGeomDraft({ selection: null, deltaLat: 0, deltaLng: 0 });
+  }, []);
+
+  const handleMoveGeomResetDelta = useCallback(() => {
+    setMoveGeomDraft((prev) => ({ ...prev, deltaLat: 0, deltaLng: 0 }));
+  }, []);
+
+  const handleMoveGeomSave = useCallback(() => {
+    const { selection, deltaLat, deltaLng } = moveGeomDraft;
+    if (!selection) return;
+    const translated = translateStoredGeometry(
+      selection.originalGeojson,
+      deltaLng,
+      deltaLat
+    );
+    if (!translated) {
+      setMoveGeomMessage("Geometri tidak valid untuk disimpan.");
+      return;
+    }
+    setMoveGeomMessage(null);
+    startMoveGeomSave(async () => {
+      const fd = new FormData();
+      fd.set("row_id", selection.virtualRowId);
+      fd.set("geometry_column_slug", selection.geometryColumnSlug);
+      fd.set("geometry_json", JSON.stringify(translated));
+      const r = await updateVirtualRowGeometryAction(fd);
+      if (r.error) {
+        setMoveGeomMessage(r.error);
+        return;
+      }
+      emitVirtualTableRowsMutated(selection.virtualTableId);
+      invalidateVirtualTableRowsCache(selection.virtualTableId);
+      setMoveGeomDraft({ selection: null, deltaLat: 0, deltaLng: 0 });
+      setToolMode("navigate");
+    });
+  }, [moveGeomDraft]);
 
   const handleIdentifyResults = useCallback(
     (hits: MapIdentifyHit[], lat: number, lng: number) => {
@@ -1717,6 +1785,15 @@ export function WorkspaceSpatialView({
               finishDrawLineSignal={finishDrawLineSignal}
               undoDrawPointSignal={undoDrawPointSignal}
               clearDrawSignal={clearDrawSignal}
+              moveGeomFootprints={visibleMapLayers}
+              moveGeomSnapEnabled={moveGeomSnap}
+              moveGeomSnapFootprints={visibleMapLayers}
+              moveGeomSelection={moveGeomDraft.selection}
+              moveGeomDeltaLat={moveGeomDraft.deltaLat}
+              moveGeomDeltaLng={moveGeomDraft.deltaLng}
+              moveGeomHideFootprintId={moveGeomDraft.selection?.footprintId ?? null}
+              onMoveGeomSelect={handleMoveGeomSelect}
+              onMoveGeomDeltaChange={handleMoveGeomDeltaChange}
               coordinateDisplay={coordinateDisplay}
               onCoordinateDisplayToggle={handleCoordinateDisplayToggle}
               onMapReady={handleMapReady}
@@ -1833,6 +1910,24 @@ export function WorkspaceSpatialView({
                 onSave={() => setDrawLineSaveOpen(true)}
                 onCancel={() => handleToolModeChange("navigate")}
               />
+            ) : null}
+            {toolMode === "move-geom" ? (
+              <WorkspaceMapMoveGeomHud
+                draft={moveGeomDraft}
+                snapEnabled={moveGeomSnap}
+                savePending={moveGeomSavePending}
+                atLat={mapStatusState.lat}
+                onSnapEnabledChange={setMoveGeomSnap}
+                onResetDelta={handleMoveGeomResetDelta}
+                onClearSelection={handleMoveGeomClearSelection}
+                onSave={handleMoveGeomSave}
+                onCancel={() => handleToolModeChange("navigate")}
+              />
+            ) : null}
+            {moveGeomMessage ? (
+              <p className="pointer-events-none absolute bottom-24 left-2 z-[500] max-w-xs rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+                {moveGeomMessage}
+              </p>
             ) : null}
             {hasAnyGeometry && visibleMapLayers.length > 0 ? (
               <WorkspaceMapLegend

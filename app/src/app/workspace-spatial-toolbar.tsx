@@ -15,6 +15,7 @@ import {
   Map as MapIcon,
   Maximize2,
   MoreHorizontal,
+  Move,
   PencilLine,
   Pentagon,
   Ruler,
@@ -397,6 +398,22 @@ export function WorkspaceSpatialToolbar({
             >
               <Crosshair className="size-4 shrink-0" aria-hidden />
               Identify titik
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm hover:bg-muted",
+                toolMode === "move-geom" && "bg-muted font-medium"
+              )}
+              onClick={() => {
+                onToolModeChange(
+                  toolMode === "move-geom" ? "navigate" : "move-geom"
+                );
+                setToolsOpen(false);
+              }}
+            >
+              <Move className="size-4 shrink-0" aria-hidden />
+              Geser geometri
             </button>
             <button
               type="button"
